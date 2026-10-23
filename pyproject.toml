@@ -7,7 +7,9 @@ authors = [{ name = "Itesh" }]
 # The daemon and app import PyGObject and pyatspi from apt, which are built for
 # the distro's system Python (3.14 on Ubuntu 26.04). See docs/decisions/0001.
 requires-python = ">=3.14,<3.15"
-dependencies = []
+dependencies = [
+    "pydantic>=2.14.1",
+]
 
 [dependency-groups]
 dev = [
