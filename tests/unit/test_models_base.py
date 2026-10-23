@@ -5,16 +5,22 @@ from pydantic import BaseModel
 
 from arcee.core.protocol import CoreAction, PlannerOutput
 from arcee.models.base import (
+    BACKOFF_S,
     MAX_RETRIES,
     Message,
-    ModelOutputError,
     ModelProfile,
     ModelRequest,
-    ModelUnavailableError,
     TokenUsage,
     provider_schema,
 )
+from arcee.models.errors import (
+    ModelOutputError,
+    ModelUnavailableError,
+    QuotaExhaustedError,
+    RateLimitedError,
+)
 from arcee.models.fake import FAKE_PROFILE, FakeAdapter
+from tests.fakes import FakeClock
 
 GOOD = '{"action": {"tool": "fs.list", "args": {"path": "~"}}}'
 BAD_TOOL = '{"action": {"tool": "FS"}}'
@@ -84,6 +90,50 @@ class TestComplete:
         adapter = FakeAdapter([])
 
         with pytest.raises(ModelUnavailableError):
+            await adapter.complete(request())
+
+
+class TestRateLimiting:
+    async def test_retries_429_with_exponential_backoff(self) -> None:
+        clock = FakeClock()
+        adapter = FakeAdapter([RateLimitedError(), RateLimitedError(), GOOD], clock=clock)
+
+        response = await adapter.complete(request())
+
+        assert response.attempts == 1  # backoff retries are not model attempts
+        assert clock.sleeps == [1.0, 2.0]
+
+    async def test_honours_longer_retry_after(self) -> None:
+        clock = FakeClock()
+        adapter = FakeAdapter([RateLimitedError(retry_after_s=7), GOOD], clock=clock)
+
+        await adapter.complete(request())
+
+        assert clock.sleeps == [7]
+
+    async def test_gives_up_after_backoff_schedule(self) -> None:
+        clock = FakeClock()
+        adapter = FakeAdapter([RateLimitedError()] * (len(BACKOFF_S) + 1), clock=clock)
+
+        with pytest.raises(ModelUnavailableError, match="rate limited"):
+            await adapter.complete(request())
+        assert clock.sleeps == list(BACKOFF_S)
+
+    async def test_retry_after_beyond_limit_is_unavailable_at_once(self) -> None:
+        clock = FakeClock()
+        adapter = FakeAdapter([RateLimitedError(retry_after_s=600), GOOD], clock=clock)
+
+        with pytest.raises(ModelUnavailableError):
+            await adapter.complete(request())
+        assert clock.sleeps == []
+
+    async def test_each_round_trip_uses_the_daily_budget(self) -> None:
+        profile = FAKE_PROFILE.model_copy(update={"rpd": 2})
+        adapter = FakeAdapter([BAD_TOOL, GOOD, GOOD], profile, clock=FakeClock())
+
+        await adapter.complete(request())  # two round-trips: invalid reply, then retry
+
+        with pytest.raises(QuotaExhaustedError):
             await adapter.complete(request())
 
 

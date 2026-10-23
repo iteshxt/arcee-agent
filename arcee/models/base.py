@@ -2,23 +2,29 @@
 
 Providers only implement one raw round-trip, `_send`. The shared `complete` loop
 on top of it owns the protocol: schema passthrough, parsing, validation and the
-retry turn. That keeps every provider behaving identically, and keeps the
-first-try success rate (`ModelResponse.attempts == 1`) comparable across them.
+retry turn, plus rate limiting and 429 backoff. That keeps every provider
+behaving identically, and keeps the first-try success rate
+(`ModelResponse.attempts == 1`) comparable across them.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import tzinfo
 from functools import cache
-from typing import Any, Final, Literal, cast
+from typing import Any, ClassVar, Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from arcee.models.errors import ModelOutputError, ModelUnavailableError, RateLimitedError
 from arcee.models.jsonfix import ReplyError, parse_reply, retry_prompt
+from arcee.models.limiter import SYSTEM_CLOCK, Clock, RateLimiter
 
 MAX_RETRIES: Final = 2
-
-type JsonSchema = dict[str, Any]
+# Waits between attempts after HTTP 429; one more failure gives up.
+BACKOFF_S: Final = (1.0, 2.0, 4.0, 8.0)
+# A provider asking for a longer wait than this is treated as unavailable.
+MAX_RETRY_AFTER_S: Final = 60.0
 
 
 class ModelProfile(BaseModel):
@@ -88,32 +94,22 @@ class Completion:
     usage: TokenUsage = field(default_factory=TokenUsage)
 
 
-class ModelError(Exception):
-    """Base for failures the orchestrator handles per role (fallback, failed step)."""
-
-
-class ModelUnavailableError(ModelError):
-    """The provider could not be reached or refused the request after backoff."""
-
-
-class ModelOutputError(ModelError):
-    """The model did not produce a valid object within the retry budget."""
-
-    def __init__(self, error: ReplyError, raw: str, attempts: int, usage: TokenUsage) -> None:
-        super().__init__(f"invalid reply after {attempts} attempts: {error}")
-        self.error = error
-        self.raw = raw
-        self.attempts = attempts
-        self.usage = usage
-
-
 class ModelAdapter(ABC):
-    def __init__(self, profile: ModelProfile) -> None:
+    # Where the provider's daily quota resets; None means the local timezone.
+    quota_tz: ClassVar[tzinfo | None] = None
+
+    def __init__(self, profile: ModelProfile, *, clock: Clock = SYSTEM_CLOCK) -> None:
         self.profile = profile
+        self._clock = clock
+        self.limiter = RateLimiter(profile.rpm, profile.rpd, quota_tz=self.quota_tz, clock=clock)
 
     @abstractmethod
     async def _send(self, request: RawRequest) -> Completion:
-        """Run one round-trip. Raise `ModelUnavailableError` on transport failure."""
+        """Run one round-trip.
+
+        Raise `RateLimitedError` on HTTP 429 and `ModelUnavailableError` on any other
+        transport or server failure.
+        """
 
     @abstractmethod
     async def health(self) -> bool:
@@ -127,7 +123,7 @@ class ModelAdapter(ABC):
         attempts = 0
         while True:
             attempts += 1
-            reply = await self._send(
+            reply = await self._send_with_backoff(
                 RawRequest(
                     system=request.system,
                     messages=tuple(messages),
@@ -145,6 +141,19 @@ class ModelAdapter(ABC):
                 messages += (Message("assistant", reply.text), Message("user", retry_prompt(error)))
                 continue
             return ModelResponse(parsed, reply.text, usage, attempts)
+
+    async def _send_with_backoff(self, request: RawRequest) -> Completion:
+        backoff = iter(BACKOFF_S)
+        while True:
+            await self.limiter.acquire()
+            try:
+                return await self._send(request)
+            except RateLimitedError as exc:
+                delay = next(backoff, None)
+                wait = max(delay or 0.0, exc.retry_after_s or 0.0)
+                if delay is None or wait > MAX_RETRY_AFTER_S:
+                    raise ModelUnavailableError(f"{self.profile.model}: {exc}") from exc
+                await self._clock.sleep(wait)
 
 
 # Keywords whose values are data rather than subschemas; copied without rewriting.
