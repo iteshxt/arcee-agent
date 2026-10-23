@@ -121,10 +121,10 @@ The adapter layer makes every model look the same to the orchestrator: text in, 
 **Interface every adapter implements**
 
 ```python
-class ModelAdapter(Protocol):
+class ModelAdapter(ABC):
     profile: ModelProfile                      # capability flags from section 4
-    async def complete(self, req: ModelRequest) -> ModelResponse: ...
-    async def stream(self, req: ModelRequest) -> AsyncIterator[str]: ...   # optional, for UI typing effect
+    async def complete(self, req: ModelRequest[M]) -> ModelResponse[M]: ...  # shared: schema, parse, validate, retry
+    async def _send(self, req: RawRequest) -> Completion: ...               # per provider: one raw round-trip
     async def health(self) -> bool: ...
 
 class ModelRequest(BaseModel):
@@ -140,6 +140,8 @@ class ModelResponse(BaseModel):
     usage: TokenUsage
     attempts: int                              # 1 on first-try success
 ```
+
+Providers implement only `_send` and `health`; the parse-validate-retry loop below exists once, in the base class, so every provider behaves the same and first-try rates are comparable. The schema sent to providers is flattened: `$ref`s inlined, titles dropped. Streaming for the UI typing effect is deferred until the UI exists (phase 4).
 
 **Providers (v1)**
 

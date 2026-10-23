@@ -1,0 +1,192 @@
+"""The interface every model provider implements (spec section 5).
+
+Providers only implement one raw round-trip, `_send`. The shared `complete` loop
+on top of it owns the protocol: schema passthrough, parsing, validation and the
+retry turn. That keeps every provider behaving identically, and keeps the
+first-try success rate (`ModelResponse.attempts == 1`) comparable across them.
+"""
+
+from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from functools import cache
+from typing import Any, Final, Literal, cast
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from arcee.models.jsonfix import ReplyError, parse_reply, retry_prompt
+
+MAX_RETRIES: Final = 2
+
+type JsonSchema = dict[str, Any]
+
+
+class ModelProfile(BaseModel):
+    """Capability flags for one configured model (spec section 4)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = Field(description="Provider model id, e.g. 'gemini-2.5-flash'.")
+    vision: bool = False
+    grounding: Literal["none", "marks", "coords"] = "none"
+    json_mode: Literal["none", "schema", "grammar"] = "none"
+    context_tokens: int = Field(ge=2048)
+    rpm: int | None = Field(default=None, ge=1)
+    rpd: int | None = Field(default=None, ge=1)
+    cost_tier: Literal["free", "paid", "local"]
+    max_image_px: int = Field(default=1280, ge=256)
+
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    role: Literal["user", "assistant"]
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class TokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        return TokenUsage(
+            self.input_tokens + other.input_tokens, self.output_tokens + other.output_tokens
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRequest[M: BaseModel]:
+    system: str
+    messages: Sequence[Message]
+    schema: type[M]
+    max_tokens: int = 1024
+    temperature: float = 0.1
+
+
+@dataclass(frozen=True, slots=True)
+class ModelResponse[M: BaseModel]:
+    parsed: M
+    raw: str
+    usage: TokenUsage
+    attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class RawRequest:
+    """One provider round-trip. `schema` is None when the profile has no JSON mode."""
+
+    system: str
+    messages: Sequence[Message]
+    schema: Mapping[str, Any] | None
+    max_tokens: int
+    temperature: float
+
+
+@dataclass(frozen=True, slots=True)
+class Completion:
+    text: str
+    usage: TokenUsage = field(default_factory=TokenUsage)
+
+
+class ModelError(Exception):
+    """Base for failures the orchestrator handles per role (fallback, failed step)."""
+
+
+class ModelUnavailableError(ModelError):
+    """The provider could not be reached or refused the request after backoff."""
+
+
+class ModelOutputError(ModelError):
+    """The model did not produce a valid object within the retry budget."""
+
+    def __init__(self, error: ReplyError, raw: str, attempts: int, usage: TokenUsage) -> None:
+        super().__init__(f"invalid reply after {attempts} attempts: {error}")
+        self.error = error
+        self.raw = raw
+        self.attempts = attempts
+        self.usage = usage
+
+
+class ModelAdapter(ABC):
+    def __init__(self, profile: ModelProfile) -> None:
+        self.profile = profile
+
+    @abstractmethod
+    async def _send(self, request: RawRequest) -> Completion:
+        """Run one round-trip. Raise `ModelUnavailableError` on transport failure."""
+
+    @abstractmethod
+    async def health(self) -> bool:
+        """Cheap reachability check for the Models page and fallback decisions."""
+
+    async def complete[M: BaseModel](self, request: ModelRequest[M]) -> ModelResponse[M]:
+        """Return one validated `request.schema` object, retrying with feedback on bad output."""
+        schema = None if self.profile.json_mode == "none" else provider_schema(request.schema)
+        messages = list(request.messages)
+        usage = TokenUsage()
+        attempts = 0
+        while True:
+            attempts += 1
+            reply = await self._send(
+                RawRequest(
+                    system=request.system,
+                    messages=tuple(messages),
+                    schema=schema,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature,
+                )
+            )
+            usage += reply.usage
+            try:
+                parsed = parse_reply(reply.text, request.schema)
+            except ReplyError as error:
+                if attempts > MAX_RETRIES:
+                    raise ModelOutputError(error, reply.text, attempts, usage) from error
+                messages += (Message("assistant", reply.text), Message("user", retry_prompt(error)))
+                continue
+            return ModelResponse(parsed, reply.text, usage, attempts)
+
+
+# Keywords whose values are data rather than subschemas; copied without rewriting.
+_DATA_KEYWORDS: Final = frozenset({"const", "default", "enum", "examples"})
+# Keywords whose values map names to subschemas; the names are not keywords.
+_SCHEMA_MAPS: Final = frozenset({"properties", "patternProperties"})
+
+
+@cache
+def provider_schema(model: type[BaseModel]) -> Mapping[str, Any]:
+    """`model`'s JSON Schema with `$ref`s inlined and titles dropped.
+
+    Gemini's `responseSchema` and several OpenAI-compatible servers reject `$defs`,
+    and titles only cost tokens. Cached per model class; treat the result as
+    read-only.
+    """
+    schema = model.model_json_schema()
+    return _inline(schema, schema.pop("$defs", {}), ())
+
+
+def _inline(node: Any, defs: dict[str, Any], resolving: tuple[str, ...]) -> Any:
+    if isinstance(node, list):
+        return [_inline(item, defs, resolving) for item in cast(list[Any], node)]
+    if not isinstance(node, dict):
+        return node
+
+    schema = cast(dict[str, Any], node)
+    if (ref := schema.get("$ref")) is not None:
+        name = str(ref).rsplit("/", 1)[-1]
+        if name in resolving:
+            raise ValueError(f"recursive schema through {name!r} cannot be inlined")
+        siblings = {key: value for key, value in schema.items() if key != "$ref"}
+        return _inline(defs[name] | siblings, defs, (*resolving, name))
+
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "title":
+            continue
+        if key in _DATA_KEYWORDS:
+            out[key] = value
+        elif key in _SCHEMA_MAPS:
+            out[key] = {name: _inline(sub, defs, resolving) for name, sub in value.items()}
+        else:
+            out[key] = _inline(value, defs, resolving)
+    return out
