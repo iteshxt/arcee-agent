@@ -13,7 +13,7 @@ Arcee is a model-agnostic desktop agent harness for Ubuntu (GNOME on Wayland). I
 - Run entirely on free resources: free-tier cloud APIs plus local models on a 16 GB machine.
 - Work on Wayland without hacks; no X11 dependency.
 - Own the tool-calling protocol: a strict JSON contract defined by the harness, enforced on any model.
-- Three specialized model roles (planner, core, context manager) so a strong model is only used where needed.
+- Four model roles (planner, core, context manager, embedder) so a strong model is only used where needed.
 - Never lose context: all history stored locally, retrieved by relevance, compressed by summarization.
 - Safe by construction: permission tiers, confirmation prompts, kill switch, full action log.
 - Installable by anyone: one package installs the GTK4 app, the daemon and the GNOME extension together.
@@ -22,22 +22,22 @@ Arcee is a model-agnostic desktop agent harness for Ubuntu (GNOME on Wayland). I
 
 - Multi-user or server deployment. Arcee serves one logged-in desktop user.
 - Root or system-wide actions. Arcee runs as the user; `sudo` is never issued.
-- Mobile, KDE or X11 support. The design keeps the Wayland layer swappable, but v1 targets GNOME 45+ on Wayland.
+- Mobile, KDE or X11 support. The design keeps the Wayland layer swappable, but v1 is built and tested on the reference machine (Ubuntu 26.04, GNOME 50, Wayland). GNOME 46-49 are expected to work and are tested after v1.
 - Replacing dedicated automation tools. Arcee calls them (Playwright, systemd timers) rather than reimplementing them.
 
 ## 2. System requirements
 
-The reference machine is the developer's own: Intel i7 9th gen, 16 GB RAM, NVIDIA GTX 1650 (4 GB VRAM). Everything below is sized so that machine is the "recommended" tier, and a laptop without a GPU can still run the harness with cloud models for the core role.
+The reference machine is the developer's own: Ubuntu 26.04 LTS, GNOME 50 on Wayland, Intel i7 9th gen, 16 GB RAM, NVIDIA GTX 1650 (4 GB VRAM, driver 595, CUDA 12+). v1 is built for this machine first: every phase gate is measured on it, and other Ubuntu and GNOME versions are compatibility work after v1. Everything below is sized so that machine is the "recommended" tier, and a laptop without a GPU can still run the harness with cloud models for the core role.
 
 | Requirement | Minimum | Recommended (reference machine) |
 | --- | --- | --- |
-| OS | Ubuntu 24.04 LTS, GNOME 46, Wayland session | Ubuntu 24.04+ / GNOME 46+ |
+| OS | Ubuntu 24.04 LTS, GNOME 46, Wayland session (expected to work; tested after v1) | Ubuntu 26.04 LTS / GNOME 50 (the v1 target) |
 | CPU | 4 cores, x86\_64 | 6+ cores (i7 9th gen or better) |
 | RAM | 8 GB (cloud models only, whisper `base`) | 16 GB (local planner + context model + whisper `small`) |
 | GPU | None (CPU inference) | NVIDIA 4 GB VRAM, CUDA 12 drivers; or any GPU Ollama supports |
 | Disk | 5 GB (app + whisper + piper + embeddings) | 15 GB (adds two 3-4B local models) |
 | Network | Required for cloud models and browser tools | Same |
-| Python | 3.11+ | 3.12 |
+| Python | System Python of the distro | 3.14 (Ubuntu 26.04 system Python; required because PyGObject and pyatspi come from apt) |
 | Node.js | 20+ (Playwright runtime only) | 20+ |
 | Audio | Any microphone (PipeWire) | Microphone with noise suppression |
 
@@ -52,7 +52,7 @@ The reference machine is the developer's own: Intel i7 9th gen, 16 GB RAM, NVIDI
 - `wl-clipboard`, `tesseract-ocr` (or RapidOCR via pip), `ffmpeg`.
 - `ollama` (official installer) for local models.
 
-**Python packages (core):** `pydantic`, `httpx`, `websockets`, `dbus-fast`, `playwright`, `faster-whisper`, `openwakeword`, `piper-tts`, `lancedb` (or `chromadb`), `sqlite-utils`, `pyatspi`, `Pillow`, `numpy`, `rapidocr-onnxruntime`.
+**Python packages (core):** `pydantic`, `httpx`, `dbus-fast`, `playwright`, `faster-whisper`, `openwakeword`, `piper-tts`, `lancedb` (or `chromadb`), `sqlite-utils`, `pyatspi`, `Pillow`, `numpy`, `rapidocr-onnxruntime`.
 
 ## 3. Architecture
 
@@ -60,22 +60,23 @@ Arcee is three processes: a GNOME Shell extension (JavaScript, inside the shell)
 
 &#91;embedded content: Arcee architecture: UI, daemon, backends\]
 
-The extension and app call the daemon over D-Bus; the daemon streams progress events back over a local WebSocket; every tool call passes through the permission gate before it reaches a backend.
+The extension and app talk to the daemon only over D-Bus: method calls go in, signals carry progress events out. There is no WebSocket or other network listener. Every tool call passes through the permission gate before it reaches a backend.
 
 **Process model**
 
 | Process | Runtime | Lifetime | Talks to |
 | --- | --- | --- | --- |
-| `arceed` | Python 3.12, asyncio | `systemd --user` service, auto-restart | Models, tools, store; exposes D-Bus `org.arcee.Daemon` and WebSocket on `127.0.0.1:7421` |
-| `arcee-shell` (extension) | GJS, GNOME Shell 46+ | While the session runs | D-Bus calls to daemon; WebSocket for events |
+| `arceed` | Python 3.14 (system), asyncio | `systemd --user` service, auto-restart; also started on demand by D-Bus activation | Models, tools, store; exposes D-Bus `org.arcee.Daemon` on the session bus |
+| `arcee-shell` (extension) | GJS, GNOME Shell 50 (v1) | While the session runs | D-Bus only: calls `org.arcee.Daemon`, subscribes to its signals |
 | `arcee` (app) | Python, GTK4 + libadwaita | On demand | D-Bus to daemon; reads SQLite store read-only |
 | `arcee-browser` | Playwright worker (Node) | Child of daemon, on demand | Daemon via stdio JSON-RPC |
 | `ollama` | External | Always, if local models enabled | Daemon via HTTP `127.0.0.1:11434` |
 
 **D-Bus interface `org.arcee.Daemon` (object `/org/arcee/Daemon`)**
 
-- Methods: `Submit(text: s) -> task_id: s`, `Cancel(task_id: s)`, `Confirm(request_id: s, approved: b)`, `KillSwitch()`, `GetStatus() -> a{sv}`, `SetListening(b)`, `GetConfig() -> s (JSON)`, `SetConfig(s)`.
-- Signals: `StateChanged(state: s)` (idle, listening, transcribing, planning, thinking, acting, waiting\_confirm, speaking, error), `TaskProgress(task_id: s, json: s)`, `ConfirmRequested(request_id: s, json: s)`, `Reply(task_id: s, text: s)`.
+- Methods: `Submit(text: s) -> task_id: s`, `Cancel(task_id: s)`, `Confirm(request_id: s, approved: b)`, `Answer(task_id: s, text: s)`, `KillSwitch()`, `GetStatus() -> a{sv}`, `GetVersion() -> (app_version: s, protocol_version: u)`, `SetListening(b)`, `GetConfig() -> s (JSON)`, `SetConfig(s)`.
+- Signals: `StateChanged(state: s)` (idle, listening, transcribing, planning, thinking, acting, waiting\_confirm, speaking, error), `TaskProgress(task_id: s, json: s)`, `ConfirmRequested(request_id: s, json: s)`, `Question(task_id: s, json: s)`, `Reply(task_id: s, text: s)`, `Event(kind: s, json: s)` for everything else (section 13.3).
+- Activation: `/usr/share/dbus-1/services/org.arcee.Daemon.service` sets `SystemdService=arceed.service`, so the first call from the extension or app starts the daemon if it is not running.
 
 **One request end to end**
 
@@ -238,6 +239,11 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 {
   "v": 1,
   "task": {"goal": "...", "constraints": ["..."]},
+  "plan": [
+    {"id": 1, "do": "Open the IRCTC train search page", "state": "done"},
+    {"id": 2, "do": "Fill from/to/date and search", "state": "current"},
+    {"id": 3, "do": "Read results, report cheapest", "state": "pending"}
+  ],
   "step": {"id": 2, "do": "...", "success": "..."},
   "history": [
     {"n": 4, "action": "browser.click(el_12)", "result": "ok: navigated to /search"},
@@ -261,6 +267,8 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 
 `observation.kind` is one of `none`, `shell_output`, `browser_tree`, `desktop_tree`, `screenshot_marks` (image + marks list), `screenshot_raw` (image + screen size), `file_content`. Images are attached as separate message parts; the JSON carries their dimensions.
 
+`plan` is the Planner's full step list reduced to id, one line and state (`done`, `current`, `pending`), so the Core can tell when an earlier step needs redoing; `step` carries the full detail of the current step only.
+
 **7.3 Core output (Core → Executor)**
 
 ```json
@@ -279,7 +287,7 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 
 - `thought` is limited to 300 characters; it is logged and shown in the UI, never fed back verbatim to the model (summaries are).
 - `step_status`: `in_progress` | `step_done` (orchestrator advances to the next step) | `task_done` (must pair with `control.done`) | `stuck` (must pair with `control.replan`).
-- `action.args.target` for GUI tools is one of: an element id from the observation (`el_12`), a mark number from a marked screenshot (`#7`), or raw coordinates `{"x": 640, "y": 312}` in the model's image space. The executor resolves all three to screen coordinates; the model never sees the resolution.
+- `action.args.target` for GUI tools is one of: an element id from the observation (`el_12`), a mark number from a marked screenshot (`#7`), or raw coordinates `{"x": 640, "y": 312}` in the model's image space, or a visible-text match {"text": "Search", "nth": 1} (resolved through the current tree first, then OCR). The executor resolves all four forms to screen coordinates; the model never sees the resolution. Raw coordinates are accepted only from models whose profile has grounding: coords.
 - `needs_confirmation: true` lets the Core voluntarily ask before a risky `auto`-tier action; it never lowers a tier.
 
 **7.4 Executor result (Executor → next Core input `history[]` and `observation`)**
@@ -494,7 +502,7 @@ The user can move any tool between `auto` and `confirm` in the app; tools marked
 | `control.speak` | `text` | auto | none | TTS mid-task |
 | `control.note` | `text`, `importance?` | auto | none | Saves a memory |
 | `shell.run` | `cmd`, `cwd?`, `timeout_s?` | auto if allowlisted, else confirm | shell\_output | Allowlist: `ls cat grep find head tail wc df du ps pgrep which date uname free nproc git-status git-log`; `sudo`, `rm -r`, `mkfs`, `dd`, `chmod -R`, `>`/`>>` to system paths are `never` |
-| `shell.script` | `language (bash,python)`, `code` | confirm | shell\_output | Runs in a temp dir with a 120 s limit |
+| `shell.script` | `language (bash,python)`, `code` | confirm | shell\_output | Args also take network (default false). Temp HOME, read-only real home, no network by default, 120 s limit (section 12) |
 | `app.open` | `name_or_desktop_id`, `args?` | auto | screenshot\_auto | Resolves via `Gio.DesktopAppInfo` search |
 | `app.close` | `window_id` | confirm | none | Graceful close via extension |
 | `app.list` |  | auto | text | Installed apps matching a query |
@@ -571,8 +579,11 @@ The model is untrusted. Every safety property below is enforced in the executor 
 | Acting while user works | Model types into the user's chat window | Input only after the user triggered a task; a "hands-off" mode pauses when the user moves the mouse (configurable); kill switch |
 | Credential leakage | Screenshot includes a password manager | Screenshot storage can be disabled; AT-SPI password fields report `***`; `browser.fill` into password fields needs confirm; cloud models get a warning badge that free tiers may train on inputs |
 | Privilege escalation | Model asks for `sudo` | Daemon runs as the user with no sudo; `sudo` is `never`; the daemon's systemd unit uses `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=%h` |
+| Self-approval over D-Bus | A script Arcee runs calls `Confirm` or `SetConfig` on `org.arcee.Daemon` to approve its own next action or move a tool to `auto` | The sandbox never binds `$XDG_RUNTIME_DIR` (so the session bus socket is absent); state-changing methods (`Confirm`, `Answer`, `SetConfig`, `SetListening`, `KillSwitch`) check the caller (see D-Bus caller checks below) |
 
-**Kill switch.** `Super+Escape` (extension), the indicator's stop button, the app's stop button, and the voice phrase "Arcee stop" all call `KillSwitch()`. The daemon: cancels the running tool task, calls `Platform.release_all()`, closes any browser dialog, sets the task to `cancelled`, and speaks "Stopped". Target latency under 100 ms; the handler runs in the D-Bus thread, not the asyncio loop, so a blocked loop cannot delay it.
+**Kill switch.** `Super+Escape` (extension), the indicator's stop button, the app's stop button, and the voice phrase "Arcee stop" all call `KillSwitch()`. The daemon: cancels the running tool task, calls `Platform.release_all()`, closes any browser dialog, sets the task to `cancelled`, and speaks "Stopped". Target latency under 100 ms. dbus-fast runs on the daemon's single asyncio loop, so the handler is only as fast as the loop is free. The design therefore forbids blocking work on the loop: AT-SPI calls, OCR, GStreamer frame pulls, file I/O and subprocess waits run in a thread pool or a child process, and a watchdog thread logs any loop stall over 50 ms. As a last resort, the extension and app wait 500 ms for KillSwitch to return; if it does not, they call systemd's StopUnit on arceed.service over D-Bus. The unit sets `TimeoutStopSec=2`, so a frozen daemon is killed with SIGKILL within 2 s instead of systemd's default 90 s. Its `ExecStopPost` runs `arceed --release-input`, a fresh process that knows nothing the old daemon held in memory, so the input layer mirrors its pressed set to `$XDG_RUNTIME_DIR/arcee/pressed.json` on every press and release; `--release-input` reads that file and sends the matching releases through ydotool, and if the file is missing it sends key-up for every modifier and button-up for every mouse button. On the portal path, Mutter destroys the RemoteDesktop session's virtual devices when the daemon dies, which releases what they held (verified in phase 3).
+
+**D-Bus caller checks.** The session bus admits every process of the user, including the ones Arcee itself starts, so the daemon checks who is calling before any state-changing method (`Confirm`, `Answer`, `SetConfig`, `SetListening`, `KillSwitch`). It asks the bus for the caller's PID (`GetConnectionUnixProcessID`), resolves `/proc/<pid>/exe`, and accepts only `gnome-shell` and the `arcee` app's interpreter running `arcee.app`. Any other caller gets `org.freedesktop.DBus.Error.AccessDenied` and an entry in the action log. `Submit`, `GetStatus`, `GetVersion` and `GetConfig` stay open to all user processes so scripts and the CLI can start tasks.
 
 **Confirmation UX rules.** A confirmation always shows the exact effect in plain words (section 7.6), lists the concrete targets (file names, URL host, window title), and defaults to deny on timeout. Confirmations cannot be batched ("approve all") from the model side; only the user can turn a tool to `auto` in settings.
 
@@ -589,10 +600,11 @@ A lightweight classifier (regex set plus the Context model on suspicion) flags c
 
 **Sandboxing**
 
-- Shell tools run through `systemd-run --user --scope -p MemoryMax=2G -p CPUQuota=200% -p RuntimeMaxSec=120` so a runaway process is bounded and killable.
-- `shell.script` executes in a fresh temp directory, `HOME` pointed to it, with the real home mounted read-only via `bwrap` when available (`--ro-bind $HOME $HOME --bind $TMP $TMP`).
-- The browser profile lives in `~/.local/share/arcee/browser/`, separate from the user's own browser; no sync, no saved passwords. The user can log in there deliberately for sites Arcee should use.
-- Network for shell tools can be disabled per task (`unshare -n`), on by default for `shell.script`.
+- **Resource limits (always available).** Shell tools run through `systemd-run --user --scope -p MemoryMax=2G -p CPUQuota=200% -p RuntimeMaxSec=120`, so a runaway process is bounded and killable. This needs no namespaces and works on stock Ubuntu 24.04 and 26.04.
+- **Filesystem and network isolation (bubblewrap).** Ubuntu 24.04 and later, including the reference machine's 26.04, restrict unprivileged user namespaces through AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), so plain `bwrap` or `unshare` fails for an unconfined process. Arcee runs bwrap only through a helper, `/usr/lib/arcee/arcee-sandbox`, and the deb ships `/etc/apparmor.d/arcee-sandbox`, a profile for that helper that grants `userns`, loaded in postinst with `apparmor_parser -r`. The daemon probes the helper at startup.
+- **When isolation is unavailable** (profile not loaded, AppArmor configured differently, another distro): `shell.script` falls back to resource limits only, the Diagnostics page shows "filesystem isolation: off", and every `shell.script` confirmation carries a warning line saying the script can read and write your home folder.
+- **`shell.script` defaults:** fresh temp directory as `HOME`, the real home mounted read-only (`--ro-bind $HOME $HOME --bind $TMP $TMP`), **no network** (`--unshare-net`), and no `$XDG_RUNTIME_DIR` (the session bus and portal sockets are not reachable from inside). The Core may set `network: true` in the args; the confirmation then states "with internet access". `shell.run` is not namespaced (it runs allowlisted read-only commands or confirmed ones) and keeps normal network.
+- **Browser profile.** It lives in `~/.local/share/arcee/browser/`, separate from the user's own browser, with no sync and no saved passwords. The user can log in there deliberately for sites Arcee should use.
 
 **Action log.** `~/.local/share/arcee/logs/actions.jsonl`, one line per executed tool: timestamp, task id, tool, args (secrets redacted), tier, who approved, result status, duration. Rotated weekly, kept 8 weeks. The app's History page is a viewer over this log joined with the SQLite steps.
 
@@ -609,9 +621,9 @@ Two front ends share one daemon: the GNOME Shell extension is the everyday surfa
 - *Indicator.* A `PanelMenu.Button` in `Main.panel._rightBox`, icon from the symbolic set plus a small state dot: grey idle, blue listening, amber thinking, green acting, red waiting for confirmation. The icon pulses while the wake word is armed.
 - *Dropdown.* A `PopupMenu` with: a single-line `St.Entry` (placeholder "Ask Arcee…", Enter submits, `Super+Space` focuses it from anywhere), a live status line ("Step 4/8: filling the search form"), the last three replies with timestamps, a confirmation card when one is pending (sentence, targets, Approve / Deny buttons), toggles for microphone and hands-off mode, a Stop button, and links to Open App and Pause wake word.
 - *Transient bubble.* Confirmations and `control.ask_user` questions also appear as a bubble anchored under the indicator for 120 s, so the user need not open the menu. Replies that fit one line show as an OSD-style toast; long replies open the menu.
-- *D-Bus.* The extension proxies `org.arcee.Daemon` (section 3) with `Gio.DBusProxy`; it subscribes to `StateChanged`, `TaskProgress`, `ConfirmRequested`, `Reply`. It exposes `org.arcee.Shell` for windows and keybindings (section 10).
+- *D-Bus.* The extension proxies `org.arcee.Daemon` (section 3) with `Gio.DBusProxy`; it subscribes to `StateChanged`, `TaskProgress`, `ConfirmRequested`, `Question`, `Reply` and `Event`, and these signals are its only source of live updates. It exposes `org.arcee.Shell` for windows and keybindings (section 10).
 - *Keybindings.* `Super+Space` open input, `Super+Escape` kill switch, `Super+Enter` approve, `Super+Backspace` deny. Stored in the extension's GSettings schema `org.arcee.shell`.
-- *Constraints.* GJS only, no network, no child processes, under 1,000 lines; this keeps it eligible for extensions.gnome.org review. If the daemon is not running, the indicator shows a grey icon and offers "Start Arcee", which calls `systemctl --user start arceed`.
+- *Constraints.* GJS only, no network, no child processes, under 1,000 lines; this keeps it eligible for extensions.gnome.org review. If the daemon is not running, the indicator shows a grey icon and offers "Start Arcee", which simply calls `GetStatus`: D-Bus activation (section 3) starts the daemon, so the extension never spawns a process.
 
 **13.2 GTK4 + libadwaita app (`arcee`)**
 
@@ -629,10 +641,10 @@ A `Adw.NavigationSplitView` with a sidebar of pages:
 | Settings | Autostart, hands-off mode, screenshot storage, incognito default, data directory, export/import config, reset |
 
 - The app reads SQLite directly (read-only) for History and Memory views and uses D-Bus for anything that changes daemon state, so the daemon is the single writer.
-- First-run wizard: enable accessibility, grant ScreenCast and RemoteDesktop consent (stores restore tokens), install ydotool rule (asks for password through `pkexec` once), pick a model preset, enter API key, say "Hey Arcee" three times to calibrate.
+- First-run wizard: enable accessibility, grant ScreenCast and RemoteDesktop consent (stores restore tokens), check the ydotool fallback (the deb already installed the udev rule and group membership, so the wizard only reports whether a log-out is still needed for the group to take effect), pick a model preset, enter an API key, and optionally record about 20 samples of "Hey Arcee" for the personal verifier (section 14).
 - App id `dev.arcee.App`; follows GNOME HIG; dark mode via libadwaita; no custom CSS beyond the state dot colours.
 
-**13.3 Events the UI consumes** (WebSocket `ws://127.0.0.1:7421/events`, JSON lines, token-authenticated from a file in `$XDG_RUNTIME_DIR`): `state`, `task.started`, `task.step` (n, tool, summary, level), `task.confirm`, `task.question`, `task.reply`, `task.done`, `task.failed`, `voice.partial` (streaming transcript), `model.notice` (fallback switched, quota near limit).
+**13.3 Events the UI consumes** arrive as D-Bus signals on `org.arcee.Daemon`. The frequent ones have dedicated signals (section 3); the rest come through `Event(kind, json)` with kinds `task.started`, `task.step` (n, tool, summary, grounding level), `task.done`, `task.failed`, `voice.partial` (streaming transcript) and `model.notice` (fallback switched, quota near limit). The session bus is reachable only by the logged-in user's processes, so no extra authentication token is needed.
 
 ## 14. Voice pipeline
 
@@ -641,11 +653,14 @@ Voice is fully local: a wake-word model listens at near-zero cost, faster-whispe
 | Stage | Component | Config | Resource |
 | --- | --- | --- | --- |
 | Audio input | PipeWire via `sounddevice` | 16 kHz mono, 80 ms frames | negligible |
-| Wake word | openWakeWord, custom "hey arcee" model | Threshold 0.6; trained from 50 synthetic + 20 user samples recorded in the wizard | about 1% CPU |
+| Wake word | openWakeWord, two shipped models running together: `hey_arcee` and `arcee_stop` | Threshold 0.6 each; optional per-user verifier (below) | about 1-2% CPU for both |
 | Voice activity | Silero VAD (bundled with faster-whisper) | End of utterance after 700 ms silence, max 20 s | small |
 | STT | faster-whisper `small` int8 on CUDA (`base` on CPU-only) | `beam_size=2`, language auto or fixed in settings, `initial_prompt` seeded with tool and app names for accuracy | about 500 MB VRAM, 0.5-1 s per utterance |
 | TTS | Piper `en_US-lessac-medium` (user-selectable) | Streamed sentence by sentence; interrupted by any new wake word | CPU, about 0.2 s per sentence |
-| Confirm phrases | Matched on the transcript after a `ConfirmRequested` | "yes arcee", "do it", "no arcee", "cancel"; "arcee stop" is the voice kill switch and is matched by the wake-word stage without STT |  |
+| Confirm phrases | Matched on the STT transcript after a `ConfirmRequested` | "yes arcee", "do it", "no arcee", "cancel" | none extra |
+| Voice kill switch | The `arcee_stop` model, listening whenever the mic is enabled | Fires `KillSwitch()` directly, no STT in the path | included above |
+
+**Wake-word models.** Both models are trained once by the project, offline, with openWakeWord's training pipeline: several thousand synthetic clips of each phrase generated from many Piper and other TTS voices, mixed with noise and room impulse responses, plus negative audio. They ship in the deb under `/usr/share/arcee/models/`, so users never train a wake word themselves. The first-run wizard can optionally record about 20 samples of the user saying "Hey Arcee" to train openWakeWord's small per-user verifier model, which cuts false triggers from other voices and TV audio; it is skippable and can be redone from the Voice page.
 
 **Flow.** Wake word → indicator turns blue and a short chime plays → VAD records → STT → transcript shown in the indicator (`voice.partial` events stream words as they decode) → `Submit(text)`. If the transcript is empty or under 0.5 s, Arcee says "Sorry?" once and re-arms. Barge-in: a wake word during TTS stops playback.
 
@@ -663,19 +678,21 @@ One `.deb` installs everything: the daemon, the GTK4 app, the GNOME Shell extens
 
 | Path | Content |
 | --- | --- |
-| `/usr/lib/arcee/` | Python virtualenv with the daemon and app (built with `uv` and bundled wheels; no system pip) |
+| `/usr/lib/arcee/` | Python virtualenv with the daemon and app, built with `uv` on the system Python (`--system-site-packages`, so apt's PyGObject and pyatspi are importable) from bundled wheels; no system pip |
 | `/usr/bin/arcee`, `/usr/bin/arceed` | Launchers |
 | `/usr/share/applications/dev.arcee.App.desktop` | App entry |
-| `/usr/share/gnome-shell/extensions/arcee@arcee.dev/` | Extension: `extension.js`, `metadata.json` (`shell-version: [46, 47, 48]`), `prefs.js` (opens the app), schemas |
+| `/usr/share/gnome-shell/extensions/arcee@arcee.dev/` | Extension: `extension.js`, `metadata.json` (`shell-version: ["50"]` in v1; older versions added as they are tested), `prefs.js` (opens the app), schemas |
 | `/usr/share/glib-2.0/schemas/org.arcee.shell.gschema.xml` | Keybinding schema; `glib-compile-schemas` runs in postinst |
 | `/usr/lib/systemd/user/arceed.service`, `arcee-ydotoold.service`, `arcee-nightly.timer` | Daemon, input fallback, summarizer |
 | `/usr/lib/udev/rules.d/70-arcee-uinput.rules` | `KERNEL=="uinput", GROUP="input", MODE="0660"`; postinst adds the installing user to `input` |
 | `/usr/share/dbus-1/services/org.arcee.Daemon.service` | D-Bus activation so the extension can start the daemon |
-| `/usr/share/arcee/models/` | Piper voice, openWakeWord base models, the "hey arcee" model; whisper and embedder are downloaded on first run to `~/.cache/arcee/` to keep the package under 150 MB |
+| `/usr/share/arcee/models/` | Piper voice, openWakeWord base models, the hey\_arcee and arcee\_stop wake-word models; whisper and embedder are downloaded on first run to `~/.cache/arcee/` to keep the package under 150 MB |
 
-**Postinst steps:** compile schemas, `udevadm control --reload`, `systemctl --user daemon-reload` for active sessions, enable `arceed.service` for the installing user, print "log out and back in, then enable the Arcee extension". Enabling the extension itself must be done by the user (`gnome-extensions enable arcee@arcee.dev`), which the app's first-run wizard triggers through `org.gnome.Shell.Extensions.EnableExtension` over D-Bus; GNOME shows its own consent prompt.
+**Sandbox files (section 12):** `/usr/lib/arcee/arcee-sandbox`, a small wrapper around `bwrap`, and `/etc/apparmor.d/arcee-sandbox`, a profile that grants `userns` to that helper only, so Ubuntu 24.04's user-namespace restriction stays in force for everything else. The package depends on `bubblewrap` and `apparmor`.
 
-**Dependencies declared:** `gnome-shell (>= 46)`, `python3 (>= 3.11)`, `gir1.2-adw-1`, `gir1.2-gtk-4.0`, `python3-gi`, `xdg-desktop-portal-gnome`, `pipewire`, `gstreamer1.0-pipewire`, `at-spi2-core`, `python3-pyatspi`, `ydotool`, `wl-clipboard`, `libsecret-1-0`, `nodejs (>= 20)` for Playwright; `Recommends: ollama`, `tesseract-ocr`.
+**Postinst steps:** compile schemas, load the sandbox AppArmor profile (apparmor\_parser -r /etc/apparmor.d/arcee-sandbox), `udevadm control --reload`, `systemctl --user daemon-reload` for active sessions, enable `arceed.service` for the installing user, print "log out and back in, then enable the Arcee extension". Enabling the extension itself must be done by the user (`gnome-extensions enable arcee@arcee.dev`), which the app's first-run wizard triggers through `org.gnome.Shell.Extensions.EnableExtension` over D-Bus; GNOME shows its own consent prompt.
+
+**Dependencies declared:** `gnome-shell (>= 50)`, `python3 (>= 3.14)`, `python3 (<< 3.15)` (the virtualenv is bound to the interpreter version), `gir1.2-adw-1`, `gir1.2-gtk-4.0`, `python3-gi`, `xdg-desktop-portal-gnome`, `pipewire`, `gstreamer1.0-pipewire`, `at-spi2-core`, `python3-pyatspi`, `ydotool`, `wl-clipboard`, `libsecret-1-0`, `nodejs (>= 20)` for Playwright; `Recommends: ollama`, `tesseract-ocr`.
 
 **Playwright browsers** are installed on first run into `~/.cache/arcee/ms-playwright` (about 150 MB Chromium) with a progress dialog; the deb does not bundle them.
 
@@ -694,9 +711,9 @@ arcee/
 ├── pyproject.toml              # uv-managed; extras: [cuda], [dev]
 ├── arcee/                      # Python package (daemon + app share it)
 │   ├── daemon/
-│   │   ├── main.py             # entry: asyncio loop, D-Bus server, WebSocket server
+│   │   ├── main.py             # entry: asyncio loop, D-Bus server, watchdog thread
 │   │   ├── dbus_service.py     # org.arcee.Daemon
-│   │   ├── events.py           # event bus -> WebSocket
+│   │   ├── events.py           # event bus -> D-Bus signals
 │   │   └── killswitch.py
 │   ├── core/
 │   │   ├── orchestrator.py     # task lifecycle, step loop (section 6)
@@ -748,8 +765,8 @@ arcee/
 
 | Layer | Choice | Reason |
 | --- | --- | --- |
-| Language | Python 3.12 (daemon, app), GJS (extension), TypeScript (browser worker) | Each where its platform demands it |
-| Async | asyncio + `dbus-fast` + `websockets` | Single event loop; D-Bus without GLib main loop in the daemon |
+| Language | Python 3.14, the system Python of Ubuntu 26.04 (daemon, app), GJS (extension), TypeScript (browser worker) | Each where its platform demands it |
+| Async | asyncio + `dbus-fast` | Single event loop; D-Bus without a GLib main loop in the daemon; nothing blocking runs on the loop (section 12) |
 | Schemas | Pydantic v2 | Validation and JSON Schema generation for the protocol |
 | Models | `httpx` clients per provider; no LangChain | Fewer layers between the harness and the raw API |
 | Store | SQLite (WAL) + LanceDB | Zero servers, embedded, fast local search |
@@ -768,9 +785,18 @@ Fourteen weeks of part-time work in six phases; each ends at a gate that is meas
 
 &#91;embedded content: build roadmap: 6 phases, 14 weeks, one gate each\]
 
-The green diamonds are the gates; a phase is not done until its check passes on the reference machine.
+The table below carries the same content as the drawing, so it reads the same in exports and clients that do not render diagrams. A phase is not done until its gate passes on the reference machine.
 
-**Phase 1 deliverable**, the first code to write: `arcee/core/protocol.py`, `arcee/models/{base,gemini,ollama,jsonfix,limiter}.py`, `arcee/tools/{base,registry}.py`, the control, shell, app and fs tools, `arcee/core/{planner,orchestrator,executor,gate}.py`, and `arcee-cli` that runs a task from a terminal with confirmations on stdin. Tested against Gemini Flash (free) and Qwen 3 4B on Ollama.
+| Phase | Weeks | Deliverables | Gate (measured) |
+| --- | --- | --- | --- |
+| 1. Core loop | 1-2 | `protocol.py`, Gemini and Ollama adapters, `jsonfix`, limiter, tool registry, permission gate, control/shell/app/fs tools, sandbox helper with a dev install script for its AppArmor profile, Planner, orchestrator, executor, minimal SQLite store (`tasks`, `steps`, `observations`) and `actions.jsonl`, in-task history packing (last 3 full, older one line each; no retrieval yet), `arcee-cli` with stdin confirmations, the text-mode eval tasks and `arcee eval` runner, unit tests | JSON first-try validity above 90% on both models; 60% pass on the text-mode tasks of the eval suite |
+| 2. Browser and desktop tree | 3-4 | Playwright worker, DOM tree extraction (grounding level 1), AT-SPI tools (level 2), `ui.act` (AT-SPI actions only; the pointer fallback arrives with phase 3), Planner `steps[].tools` filter, window API stub | A web form fill and a GUI file rename both complete using trees only, with zero screenshots sent |
+| 3. Wayland capture and input | 5-6 | ScreenCast and RemoteDesktop portals with restore tokens, ydotool fallback, `ScreenMap`, set-of-marks, `screen.ocr_find`, levels 3-4, kill switch, `release_all`, watchdog thread | Clicks land within 5 px of target on two monitors (a virtual second monitor counts) with fractional scaling; kill switch returns in under 100 ms |
+| 4. Daemon, extension, app | 7-9 | `systemd --user` unit, D-Bus service and activation, GNOME extension (indicator, dropdown, confirm bubble, keybindings, `org.arcee.Shell`), GTK4 pages Models, Tools, History, Diagnostics, first-run wizard, a local dev deb (`dpkg-buildpackage`, no APT repository) | On a fresh user account on the reference machine: install the dev deb, finish the wizard and complete a first task within 10 minutes |
+| 5. Context manager and voice | 10-12 | LanceDB vector store on top of the phase 1 SQLite store, embeddings, retrieval and budget packing, summarizer and nightly timer, Memory page, both wake-word models, VAD, faster-whisper, Piper, follow-up mode, optional verifier | Wake word to transcript in under 1.5 s; a fact from a week-old task is recalled correctly without being restated |
+| 6. Packaging and release | 13-14 | release deb (AppArmor profile loaded in postinst, sandbox helper), APT repository, docs, MCP client, eval report, v1.0 tag, extension submitted to extensions.gnome.org | 75% eval pass rate on the free preset; 20 external testers each complete a task |
+
+**Phase 1 deliverable**, the first code to write: `arcee/core/protocol.py`, `arcee/models/{base,gemini,ollama,jsonfix,limiter}.py`, `arcee/tools/{base,registry}.py`, the control, shell, app and fs tools, `arcee/core/{planner,orchestrator,executor,gate}.py`, a minimal `arcee/context/store.py` (SQLite tasks, steps, observations, plus `actions.jsonl`), the text-mode tasks in `tests/eval/` with the `arcee eval` runner, and `arcee-cli` that runs a task from a terminal with confirmations on stdin. Tested against Gemini Flash (free) and Qwen 3 4B on Ollama.
 
 **Order inside later phases** is flexible, with two fixed rules: the kill switch ships with the first tool that moves the pointer (phase 3), and the permission gate exists from phase 1 even when every tool is `auto`.
 
@@ -783,7 +809,8 @@ The three risks that could change the design are free-tier volatility, GNOME por
 | Risk | Likelihood | Impact | Mitigation in the design |
 | --- | --- | --- | --- |
 | Google changes or removes free-tier limits again (it did in Dec 2025 and Apr 2026) | High | Core role becomes slow or unavailable | Role-level fallback to local model; adapters are provider-neutral; usage shown against limits so the user sees it coming |
-| GNOME changes portal or Shell APIs between 46, 47 and 48 | Medium | Capture, input or the extension break on upgrade | Platform layer behind one interface; extension `shell-version` pinned per release; CI runs on three GNOME versions in VMs |
+| GNOME changes portal or Shell APIs between releases | Medium | Capture, input or the extension break on upgrade | Platform layer behind one interface; extension `shell-version` pinned per release; v1 is tested on GNOME 50 only, and a VM matrix (46, 48, 50) is added after v1 |
+| ML packages lack Python 3.14 wheels (faster-whisper/CTranslate2, onnxruntime, lancedb) | Medium | Voice or the vector store cannot load in the daemon's interpreter | Not needed before phase 5; checked at phase 5 start; fallback runs the voice pipeline as a separate `uv`-managed Python 3.12 process talking to the daemon over stdio |
 | 4B local models fail at planning multi-step tasks | Medium | Fully-local preset is weak | Planner prompt uses few-shot examples and a smaller step vocabulary; preset labelled "experimental"; 7-8B models possible on 8 GB VRAM machines |
 | AT-SPI trees are empty for popular Electron apps (VS Code, Slack, Discord) | High | Those apps need screenshots every step | Marks mode with OCR; per-app launch flags added by the wizard (`--force-renderer-accessibility`) |
 | Free-tier terms allow training on inputs; screenshots may contain private data | Certain | Privacy exposure for cloud users | Warning badge per model; screenshot-free modes; incognito tasks; local preset |
@@ -793,13 +820,13 @@ The three risks that could change the design are free-tier volatility, GNOME por
 
 **Open questions**
 
-- [ ] Vector store: LanceDB (single-file, Arrow, fast) or ChromaDB (simpler API, heavier)? Decide in phase 1; retriever hides the choice.
-- [ ] Should the Core see the Planner's full step list or only the current step plus next? Full list helps recovery; current-only cuts tokens. Default in the spec: full list, trimmed to ids and one line each.
-- [ ] Wake word training: openWakeWord custom models need a few hundred synthetic samples; generate with Piper voices in the wizard, or ship a pre-trained "hey arcee" model and skip calibration?
+- [ ] Vector store: LanceDB (single-file, Arrow, fast) or ChromaDB (simpler API, heavier)? Decide at the start of phase 5, when the vector store is built; the retriever hides the choice.
+- [x] Should the Core see the Planner's full step list or only the current step plus next? Decided: the full list as id, one line and state, plus full detail of the current step only (section 7.2).
+- [x] Wake word training: Decided: ship pre-trained hey\_arcee and arcee\_stop models, built offline from thousands of synthetic clips, plus an optional 20-sample per-user verifier (section 14).
 - [ ] Does the extension go on extensions.gnome.org (review takes weeks, gives trust) or ship only in the deb? Spec assumes both, deb first.
 - [ ] Mascot animation: the indicator is an icon with a state dot in v1; a small animated character in the panel (as the original idea) is possible with `St.DrawingArea` but adds shell CPU load. Decide after phase 4 with a prototype.
 - [ ] Multi-step confirmation batching: should the Planner be able to pre-request consent for a known set of actions ("this task will move 3 files, OK?") so the user is not asked three times? Safe if the batch is shown in full and bound to those exact targets. Proposed for v1.1.
-- [ ] Minimum GNOME version: 46 (Ubuntu 24.04) is required for RemoteDesktop with restore tokens; supporting 42 (22.04) would mean ydotool-only input and per-task screenshot dialogs. Spec says 46+.
+- [x] Minimum GNOME version: Decided: v1 is built and tested on GNOME 50 (Ubuntu 26.04, the reference machine). 46 (Ubuntu 24.04) is the lowest version with RemoteDesktop restore tokens and is tested after v1; 42 (22.04) would mean ydotool-only input and per-task screenshot dialogs and is not planned.
 - [ ] Name collision check: "Arcee" is also a character name in a toy franchise and a company name in AI; fine for a personal project, worth checking before a public release.
 
-**Decisions already taken in this spec** (for the record): own JSON protocol over native function calling; Planner once per task; local Context manager and Embedder; GTK4 app plus GNOME extension packaged together as a deb; GNOME 46+ Wayland only in v1; no permanent-delete tool; no sudo.
+**Decisions already taken in this spec** (for the record): own JSON protocol over native function calling; Planner once per task; local Context manager and Embedder; GTK4 app plus GNOME extension packaged together as a deb; GNOME on Wayland only in v1, built and tested on GNOME 50 / Ubuntu 26.04; system Python 3.14; D-Bus only between UI and daemon, with caller checks; no permanent-delete tool; no sudo.
