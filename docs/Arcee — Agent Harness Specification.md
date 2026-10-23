@@ -708,7 +708,7 @@ A single monorepo, Python-first, with the extension as a sibling directory so on
 
 ```text
 arcee/
-├── pyproject.toml              # uv-managed; extras: [cuda], [dev]
+├── pyproject.toml              # uv-managed; dev dependency group, [cuda] extra
 ├── arcee/                      # Python package (daemon + app share it)
 │   ├── daemon/
 │   │   ├── main.py             # entry: asyncio loop, D-Bus server, watchdog thread

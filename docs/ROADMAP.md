@@ -8,7 +8,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 
 | Phase | Name | Status | Gate | Tag |
 | --- | --- | --- | --- | --- |
-| 0 | Repository foundation | ⬜ | Tooling and CI green | — |
+| 0 | Repository foundation | 🟨 | Tooling and CI green | — |
 | 1 | Core loop (terminal agent) | ⬜ | JSON first-try > 90%, 60% text-mode eval pass | `v0.1.0` |
 | 2 | Browser and desktop tree | ⬜ | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
 | 3 | Wayland capture and input | ⬜ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
@@ -16,7 +16,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on free preset; 20 external testers | `v1.0.0` |
 
-**Now:** spec finalized; next up is Phase 0.
+**Now:** Phase 0 tooling in place (license pending); Phase 1 started.
 **Last updated:** 2026-10-23
 
 ## Target machine
@@ -44,14 +44,15 @@ Other Ubuntu and GNOME versions are compatibility work after v1.
 
 Prerequisites: none.
 
-- [ ] `pyproject.toml` managed by `uv`, virtualenv on system Python 3.14 with `--system-site-packages`; extras `[dev]`, `[cuda]`
-- [ ] Package skeleton from spec §16 (`arcee/core`, `models`, `tools`, `context`, `platform`, `config`, `prompts`; empty modules only where needed)
-- [ ] Ruff (lint + format), Pyright, pytest + pytest-asyncio configured
-- [ ] pre-commit hooks (ruff, pyright, trailing whitespace, end of file)
-- [ ] GitHub Actions CI: lint, type check, unit tests (no GNOME needed; tests use fakes)
-- [ ] `.gitignore`, `README.md`, `LICENSE` (license to be decided)
-- [ ] `CONTRIBUTING.md` with the branch and commit rules above
-- [ ] `docs/decisions/` with a short decision-record template
+- [x] `pyproject.toml` managed by `uv`, virtualenv on system Python 3.14 with `--system-site-packages`; extras `[dev]`, `[cuda]`
+- [x] Package root `arcee/`; subpackages from spec §16 are added with their first module rather than as empty stubs
+- [x] Ruff (lint + format), Pyright, pytest + pytest-asyncio configured
+- [x] pre-commit hooks (ruff, pyright, trailing whitespace, end of file)
+- [x] GitHub Actions CI: lint, type check, unit tests (no GNOME needed; tests use fakes)
+- [x] `.gitignore`, `README.md`
+- [ ] `LICENSE` (license to be decided)
+- [x] `CONTRIBUTING.md` with the branch and commit rules above
+- [x] `docs/decisions/` with a short decision-record template
 
 **Gate:** `uv run pytest`, `uv run ruff check`, `uv run pyright` and CI all pass on `main`.
 
