@@ -213,7 +213,6 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 ```json
 {
   "v": 1,
-  "task_id": "t_01JAX9K2",
   "goal": "Find the cheapest train from Abu Road to Jaipur on 22 Oct and tell me",
   "interpretation": "User wants prices only, no booking. Date is tomorrow.",
   "clarify": null,
@@ -229,6 +228,7 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 }
 ```
 
+- The model does not write the task id; the orchestrator attaches `task_id` when it stores the plan, so no tokens are spent echoing it.
 - `clarify` is a string when the request is too ambiguous to plan; the orchestrator sends it to the user and the task waits (`waiting_user`).
 - `steps[].tools` restricts which tools the Core sees for that step; `"*"` means all. This shrinks the prompt and reduces wrong-tool errors.
 - `needs` lets the orchestrator start the browser worker early and skip screenshot tools when `desktop_gui` is false.
@@ -265,7 +265,7 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 }
 ```
 
-`observation.kind` is one of `none`, `shell_output`, `browser_tree`, `desktop_tree`, `screenshot_marks` (image + marks list), `screenshot_raw` (image + screen size), `file_content`. Images are attached as separate message parts; the JSON carries their dimensions.
+`observation.kind` is one of `none`, `text` (plain tool output and user answers), `shell_output`, `browser_tree`, `desktop_tree`, `screenshot_marks` (image + marks list), `screenshot_raw` (image + screen size), `file_content`. Images are attached as separate message parts; the JSON carries their dimensions.
 
 `plan` is the Planner's full step list reduced to id, one line and state (`done`, `current`, `pending`), so the Core can tell when an earlier step needs redoing; `step` carries the full detail of the current step only.
 
