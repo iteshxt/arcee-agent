@@ -66,7 +66,7 @@ Prerequisites on the machine:
 Protocol and models
 
 - [x] 1.1 `arcee/core/protocol.py`: Pydantic models for §7 (Planner output, Core input with `plan`, Core action, executor result, control-action args, confirmation request, replan input); JSON Schema generation tests
-- [ ] 1.2 `arcee/models/jsonfix.py`: strip fences and surrounding text, `json_repair`, validation-error retry message
+- [x] 1.2 `arcee/models/jsonfix.py`: strip fences and surrounding text, `json_repair`, validation-error retry message
 - [ ] 1.3 `arcee/models/base.py`: `ModelAdapter`, `ModelProfile`, `ModelRequest`, `ModelResponse`, plus a scripted `FakeAdapter` for tests
 - [ ] 1.4 `arcee/models/limiter.py`: token bucket from `rpm`, daily `rpd` counter, 429 backoff, fallback switch
 - [ ] 1.5 `arcee/models/gemini.py`: REST client with `responseSchema`
