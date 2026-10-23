@@ -9,14 +9,14 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | Phase | Name | Status | Gate | Tag |
 | --- | --- | --- | --- | --- |
 | 0 | Repository foundation | 🟨 | Tooling and CI green | — |
-| 1 | Core loop (terminal agent) | ⬜ | JSON first-try > 90%, 60% text-mode eval pass | `v0.1.0` |
+| 1 | Core loop (terminal agent) | 🟨 | JSON first-try > 90%, 60% text-mode eval pass | `v0.1.0` |
 | 2 | Browser and desktop tree | ⬜ | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
 | 3 | Wayland capture and input | ⬜ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
 | 4 | Daemon, extension, app | ⬜ | Fresh account: install, wizard, first task < 10 min | `v0.4.0` |
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on free preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 tooling in place (license pending); Phase 1 started.
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base and rate limiter merged (1.1-1.4); next is the Gemini adapter (1.5).
 **Last updated:** 2026-10-23
 
 ## Target machine
@@ -182,3 +182,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 ## Work log
 
 - **2026-10-23** — Spec reviewed. Ambiguities fixed: D-Bus-only UI events, kill-switch last resort, AppArmor sandbox helper, wake-word models, Core sees the full plan, roadmap table with gates. Retargeted v1 to the reference machine (Ubuntu 26.04, GNOME 50, Python 3.14); added D-Bus caller checks, `pressed.json` for input release, minimal store and eval tasks in phase 1, dev deb in phase 4. This roadmap added.
+- **2026-10-23** — Phase 0: uv project on system Python 3.14 (decision 0001), Ruff, Pyright strict, pytest, pre-commit, GitHub Actions CI, contributing guide. Phase 1: `protocol.py`, `jsonfix.py`, adapter base with shared retry loop and `FakeAdapter`, sliding-window limiter with 429 backoff. 85 unit tests. Spec updated: no `task_id` in Planner output, `text` observation kind, adapter template method, limiter details.
