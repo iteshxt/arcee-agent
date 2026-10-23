@@ -8,6 +8,7 @@ authors = [{ name = "Itesh" }]
 # the distro's system Python (3.14 on Ubuntu 26.04). See docs/decisions/0001.
 requires-python = ">=3.14,<3.15"
 dependencies = [
+    "json-repair>=0.64.2",
     "pydantic>=2.14.1",
 ]
 
