@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Node (browser worker)
+node_modules/
+
+# Local config and secrets
+.env
+*.local.toml
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
