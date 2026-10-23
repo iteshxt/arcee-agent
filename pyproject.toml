@@ -1,0 +1,59 @@
+[project]
+name = "arcee"
+version = "0.0.1"
+description = "Model-agnostic desktop agent harness for GNOME on Wayland"
+readme = "README.md"
+authors = [{ name = "Itesh" }]
+# The daemon and app import PyGObject and pyatspi from apt, which are built for
+# the distro's system Python (3.14 on Ubuntu 26.04). See docs/decisions/0001.
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+# The spec's code blocks are illustrative, not source.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "PERF",     # performance anti-patterns
+    "ASYNC",    # async pitfalls
+    "PT",       # pytest style
+    "RUF",      # ruff-specific
+]
+
+[tool.pyright]
+include = ["arcee", "tests"]
+strict = ["arcee"]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["--strict-markers", "--strict-config"]
