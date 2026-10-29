@@ -31,7 +31,7 @@ from arcee.core.protocol import ExecutorResult
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
 from arcee.tools.base import ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
-from arcee.tools.registry import Registry, ToolCall, ToolCallError, native_tools
+from arcee.tools.registry import AnyTool, Registry, ToolCall, ToolCallError, native_tools
 
 # Failures in a row on one tier before the next tier takes over.
 STRIKES_TO_ESCALATE: Final = 2
@@ -149,12 +149,10 @@ class Agent:
             return self._fail(state, f"I stopped after {minutes:g} minutes without finishing.")
 
     async def _loop(self, state: _State, ctx: ToolContext) -> Outcome:
-        system = core_system(home=self._home, now=self._clock())
         offered = self._registry.select()
-        tools = native_tools(offered)
         while state.steps < self._limits.max_steps:
             state.steps += 1
-            completion = await self._turn(state, system, tools)
+            completion = await self._turn(state, offered)
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
                 if reply := completion.text.strip():
@@ -196,12 +194,22 @@ class Agent:
             state, f"I stopped after {self._limits.max_steps} steps without finishing."
         )
 
-    async def _turn(self, state: _State, system: str, tools: list[dict[str, Any]]) -> Completion:
+    def core_request(
+        self, messages: Sequence[Message], offered: Sequence[AnyTool] | None = None
+    ) -> ToolRequest:
+        """The exact request the Core gets for `messages`; the eval suite uses it too."""
+        tools = self._registry.select() if offered is None else offered
+        return ToolRequest(
+            core_system(home=self._home, now=self._clock()),
+            tuple(messages),
+            native_tools(tools),
+            max_tokens=MAX_TOKENS,
+        )
+
+    async def _turn(self, state: _State, offered: Sequence[AnyTool]) -> Completion:
         model = self._ladder[state.tier]
         started = time.monotonic()
-        completion = await model.respond(
-            ToolRequest(system, tuple(state.messages), tools, max_tokens=MAX_TOKENS)
-        )
+        completion = await model.respond(self.core_request(state.messages, offered))
         state.model_calls += 1
         self._emit(
             ModelTurn(

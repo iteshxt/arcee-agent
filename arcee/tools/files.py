@@ -66,7 +66,8 @@ class FsList(Tool[ListArgs]):
     usage = Usage(
         when="You need what is in one folder, how many files of a kind it holds, "
         "or its biggest, newest or oldest files.",
-        avoid="You already listed this folder in this task; use that result.",
+        avoid="You already listed this folder in this task (use that result), or you need "
+        "a folder's total size (use shell.run with du -sh).",
         mistakes="Counting or comparing sizes by hand: pass glob and read `count`; "
         "for the biggest or newest pass sort and limit and take the first entry.",
         example='fs.list(path="~/Downloads", sort="largest", limit=1)',
@@ -270,7 +271,8 @@ class FsTrash(Tool[TrashArgs]):
     name = "fs.trash"
     description = "Move files or folders to the trash (recoverable). Nothing is deleted for good."
     usage = Usage(
-        when="The user asked to delete or clean up, and you know the exact paths.",
+        when="The user asked to delete or clean up, and a listing or search you already "
+        "made shows the exact paths: act on it now, without listing again.",
         avoid="You have not looked at the folder yet: list or search first.",
         mistakes="Passing the folder instead of the files in it; adding files that do not match.",
         example='fs.trash(paths=["~/Downloads/a.deb", "~/Downloads/b.deb"])',

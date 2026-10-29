@@ -87,7 +87,11 @@ class ShellRun(Tool[RunArgs]):
             raise
         code = proc.returncode or 0
         stdout, stderr = _trim(out), _trim(err)
-        data = {"exit_code": code, "stdout": stdout, "stderr": stderr}
+        data: dict[str, object] = {"exit_code": code, "stdout": stdout, "stderr": stderr}
+        if code == 1 and not stdout.strip() and not stderr.strip():
+            # grep, pgrep and friends exit 1 to say "no match"; that is an answer.
+            data["note"] = "no output and exit code 1: nothing matched"
+            return ToolResult.ok(f"`{args.cmd}` found nothing", data=data)
         first = stdout.strip().splitlines()[:1]
         summary = f"`{args.cmd}` exited {code}" + (f": {first[0][:80]}" if first else "")
         if code != 0:
