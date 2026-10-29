@@ -8,6 +8,7 @@ authors = [{ name = "Itesh" }]
 # the distro's system Python (3.14 on Ubuntu 26.04). See docs/decisions/0001.
 requires-python = ">=3.14,<3.15"
 dependencies = [
+    "httpx>=0.28.1",
     "json-repair>=0.64.2",
     "pydantic>=2.14.1",
 ]
@@ -59,4 +60,5 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = ["--strict-markers", "--strict-config"]
+addopts = ["--strict-markers", "--strict-config", "-m", "not live"]
+markers = ["live: needs a real model backend (uv run pytest -m live)"]

@@ -23,4 +23,10 @@ uv run pyright
 uv run pytest
 ```
 
+Live tests talk to the real local model and are skipped by default. With Ollama running and `ollama pull lfm3` done:
+
+```sh
+uv run pytest -m live
+```
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch and commit rules.

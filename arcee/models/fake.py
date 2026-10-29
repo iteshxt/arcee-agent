@@ -15,13 +15,14 @@ FAKE_PROFILE = ModelProfile(
 class FakeAdapter(ModelAdapter):
     """Plays `script` in order and records every request it receives.
 
-    A string is returned as the model's reply; an exception is raised from the
-    round-trip, which is how tests simulate 429s and outages.
+    A string is returned as the model's reply and a `Completion` as it is (how tests
+    script native tool calls); an exception is raised from the round-trip, which is
+    how tests simulate 429s and outages.
     """
 
     def __init__(
         self,
-        script: Iterable[str | Exception],
+        script: Iterable[str | Completion | Exception],
         profile: ModelProfile = FAKE_PROFILE,
         *,
         clock: Clock = SYSTEM_CLOCK,
@@ -37,6 +38,8 @@ class FakeAdapter(ModelAdapter):
         step = self._script.popleft()
         if isinstance(step, Exception):
             raise step
+        if isinstance(step, Completion):
+            return step
         prompt_chars = len(request.system) + sum(len(m.text) for m in request.messages)
         return Completion(step, TokenUsage(prompt_chars // 4, len(step) // 4))
 
