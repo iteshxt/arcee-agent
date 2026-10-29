@@ -165,6 +165,8 @@ class _State:
     index: int = 0
     tried: list[str] = field(default_factory=list[str])
     tier: int = 0
+    # The tier a step starts on: 0, or higher for requests routed as hard.
+    base_tier: int = 0
     strikes: int = 0
     steps: int = 0
     model_calls: int = 0
@@ -190,6 +192,7 @@ class Agent:
         notes: Notes | None = None,
         examples: ExampleLibrary | None = None,
         plan_if: Callable[[str], bool] = lambda request: True,
+        start_tier: Callable[[str], int] = lambda request: 0,
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
     ) -> None:
@@ -200,6 +203,7 @@ class Agent:
         self._notes = notes
         self._examples = examples
         self._plan_if = plan_if
+        self._start_tier = start_tier
         self._registry = registry
         self._executor = executor
         self._asker = asker
@@ -210,6 +214,7 @@ class Agent:
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
+        state.base_tier = state.tier = min(self._start_tier(request), len(self._ladder) - 1)
         ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
@@ -472,9 +477,9 @@ class Agent:
         )
 
     async def _settle(self, state: _State) -> None:
-        """A step went well: the next one starts on the cheapest tier again."""
+        """A step went well: the next one starts on the task's base tier again."""
         state.strikes = 0
-        await self._switch(state, 0)
+        await self._switch(state, state.base_tier)
 
     async def _switch(self, state: _State, tier: int) -> None:
         """Move to `tier`, unloading the current model when the new tier is another model.

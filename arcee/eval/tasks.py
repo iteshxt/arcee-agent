@@ -191,6 +191,7 @@ async def run_task(
     planner_model: ModelAdapter | None,
     plan: str = "auto",
     examples: ExampleLibrary | None = None,
+    start_tier: Callable[[str], int] = lambda request: 0,
     limits: Limits = TASK_LIMITS,
     on_event: Callable[[Event], None] = lambda event: None,
 ) -> TaskResult:
@@ -218,6 +219,7 @@ async def run_task(
             planner=planner,
             examples=examples,
             plan_if=needs_plan if plan == "auto" else lambda request: True,
+            start_tier=start_tier,
             on_event=record,
         )
         started = time.monotonic()

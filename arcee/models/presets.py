@@ -70,8 +70,26 @@ def cloud_profile(model: str, *, schema: bool = False, tpm: int | None = None) -
     )
 
 
+# The default (decision 0008): gpt-oss-20b for easy requests, gpt-oss-120b for hard ones
+# and as the escalation tier, both on Groq. Groq limits tokens per model, so each model
+# has its own budget.
+GROQ_SMALL: Final = "openai/gpt-oss-20b"
+GROQ_LARGE: Final = "openai/gpt-oss-120b"
+DEFAULT_CORE: Final = "groq"
+
+
+def groq_ladder() -> list[ModelAdapter]:
+    """Tier 1: gpt-oss-20b. Tier 2: gpt-oss-120b."""
+    return [
+        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_SMALL, tpm=TPM["groq"])),
+        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_LARGE, tpm=TPM["groq"])),
+    ]
+
+
 def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
-    """`local`, or `<provider>:<model id>` (groq, openrouter): a cloud model as the only tier."""
+    """`groq` (default), `local` (the Ollama ladder), or `<provider>:<model id>` as one tier."""
+    if choice == "groq":
+        return groq_ladder()
     if choice == "local":
         return list(local_core_ladder(host))
     provider, _, model = choice.partition(":")
@@ -81,6 +99,10 @@ def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
 
 
 def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
+    if choice == "groq":
+        return OpenAICompatAdapter.provider(
+            "groq", cloud_profile(GROQ_LARGE, schema=True, tpm=TPM["groq"])
+        )
     if choice == "local":
         return local_planner(host)
     provider, _, model = choice.partition(":")
@@ -90,6 +112,9 @@ def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
 
 
 def share_budget(ladder: list[ModelAdapter], planner: ModelAdapter) -> None:
-    """Planner and Core on the same cloud model draw from one rate budget, as the key does."""
-    if planner.profile.tpm is not None and ladder and ladder[0].profile.tpm is not None:
-        planner.limiter = ladder[0].limiter
+    """The Planner draws from the budget of the ladder tier running the same model."""
+    if planner.profile.tpm is None:
+        return
+    same = next((m for m in ladder if m.profile.model == planner.profile.model), None)
+    if same is not None:
+        planner.limiter = same.limiter

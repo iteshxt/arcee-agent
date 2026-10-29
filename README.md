@@ -6,14 +6,15 @@ Arcee (pronounced "R-C") is a model-agnostic desktop agent harness for Ubuntu on
 
 ## Try it
 
-Arcee runs on a local model through [Ollama](https://ollama.com). Install Ollama, then pull the base model (2.0 GB) and the thinking tier (1.1 GB):
+By default Arcee thinks with `openai/gpt-oss-20b` and, for harder requests, `openai/gpt-oss-120b` on [Groq](https://console.groq.com) (decision 0008). Put a key in a git-ignored `.env` in the repository root:
 
 ```sh
-ollama pull lfm3-omni
-ollama pull lfm3
+echo 'GROQ_API_KEY=gsk_...' >> .env
 uv sync
 uv run arcee-cli run "How much free disk space do I have?"
 ```
+
+To keep everything on your machine instead, install [Ollama](https://ollama.com), `ollama pull lfm3-omni` and `ollama pull lfm3`, and add `--core local`.
 
 Each step is printed as it happens: the model's tool call, the result, and any guard or escalation. Read-only commands run at once; anything that changes files asks first (`Allow? [y/N]`), and destructive commands such as `rm -rf` or `sudo` are refused. Add `-v` to see the model's reasoning when it uses thinking mode. `uv run arcee-cli history` lists past tasks; `uv run arcee-cli eval` scores single decisions and `uv run arcee-cli eval-tasks` runs whole tasks in a throwaway home folder. `ollama pull lfm2.5:8b` adds the slower top tier of the escalation ladder.
 

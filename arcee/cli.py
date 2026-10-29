@@ -35,13 +35,14 @@ from arcee.core.gate import Gate
 from arcee.core.planner import Planner, needs_plan
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest, PlannerOutput
+from arcee.core.routing import start_tier
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
 from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
-from arcee.models.presets import core_ladder, planner_for, share_budget
+from arcee.models.presets import DEFAULT_CORE, core_ladder, planner_for, share_budget
 from arcee.tools.builtin import builtin_registry
 
 
@@ -154,7 +155,7 @@ async def run(
     verbose: bool,
     plan: Literal["auto", "always", "never"],
     examples: bool = False,
-    core: str = "local",
+    core: str = DEFAULT_CORE,
 ) -> int:
     terminal = Terminal(verbose=verbose)
     ladder = core_ladder(core, host)
@@ -189,6 +190,7 @@ async def run(
             notes=store,
             examples=ExampleLibrary.load() if examples else None,
             plan_if=needs_plan if plan == "auto" else lambda request: True,
+            start_tier=start_tier if core == "groq" else lambda request: 0,
             on_event=on_event,
         )
         task_id = await store.start_task(request)
@@ -279,7 +281,7 @@ async def evaluate(
     report: Path | None,
     raw: bool,
     examples: bool,
-    core: str = "local",
+    core: str = DEFAULT_CORE,
 ) -> int:
     """Run the eval suite on one tier of the local ladder and print the results."""
     cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
@@ -344,7 +346,12 @@ async def evaluate_tasks(
         print(f"{len(tasks)} tasks, plan={plan}, examples={'on' if examples else 'off'}\n")
         for task in tasks:
             result = await run_task(
-                task, usable, planner_model=planner_model, plan=plan, examples=library
+                task,
+                usable,
+                planner_model=planner_model,
+                plan=plan,
+                examples=library,
+                start_tier=start_tier if core == "groq" else lambda request: 0,
             )
             results.append(result)
             mark = style.green("PASS") if result.passed else style.red("FAIL")
@@ -419,7 +426,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
     run_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
-    run_cmd.add_argument("--core", default="local", help=CORE_HELP)
+    run_cmd.add_argument("--core", default=DEFAULT_CORE, help=CORE_HELP)
     run_cmd.add_argument(
         "--plan",
         choices=("auto", "always", "never"),
@@ -439,7 +446,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tasks_cmd.add_argument("--only", default="", help="task id substring")
     tasks_cmd.add_argument("--plan", choices=("auto", "always", "never"), default="auto")
     tasks_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
-    tasks_cmd.add_argument("--core", default="local", help=CORE_HELP)
+    tasks_cmd.add_argument("--core", default=DEFAULT_CORE, help=CORE_HELP)
     tasks_cmd.add_argument("--host", default=host)
 
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
@@ -452,7 +459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--raw", action="store_true", help="judge the raw model, without the reply guards"
     )
     eval_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
-    eval_cmd.add_argument("--core", default="local", help=CORE_HELP)
+    eval_cmd.add_argument("--core", default=DEFAULT_CORE, help=CORE_HELP)
     eval_cmd.add_argument("--host", default=host)
 
     args = parser.parse_args(argv)
@@ -511,7 +518,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 # Off by default: on LFM3-Omni they lowered the eval from 91% to 89% and whole
 # tasks from 15/15 to 13/15, and made runs slower (decision 0006).
-CORE_HELP = "the Core model: local (the Ollama ladder), groq:<model id> or openrouter:<model id>"
+CORE_HELP = (
+    "groq (default: gpt-oss-20b, gpt-oss-120b for hard requests), local (the Ollama ladder), "
+    "or <provider>:<model id>"
+)
 EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
 
 
