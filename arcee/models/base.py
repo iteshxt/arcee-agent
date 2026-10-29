@@ -37,6 +37,10 @@ class ModelProfile(BaseModel):
     vision: bool = False
     grounding: Literal["none", "marks", "coords"] = "none"
     json_mode: Literal["none", "schema", "grammar"] = "none"
+    call_mode: Literal["native", "schema"] = Field(
+        default="schema",
+        description="How actions travel: provider tool calls, or one schema-checked JSON object.",
+    )
     context_tokens: int = Field(ge=2048)
     rpm: int | None = Field(default=None, ge=1)
     rpd: int | None = Field(default=None, ge=1)
@@ -48,9 +52,25 @@ class ModelProfile(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class WireCall:
+    """A tool call as the provider sees it: wire name and raw arguments, unvalidated."""
+
+    name: str
+    args: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class Message:
-    role: Literal["user", "assistant"]
+    """One conversation turn.
+
+    Native call mode adds two shapes: an assistant turn carrying `tool_calls`, and a
+    `tool` turn carrying a call's result, named by `tool_name`.
+    """
+
+    role: Literal["user", "assistant", "tool"]
     text: str
+    tool_calls: tuple[WireCall, ...] = ()
+    tool_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,20 +102,38 @@ class ModelResponse[M: BaseModel]:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolRequest:
+    """One native tool-calling turn: the model may call one of `tools` or reply in text."""
+
+    system: str
+    messages: Sequence[Message]
+    tools: Sequence[Mapping[str, Any]]
+    max_tokens: int = 1024
+    temperature: float = 0.1
+
+
+@dataclass(frozen=True, slots=True)
 class RawRequest:
-    """One provider round-trip. `schema` is None when the profile has no JSON mode."""
+    """One provider round-trip.
+
+    `schema` is None when the profile has no JSON mode; `tools` is non-empty only
+    for native tool-calling turns.
+    """
 
     system: str
     messages: Sequence[Message]
     schema: Mapping[str, Any] | None
     max_tokens: int
     temperature: float
+    tools: Sequence[Mapping[str, Any]] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class Completion:
     text: str
     usage: TokenUsage = field(default_factory=TokenUsage)
+    tool_calls: tuple[WireCall, ...] = ()
+    thinking: str = ""
 
 
 class ModelAdapter(ABC):
@@ -159,6 +197,26 @@ class ModelAdapter(ABC):
                 messages += (Message("assistant", reply.text), Message("user", retry_prompt(error)))
                 continue
             return ModelResponse(parsed, reply.text, usage, attempts)
+
+    async def respond(self, request: ToolRequest) -> Completion:
+        """Run one native tool-calling turn and return the raw reply.
+
+        The calls are not validated here: the caller owns the tool registry, and in
+        native mode a bad call is answered with a `tool` error message rather than
+        a separate retry turn.
+        """
+        if self.profile.call_mode != "native":
+            raise ValueError(f"{self.profile.model} is configured for schema call mode")
+        return await self._send_with_backoff(
+            RawRequest(
+                system=request.system,
+                messages=tuple(request.messages),
+                schema=None,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                tools=tuple(request.tools),
+            )
+        )
 
     async def _send_with_backoff(self, request: RawRequest) -> Completion:
         backoff = iter(BACKOFF_S)
