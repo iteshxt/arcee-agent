@@ -12,7 +12,11 @@ the ways small models fail (decision 0003) in code, before they cost a step:
   back to the cheapest tier;
 - step and wall-time limits end anything that still loops.
 
-The Planner is not in this loop yet: the whole request is one step (roadmap 1.15).
+With a Planner, the task runs plan step by plan step: the plan sits in the
+system prompt, each step offers only its tools (plus the control tools), a
+plain-text reply ends the step, and the last step's reply is the answer. A
+stuck report asks the Planner for a new plan, at most `MAX_REPLANS` times.
+Without a Planner the whole request is one step with every tool.
 """
 
 import asyncio
@@ -25,9 +29,10 @@ from pathlib import Path
 from typing import Any, Final, Literal, Protocol
 
 from arcee.core.executor import Executor
+from arcee.core.planner import Planner
 from arcee.core.policy import Tier
 from arcee.core.prompts import core_system, tool_message
-from arcee.core.protocol import ExecutorResult
+from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
 from arcee.tools.base import ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
@@ -40,6 +45,8 @@ EMPTY_LOOKUPS_BEFORE_ASKING: Final = 3
 MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
+MAX_REPLANS: Final = 2
+MAX_CLARIFY: Final = 2
 
 
 class Asker(Protocol):
@@ -93,7 +100,21 @@ class Escalated:
     reason: str
 
 
-type Event = ModelTurn | ToolRan | Guarded | Escalated
+@dataclass(frozen=True, slots=True)
+class Planned:
+    plan: PlannerOutput
+    seconds: float
+    attempt: int  # 0 for the first plan, n for the n-th replan
+
+
+@dataclass(frozen=True, slots=True)
+class StepStarted:
+    step: int
+    total: int
+    do: str
+
+
+type Event = ModelTurn | ToolRan | Guarded | Escalated | Planned | StepStarted
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,9 +125,22 @@ class Outcome:
     model_calls: int
 
 
+@dataclass(frozen=True, slots=True)
+class _StepDone:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Stuck:
+    reason: str
+
+
 @dataclass(slots=True)
 class _State:
     messages: list[Message]
+    plan: PlannerOutput | None = None
+    index: int = 0
+    tried: list[str] = field(default_factory=list[str])
     tier: int = 0
     strikes: int = 0
     steps: int = 0
@@ -125,12 +159,14 @@ class Agent:
         *,
         home: Path,
         limits: Limits = DEFAULT_LIMITS,
+        planner: Planner | None = None,
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
     ) -> None:
         if not ladder:
             raise ValueError("the escalation ladder needs at least one model")
         self._ladder = list(ladder)
+        self._planner = planner
         self._registry = registry
         self._executor = executor
         self._asker = asker
@@ -141,22 +177,90 @@ class Agent:
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
+        ctx = ToolContext(task_id=task_id, home=self._home)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
-                return await self._loop(state, ToolContext(task_id=task_id, home=self._home))
+                if self._planner is not None and (failed := await self._plan(state, request)):
+                    return failed
+                return await self._run_plan(state, ctx, request)
         except TimeoutError:
             minutes = self._limits.max_seconds / 60
             return self._fail(state, f"I stopped after {minutes:g} minutes without finishing.")
 
-    async def _loop(self, state: _State, ctx: ToolContext) -> Outcome:
-        offered = self._registry.select()
+    async def _plan(
+        self, state: _State, request: str, replan: ReplanContext | None = None
+    ) -> Outcome | None:
+        """Get a plan, asking the user when the Planner needs clarification."""
+        assert self._planner is not None
+        answers: list[tuple[str, str]] = []
+        while True:
+            started = time.monotonic()
+            plan = await self._planner.plan(request, answers=answers, replan=replan)
+            state.model_calls += 1
+            if plan.clarify is None:
+                state.plan, state.index = plan, 0
+                attempt = replan.replan_count if replan else 0
+                self._emit(Planned(plan, time.monotonic() - started, attempt))
+                return None
+            if len(answers) >= MAX_CLARIFY:
+                return self._fail(state, plan.clarify)
+            answer = await self._asker.ask(plan.clarify)
+            answers.append((plan.clarify, answer))
+            state.messages.append(Message("user", f"(You asked: {plan.clarify})\n{answer}"))
+
+    async def _run_plan(self, state: _State, ctx: ToolContext, request: str) -> Outcome:
+        replans = 0
+        while True:
+            step = state.plan.steps[state.index] if state.plan else None
+            if state.plan and step:
+                self._emit(StepStarted(step.id, len(state.plan.steps), step.do))
+            end = await self._run_step(state, ctx, step)
+            if isinstance(end, Outcome):
+                return end
+            if isinstance(end, _StepDone):
+                if state.plan is None or state.index + 1 >= len(state.plan.steps):
+                    return Outcome("done", end.text, state.steps, state.model_calls)
+                state.messages.append(Message("assistant", end.text))
+                state.index += 1
+                upcoming = state.plan.steps[state.index]
+                state.messages.append(Message("user", f"Now step {upcoming.id}: {upcoming.do}"))
+                continue
+            if self._planner is None or replans >= MAX_REPLANS:
+                return self._fail(state, f"I could not finish: {end.reason}")
+            replans += 1
+            context = ReplanContext(
+                failed_step=step.id if step else 1,
+                history_summary=end.reason,
+                tried=tuple(state.tried[-6:]),
+                replan_count=replans,
+            )
+            if failed := await self._plan(state, request, context):
+                return failed
+            assert state.plan is not None
+            first = state.plan.steps[0]
+            state.messages.append(Message("user", f"New plan. Step 1: {first.do}"))
+
+    def _offered(self, state: _State, step: PlanStep | None) -> list[AnyTool]:
+        """The step's tools plus the control tools; everything when the filter finds nothing."""
+        if step is None:
+            return self._registry.select()
+        chosen = self._registry.select(step.tools)
+        if not [tool for tool in chosen if tool.name not in CONTROL]:
+            self._emit(Guarded(state.steps, "plan step named no known tools; offering all"))
+            return self._registry.select()
+        return [*chosen, *(t for t in self._registry.select(sorted(CONTROL)) if t not in chosen)]
+
+    async def _run_step(
+        self, state: _State, ctx: ToolContext, step: PlanStep | None
+    ) -> Outcome | _StepDone | _Stuck:
+        offered = self._offered(state, step)
         while state.steps < self._limits.max_steps:
             state.steps += 1
             completion = await self._turn(state, offered)
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
                 if reply := completion.text.strip():
-                    return Outcome("done", reply, state.steps, state.model_calls)
+                    return _StepDone(reply)
                 self._strike(state, "the model returned nothing")
                 continue
             try:
@@ -166,8 +270,8 @@ class Agent:
                 self._strike(state, f"invalid call: {error}")
                 continue
             if valid.tool.name in CONTROL:
-                if (outcome := await self._control(state, call, valid)) is not None:
-                    return outcome
+                if (end := await self._control(state, call, valid)) is not None:
+                    return end
                 continue
             key = _key(valid)
             if (previous := state.seen.get(key)) is not None:
@@ -178,6 +282,7 @@ class Agent:
             changes_things = self._executor.gate.tier(valid) is not Tier.AUTO
             result = await self._executor.execute(valid, state.steps, ctx)
             self._emit(ToolRan(state.steps, result))
+            state.tried.append(result.summary)
             message = tool_message(result)
             # After anything that can change the system, looking again is verification.
             if changes_things:
@@ -195,12 +300,17 @@ class Agent:
         )
 
     def core_request(
-        self, messages: Sequence[Message], offered: Sequence[AnyTool] | None = None
+        self,
+        messages: Sequence[Message],
+        offered: Sequence[AnyTool] | None = None,
+        *,
+        plan: PlannerOutput | None = None,
+        index: int = 0,
     ) -> ToolRequest:
         """The exact request the Core gets for `messages`; the eval suite uses it too."""
         tools = self._registry.select() if offered is None else offered
         return ToolRequest(
-            core_system(home=self._home, now=self._clock()),
+            core_system(home=self._home, now=self._clock(), plan=plan_brief(plan, index)),
             tuple(messages),
             native_tools(tools),
             max_tokens=MAX_TOKENS,
@@ -209,7 +319,9 @@ class Agent:
     async def _turn(self, state: _State, offered: Sequence[AnyTool]) -> Completion:
         model = self._ladder[state.tier]
         started = time.monotonic()
-        completion = await model.respond(self.core_request(state.messages, offered))
+        completion = await model.respond(
+            self.core_request(state.messages, offered, plan=state.plan, index=state.index)
+        )
         state.model_calls += 1
         self._emit(
             ModelTurn(
@@ -224,14 +336,15 @@ class Agent:
         )
         return completion
 
-    async def _control(self, state: _State, call: WireCall, valid: ToolCall) -> Outcome | None:
-        """Act on a control tool; return an outcome when it ends the task."""
+    async def _control(
+        self, state: _State, call: WireCall, valid: ToolCall
+    ) -> Outcome | _Stuck | None:
+        """Act on a control tool; return how it ends the step, if it does."""
         args: dict[str, Any] = valid.args.model_dump()
         if valid.tool.name == DONE:
             return Outcome("done", args["reply"], state.steps, state.model_calls)
         if valid.tool.name == REPLAN:
-            # No Planner yet: a stuck report ends the task with the model's reason.
-            return self._fail(state, f"I could not finish: {args['reason']}")
+            return _Stuck(args["reason"])
         answer = await self._asker.ask(args["question"], args["options"])
         self._answer(state, call, json.dumps({"status": "ok", "data": {"answer": answer}}))
         self._settle(state)
@@ -278,6 +391,26 @@ class Agent:
 
     def _fail(self, state: _State, reply: str) -> Outcome:
         return Outcome("failed", reply, state.steps, state.model_calls)
+
+
+def plan_brief(plan: PlannerOutput | None, index: int) -> str:
+    """The plan as the Core sees it; empty for a one-step plan without constraints."""
+    if plan is None or (len(plan.steps) == 1 and not plan.constraints):
+        return ""
+    lines = ["Plan:"]
+    for i, step in enumerate(plan.steps):
+        mark = "done" if i < index else "current" if i == index else "next"
+        lines.append(f"{step.id}. [{mark}] {step.do}")
+    current = plan.steps[index]
+    lines.append(f"Current step: {current.do} Done when: {current.success}")
+    if plan.constraints:
+        lines.append("Constraints: " + "; ".join(plan.constraints))
+    last = index + 1 >= len(plan.steps)
+    lines.append(
+        "When the current step is done, reply in plain text with what you found or did. "
+        + ("That reply is your answer to the user." if last else "The next step follows.")
+    )
+    return "\n".join(lines)
 
 
 def _key(call: ToolCall) -> str:

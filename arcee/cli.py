@@ -14,9 +14,20 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
-from arcee.core.agent import Agent, Escalated, Event, Guarded, Limits, ModelTurn, ToolRan
+from arcee.core.agent import (
+    Agent,
+    Escalated,
+    Event,
+    Guarded,
+    Limits,
+    ModelTurn,
+    Planned,
+    StepStarted,
+    ToolRan,
+)
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
+from arcee.core.planner import Planner
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest
 from arcee.eval.cases import load as load_cases
@@ -24,7 +35,7 @@ from arcee.eval.runner import CaseResult, run_cases, summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
-from arcee.models.presets import local_core_ladder
+from arcee.models.presets import local_core_ladder, local_planner
 from arcee.tools.builtin import builtin_registry
 
 
@@ -81,6 +92,15 @@ class Terminal:
             case Escalated(tier=tier, model=model, reason=reason):
                 label = f"tier {tier + 1}, {model}" + (", thinking" if tier == 1 else "")
                 self.print(s.yellow(f"  ↑ escalating to {label}: {reason[:120]}"))
+            case Planned(plan=plan, seconds=seconds, attempt=attempt):
+                title = "plan" if attempt == 0 else f"new plan (replan {attempt})"
+                self.print(s.bold(f"{title}: ") + plan.goal + "  " + s.dim(f"{seconds:.1f}s"))
+                for step in plan.steps:
+                    tools = ", ".join(step.tools)
+                    self.print(f"  {step.id}. {step.do}  " + s.dim(f"[{tools}]"))
+            case StepStarted(step=step, total=total, do=do):
+                if total > 1:
+                    self.print(s.bold(f"step {step}/{total}: ") + do)
 
     async def confirm(self, request: ConfirmRequest) -> bool:
         lines = [self._style.yellow(f"? {request.sentence}")]
@@ -116,9 +136,10 @@ async def _usable(ladder: Sequence[ModelAdapter], terminal: Terminal) -> list[Mo
     return [model for model, ok in zip(ladder, healthy, strict=True) if ok]
 
 
-async def run(request: str, *, host: str, limits: Limits, verbose: bool) -> int:
+async def run(request: str, *, host: str, limits: Limits, verbose: bool, plan: bool) -> int:
     terminal = Terminal(verbose=verbose)
     ladder = local_core_ladder(host)
+    planner_model = local_planner(host)
     try:
         usable = await _usable(ladder, terminal)
         if not usable:
@@ -127,13 +148,16 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool) -> int:
                 f"Start it, then: ollama pull {ladder[0].profile.model}"
             )
             return 2
+        registry = builtin_registry()
+        planner = Planner(planner_model, registry, home=Path.home()) if plan else None
         agent = Agent(
             usable,
-            builtin_registry(),
+            registry,
             Executor(Gate(Policy(), terminal)),
             terminal,
             home=Path.home(),
             limits=limits,
+            planner=planner,
             on_event=terminal.on_event,
         )
         started = time.monotonic()
@@ -153,7 +177,7 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool) -> int:
         )
         return 0 if outcome.status == "done" else 1
     finally:
-        await asyncio.gather(*(model.aclose() for model in ladder))
+        await asyncio.gather(*(model.aclose() for model in [*ladder, planner_model]))
 
 
 async def evaluate(
@@ -217,6 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--max-seconds", type=float, default=600.0)
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
+    run_cmd.add_argument("--no-plan", action="store_true", help="skip the Planner: one step")
 
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
     eval_cmd.add_argument("--cases", type=Path, default=Path("tests/eval/cases.toml"))
@@ -241,7 +266,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
         request = " ".join(args.request)
-        return asyncio.run(run(request, host=_host(args.host), limits=limits, verbose=args.verbose))
+        return asyncio.run(
+            run(
+                request,
+                host=_host(args.host),
+                limits=limits,
+                verbose=args.verbose,
+                plan=not args.no_plan,
+            )
+        )
     except KeyboardInterrupt:
         print("\ncancelled", file=sys.stderr)
         return 130
