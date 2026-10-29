@@ -14,6 +14,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, TextIO
 
+from arcee.browser.client import BrowserClient, BrowserError
+from arcee.browser.host import EXTENSION_ID
+from arcee.browser.setup import EXTENSION_DIR, install
 from arcee.context.examples import ExampleLibrary
 from arcee.context.store import Store, data_dir
 from arcee.core.agent import (
@@ -347,6 +350,32 @@ async def evaluate_tasks(
     return 0
 
 
+def browser_setup() -> int:
+    launcher, manifest = install(data_dir())
+    print(f"Registered the Arcee browser host with Chrome:\n  {manifest}\n  {launcher}\n")
+    print("Now load the extension once:")
+    print("  1. Open chrome://extensions and turn on Developer mode (top right).")
+    print(f"  2. Click 'Load unpacked' and choose {EXTENSION_DIR}")
+    print(f"  3. Check that its ID is {EXTENSION_ID}, then run: arcee-cli browser-check")
+    return 0
+
+
+async def browser_check() -> int:
+    client = BrowserClient()
+    try:
+        info = await client.request("ping")
+        tabs = await client.request("tabs")
+    except BrowserError as exc:
+        print(f"not connected: {exc}")
+        return 1
+    finally:
+        await client.aclose()
+    print(f"connected to the Arcee extension {info['version']}; {len(tabs)} tabs open")
+    for tab in tabs[:10]:
+        print(f"  {'*' if tab['active'] else ' '} {tab['title'][:70]}")
+    return 0
+
+
 def _row(result: CaseResult) -> dict[str, object]:
     d = result.decision
     return {
@@ -389,6 +418,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
     history_cmd.add_argument("-n", type=int, default=15, help="how many tasks to list")
 
+    sub.add_parser("browser-setup", help="register the Chrome extension's native host")
+    sub.add_parser("browser-check", help="check that the Chrome extension is connected")
+
     tasks_cmd = sub.add_parser("eval-tasks", help="run whole tasks and check their outcomes")
     tasks_cmd.add_argument("--tasks", type=Path, default=Path("tests/eval/tasks.toml"))
     tasks_cmd.add_argument("--only", default="", help="task id substring")
@@ -412,6 +444,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "history":
             return asyncio.run(history(args.task_id, args.n))
+        if args.command == "browser-setup":
+            return browser_setup()
+        if args.command == "browser-check":
+            return asyncio.run(browser_check())
         if args.command == "eval-tasks":
             return asyncio.run(
                 evaluate_tasks(

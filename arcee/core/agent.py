@@ -36,6 +36,7 @@ from arcee.core.planner import Planner
 from arcee.core.policy import Tier
 from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
+from arcee.core.toolsets import filters_for
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
 from arcee.models.errors import MalformedReplyError
 from arcee.tools.base import Notes, ToolContext
@@ -274,7 +275,7 @@ class Agent:
     def _offered(self, state: _State, step: PlanStep | None) -> list[AnyTool]:
         """The step's tools plus the control tools; everything when the filter matches nothing."""
         if step is None:
-            return self._registry.select()
+            return self._registry.select(filters_for(state.messages))
         chosen = self._registry.select(step.tools)
         if not chosen:
             self._emit(Guarded(state.steps, "plan step named no known tools; offering all"))
@@ -361,7 +362,7 @@ class Agent:
         index: int = 0,
     ) -> ToolRequest:
         """The exact request the Core gets for `messages`; the eval suite uses it too."""
-        tools = self._registry.select() if offered is None else offered
+        tools = self._registry.select(filters_for(messages)) if offered is None else offered
         guidance = "\n\n".join(
             block for block in (plan_brief(plan, index), self._examples_for(messages)) if block
         )
