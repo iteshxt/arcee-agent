@@ -9,14 +9,14 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | Phase | Name | Status | Gate | Tag |
 | --- | --- | --- | --- | --- |
 | 0 | Repository foundation | 🟨 | Tooling and CI green | — |
-| 1 | Core loop (terminal agent) | 🟨 | Valid action first try > 90% on LFM3 1.7B, 60% text-mode eval pass | `v0.1.0` |
-| 2 | Browser and desktop tree | ⬜ | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
+| 1 | Core loop (terminal agent) | ✅ | Valid action first try > 90% on LFM3 1.7B, 60% text-mode eval pass | `v0.1.0` |
+| 2 | Browser and desktop tree | 🟨 | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
 | 3 | Wayland capture and input | ⬜ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
 | 4 | Daemon, extension, app | ⬜ | Fresh account: install, wizard, first task < 10 min | `v0.4.0` |
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry, Ollama adapter, gate, file/shell/control tools, the native-mode step loop and `arcee-cli` merged: `uv run arcee-cli run "..."` runs real tasks on LFM3. Eval suite (LFM3 tier 1: 92%), Planner (long requests only) and task history merged. Base model is LFM3-Omni (decision 0005): eval 85% at the switch, 89% after the harness fixes. All phase 1 items are built; 23 tools. Single-decision eval 91%, whole tasks 15/15. Next: the phase 1 gate check and the `v0.1.0` tag, then phase 2.
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry, Ollama adapter, gate, file/shell/control tools, the native-mode step loop and `arcee-cli` merged: `uv run arcee-cli run "..."` runs real tasks on LFM3. Eval suite (LFM3 tier 1: 92%), Planner (long requests only) and task history merged. Base model is LFM3-Omni (decision 0005): eval 85% at the switch, 89% after the harness fixes. Phase 1 done and tagged `v0.1.0` (23 tools; single-decision eval 91%, whole tasks 15/15). Phase 2 started: web tools and untrusted-content handling first, then the browser worker and the accessibility tree.
 **Last updated:** 2026-10-29
 
 ## Target machine
@@ -94,9 +94,9 @@ Loop and storage
 
 **Gate:**
 
-- [ ] Valid action on the first try above 90% for LFM3 1.7B (native mode)
-- [ ] 60% or more of the text-mode eval tasks pass
-- [ ] Tag `v0.1.0`
+- [x] Valid action on the first try above 90% for LFM3 1.7B (native mode): 100% (108/108) on LFM3-Omni, the base model since decision 0005
+- [x] 60% or more of the text-mode eval tasks pass: 15/15 whole tasks, 91% of single decisions
+- [x] Tag `v0.1.0`
 
 ## Phase 2 — Browser and desktop tree
 
@@ -191,3 +191,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-29** — Base model switched to LFM3-Omni (decision 0005): 92/108 (85%) on the eval against LFM3's 98/108 (91%), faster median (2.7 s against 3.4 s), and image, audio and speech for later phases. The ladder is now LFM3-Omni → LFM3 thinking → LFM2.5 8B, and the Planner uses LFM3-Omni. The gap is to be closed in the harness and tracked with `arcee-cli eval`.
 - **2026-10-29** — Closing the LFM3-Omni gap in code: 85% → 89% (96/108, two runs, 100% valid replies, 3.2 s median; using a result it already has went to 24/24). Its misses were picking the wrong fact from text that held the right one (loopback instead of the real IP, 2 of 3 photos, `df` for RAM), so the fix was tools that return the answer: `network.status` (main IP from the route), `system.status` (RAM, disk, CPU, OS), and `fs.list` with `by_type` counts and `total_size`. Every `rm`/`unlink` is refused with the paths to pass `fs.trash`; live, the model's next call was `fs.trash` with them. Final answers are checked for IPs, paths and file names no tool showed (grounding guard; it did not fire on the eval because the model picks real but wrong facts). `fs.search` returns an existing path instead of searching for it. Eval answers now go through the live loop's reply guards (`--raw` for the bare model). Ollama unloads the previous model when the ladder switches. 333 unit tests.
 - **2026-10-29** — Phase 1 tool set complete (23 tools): `fs.write`/`move`/`copy`/`open_with_default`, `app.list`/`app.open` from `.desktop` files, `shell.script` in bubblewrap (verified: home stays read-only, no network), `control.wait`/`speak`/`note` with a memories table. With all of them, LFM3-Omni reached 91% (98/108) on the single-decision eval at a 2.0 s median, faster than before. Worked-example library built and measured: 89% with it against 91% without, whole tasks 13/15 against 15/15, slower, so it is off by default (decision 0006). Whole-task eval added: 15/15 with `--plan auto` (median 22 s), 12/15 with `--plan always` (median 65 s), which backs decision 0004. 371 unit tests.
+- **2026-10-29** — Phase 1 gate passed on LFM3-Omni: 100% valid first replies (gate: 90%), whole tasks 15/15 (gate: 60%). Tagged `v0.1.0`.
