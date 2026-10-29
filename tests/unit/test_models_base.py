@@ -18,6 +18,7 @@ from arcee.models.errors import (
     ModelUnavailableError,
     QuotaExhaustedError,
     RateLimitedError,
+    ServerBusyError,
 )
 from arcee.models.fake import FAKE_PROFILE, FakeAdapter
 from tests.fakes import FakeClock
@@ -103,6 +104,14 @@ class TestRateLimiting:
         assert response.attempts == 1  # backoff retries are not model attempts
         assert clock.sleeps == [1.0, 2.0]
 
+    async def test_retries_server_errors_on_the_same_schedule(self) -> None:
+        clock = FakeClock()
+        adapter = FakeAdapter([ServerBusyError("HTTP 503"), GOOD], clock=clock)
+
+        await adapter.complete(request())
+
+        assert clock.sleeps == [1.0]
+
     async def test_honours_longer_retry_after(self) -> None:
         clock = FakeClock()
         adapter = FakeAdapter([RateLimitedError(retry_after_s=7), GOOD], clock=clock)
@@ -177,3 +186,16 @@ def test_profile_rejects_unknown_flags() -> None:
         ModelProfile.model_validate(
             {"model": "m", "context_tokens": 8192, "cost_tier": "free", "streaming": True}
         )
+
+
+async def test_async_context_closes_adapter() -> None:
+    closed: list[bool] = []
+
+    class Closing(FakeAdapter):
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    async with Closing([]):
+        pass
+
+    assert closed == [True]
