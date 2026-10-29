@@ -505,7 +505,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 # Off by default: on LFM3-Omni they lowered the eval from 91% to 89% and whole
 # tasks from 15/15 to 13/15, and made runs slower (decision 0006).
-CORE_HELP = "the Core model: local (the Ollama ladder) or openrouter:<model id>"
+CORE_HELP = "the Core model: local (the Ollama ladder), groq:<model id> or openrouter:<model id>"
 EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
 
 

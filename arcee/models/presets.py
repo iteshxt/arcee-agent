@@ -26,7 +26,7 @@ LFM25_8B: Final = ModelProfile(
 # The Planner's reply is a JSON object, so it runs in schema mode with Ollama's grammar.
 OMNI_PLANNER: Final = LFM3_OMNI.model_copy(update={"call_mode": "schema", "json_mode": "schema"})
 
-# OpenRouter's free models allow about 20 requests a minute.
+# Free cloud tiers (OpenRouter, Groq) allow roughly 20-30 requests a minute.
 FREE_RPM: Final = 20
 
 # Enough for a task's history; the 1.7B model's KV cache at this size is small.
@@ -66,16 +66,17 @@ def cloud_profile(model: str, *, schema: bool = False) -> ModelProfile:
 
 
 def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
-    """`local`, or `openrouter:<model id>` for a cloud model as the only Core tier."""
+    """`local`, or `<provider>:<model id>` (groq, openrouter): a cloud model as the only tier."""
     if choice == "local":
         return list(local_core_ladder(host))
     provider, _, model = choice.partition(":")
-    if provider != "openrouter" or not model:
-        raise ValueError(f"unknown core {choice!r}; use 'local' or 'openrouter:<model id>'")
-    return [OpenAICompatAdapter.openrouter(cloud_profile(model))]
+    if not model:
+        raise ValueError(f"unknown core {choice!r}; use 'local' or '<provider>:<model id>'")
+    return [OpenAICompatAdapter.provider(provider, cloud_profile(model))]
 
 
 def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     if choice == "local":
         return local_planner(host)
-    return OpenAICompatAdapter.openrouter(cloud_profile(choice.partition(":")[2], schema=True))
+    provider, _, model = choice.partition(":")
+    return OpenAICompatAdapter.provider(provider, cloud_profile(model, schema=True))

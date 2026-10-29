@@ -32,6 +32,11 @@ from arcee.models.limiter import SYSTEM_CLOCK, Clock
 
 OPENROUTER_URL: Final = "https://openrouter.ai/api/v1"
 OPENROUTER_KEY_ENV: Final = "OPENROUTER_API_KEY"
+# Providers that speak this API: name -> (base URL, environment variable with the key).
+PROVIDERS: Final = {
+    "openrouter": (OPENROUTER_URL, OPENROUTER_KEY_ENV),
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+}
 TIMEOUT: Final = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 
@@ -55,10 +60,18 @@ class OpenAICompatAdapter(ModelAdapter):
 
     @classmethod
     def openrouter(cls, profile: ModelProfile) -> OpenAICompatAdapter:
-        key = os.environ.get(OPENROUTER_KEY_ENV)
+        return cls.provider("openrouter", profile)
+
+    @classmethod
+    def provider(cls, name: str, profile: ModelProfile) -> OpenAICompatAdapter:
+        """An adapter for a known provider, with its key from the environment (or .env)."""
+        if name not in PROVIDERS:
+            raise ValueError(f"unknown provider {name!r}; known: {', '.join(PROVIDERS)}")
+        url, env = PROVIDERS[name]
+        key = os.environ.get(env)
         if not key:
-            raise ModelUnavailableError(f"set {OPENROUTER_KEY_ENV} (in .env) to use OpenRouter")
-        return cls(profile, key)
+            raise ModelUnavailableError(f"set {env} (in .env) to use {name}")
+        return cls(profile, key, base_url=url)
 
     async def _send(self, request: RawRequest) -> Completion:
         body: dict[str, Any] = {
@@ -71,10 +84,14 @@ class OpenAICompatAdapter(ModelAdapter):
             "temperature": request.temperature,
         }
         if self.profile.thinking is not None:
-            body["reasoning"] = {
-                "enabled": self.profile.thinking,
-                "exclude": not self.profile.thinking,
-            }
+            if "groq.com" in str(self._client.base_url):
+                # Groq's gpt-oss models take an effort level instead of OpenRouter's field.
+                body["reasoning_effort"] = "medium" if self.profile.thinking else "low"
+            else:
+                body["reasoning"] = {
+                    "enabled": self.profile.thinking,
+                    "exclude": not self.profile.thinking,
+                }
         if request.tools:
             body["tools"] = list(request.tools)
         elif request.schema is not None:
@@ -86,7 +103,7 @@ class OpenAICompatAdapter(ModelAdapter):
 
     async def health(self) -> bool:
         try:
-            response = await self._client.get("/key")
+            response = await self._client.get("/models")
         except httpx.HTTPError:
             return False
         return response.status_code == 200

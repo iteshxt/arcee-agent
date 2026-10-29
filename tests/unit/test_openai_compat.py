@@ -155,8 +155,13 @@ def test_core_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(core_ladder("local")) == 3
     with pytest.raises(ModelUnavailableError, match="OPENROUTER_API_KEY"):
         core_ladder("openrouter:google/gemma-4-31b-it")
-    with pytest.raises(ValueError, match="unknown core"):
+    with pytest.raises(ValueError, match="unknown provider 'acme'"):
         core_ladder("acme:model")
+    with pytest.raises(ValueError, match="unknown core"):
+        core_ladder("groq")
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    [groq] = core_ladder("groq:openai/gpt-oss-20b")
+    assert groq.profile.model == "openai/gpt-oss-20b"
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     [model] = core_ladder("openrouter:google/gemma-4-31b-it")
     assert (model.profile.model, model.profile.rpm) == ("google/gemma-4-31b-it", 20)
