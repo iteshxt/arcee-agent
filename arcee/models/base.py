@@ -53,6 +53,10 @@ class ModelProfile(BaseModel):
     rpm: int | None = Field(default=None, ge=1)
     rpd: int | None = Field(default=None, ge=1)
     tpm: int | None = Field(default=None, ge=100, description="Tokens per minute to stay under.")
+    tool_detail: Literal["full", "compact"] = Field(
+        default="full",
+        description="full: tools carry usage cards (small models need them); compact: one line.",
+    )
     cost_tier: Literal["free", "paid", "local"]
     thinking: bool | None = Field(
         default=None, description="Reasoning before answering; None keeps the provider default."

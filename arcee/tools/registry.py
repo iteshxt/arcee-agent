@@ -111,19 +111,48 @@ class Registry:
 # --- Rendering ------------------------------------------------------------------
 
 
-def native_tools(tools: Iterable[AnyTool]) -> list[dict[str, Any]]:
-    """Provider tool definitions for native call mode (OpenAI-style, which Ollama uses)."""
+def native_tools(tools: Iterable[AnyTool], *, compact: bool = False) -> list[dict[str, Any]]:
+    """Provider tool definitions for native call mode (OpenAI-style, which Ollama uses).
+
+    `compact` is for capable models: one-line descriptions without usage cards, and
+    argument schemas without their descriptions.
+    """
     return [
         {
             "type": "function",
             "function": {
                 "name": wire_name(tool.name),
-                "description": _description(tool),
-                "parameters": copy.deepcopy(dict(provider_schema(tool.args_model))),
+                "description": _short(tool) if compact else _description(tool),
+                "parameters": _bare(copy.deepcopy(dict(provider_schema(tool.args_model))))
+                if compact
+                else copy.deepcopy(dict(provider_schema(tool.args_model))),
             },
         }
         for tool in tools
     ]
+
+
+def _short(tool: AnyTool) -> str:
+    text = tool.description.split(". ")[0].rstrip(".") + "."
+    return text + (" Asks the user first." if tool.tier is Tier.CONFIRM else "")
+
+
+def _bare(schema: Any) -> Any:
+    """A schema without descriptions and defaults: names, types, enums and limits stay."""
+    if isinstance(schema, list):
+        return [_bare(item) for item in cast(list[Any], schema)]
+    if not isinstance(schema, dict):
+        return schema
+    node = cast(dict[str, Any], schema)
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if key in ("description", "default", "examples"):
+            continue
+        if key == "properties":
+            out[key] = {name: _bare(sub) for name, sub in cast(dict[str, Any], value).items()}
+        else:
+            out[key] = _bare(value)
+    return out
 
 
 def prompt_block(tools: Iterable[AnyTool]) -> str:

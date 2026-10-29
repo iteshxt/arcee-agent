@@ -369,7 +369,7 @@ class Agent:
         return ToolRequest(
             core_system(home=self._home, now=self._clock(), plan=guidance),
             tuple(messages),
-            native_tools(tools),
+            native_tools(tools, compact=self._ladder[0].profile.tool_detail == "compact"),
             max_tokens=MAX_TOKENS,
         )
 

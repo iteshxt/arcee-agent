@@ -66,6 +66,7 @@ def cloud_profile(model: str, *, schema: bool = False, tpm: int | None = None) -
         json_mode="schema" if schema else "none",
         rpm=FREE_RPM,
         tpm=tpm,
+        tool_detail="compact",
     )
 
 

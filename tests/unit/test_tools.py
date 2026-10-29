@@ -285,3 +285,13 @@ class TestRendering:
 
     def test_empty_args_render_as_empty_signature(self) -> None:
         assert prompt_block([Done()]).startswith("control.done(): Finish the task.")
+
+
+def test_compact_tools_drop_cards_and_argument_descriptions() -> None:
+    full = native_tools([FsTrash()])[0]["function"]
+    compact = native_tools([FsTrash()], compact=True)[0]["function"]
+
+    assert compact["description"] == "Move files to the trash. Asks the user first."
+    assert "description" not in json.dumps(compact["parameters"])
+    assert compact["parameters"]["properties"]["paths"]["type"] == "array"
+    assert len(json.dumps(compact)) < len(json.dumps(full))

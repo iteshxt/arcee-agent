@@ -11,7 +11,7 @@ from arcee.browser.client import BrowserClient, BrowserError
 from arcee.browser.host import EXTENSION_ID, HOST_NAME, encode, read_message, serve
 from arcee.browser.setup import install
 from arcee.core.policy import Policy, Tier
-from arcee.core.toolsets import ALWAYS, BROWSER, WEB, filters_for
+from arcee.core.toolsets import BROWSER, CONTROL, LOCAL, WEB, filters_for
 from arcee.models.base import Message, WireCall
 from arcee.tools.base import NoArgs, ToolContext
 from arcee.tools.browser import (
@@ -226,14 +226,14 @@ class TestTools:
 @pytest.mark.parametrize(
     ("request_text", "expected"),
     [
-        ("How much free disk space do I have?", ALWAYS),
-        ("Rename the photo in Pictures", ALWAYS),
-        ("Check my Gmail inbox for anything from the bank", ALWAYS + BROWSER),
-        ("Look at my inbox in Chrome", ALWAYS + BROWSER),
-        ("Open https://example.org and summarise it", ALWAYS + WEB),
-        ("Search the web for the Ubuntu 26.04 release date", ALWAYS + WEB),
-        ("What's the latest news about GNOME?", ALWAYS + WEB),
-        ("Open example.com in Chrome", ALWAYS + BROWSER + WEB),
+        ("How much free disk space do I have?", LOCAL + CONTROL),
+        ("Rename the photo in Pictures", LOCAL + CONTROL),
+        ("Check my Gmail inbox for anything from the bank", CONTROL + BROWSER),
+        ("Look at my inbox in Chrome", CONTROL + BROWSER),
+        ("Open https://example.org and summarise it", CONTROL + WEB),
+        ("Search the web for the Ubuntu 26.04 release date", CONTROL + WEB),
+        ("Save the newest email from Gmail to a file in Documents", LOCAL + CONTROL + BROWSER),
+        ("Open example.com in Chrome", CONTROL + BROWSER + WEB),
     ],
 )
 def test_tool_groups_follow_the_request(request_text: str, expected: tuple[str, ...]) -> None:
@@ -244,6 +244,7 @@ def test_groups_stay_once_used() -> None:
     messages = [
         Message("user", "what is in the first one?"),
         Message("assistant", "", tool_calls=(WireCall("browser_get_elements", {}),)),
+        Message("assistant", "", tool_calls=(WireCall("fs_write", {}),)),
     ]
 
-    assert filters_for(messages) == ALWAYS + BROWSER
+    assert filters_for(messages) == LOCAL + CONTROL + BROWSER
