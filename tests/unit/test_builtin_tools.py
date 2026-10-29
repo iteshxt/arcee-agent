@@ -122,6 +122,14 @@ class TestSearch:
         assert result.data["matches"] == ["~/Documents/projects/resume-2026.docx"]
         assert result.data["count"] == 1
 
+    async def test_counts_matches_per_folder(self, ctx: ToolContext, home: Path) -> None:
+        (home / "Documents" / "projects" / "cv-old.pdf").write_text("x")
+
+        result = await FsSearch().run(SearchArgs(query="*.pdf"), ctx)
+
+        assert result.data is not None
+        assert result.data["by_folder"] == {"~/Documents": 3, "~/Documents/projects": 1}
+
     async def test_by_name_pattern(self, ctx: ToolContext) -> None:
         result = await FsSearch().run(SearchArgs(query="*.pdf", root="~/Documents"), ctx)
 
