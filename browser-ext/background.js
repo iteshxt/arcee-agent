@@ -6,7 +6,7 @@
 // injected into the tab, so nothing stays resident in pages between requests.
 
 const HOST = "org.arcee.browser";
-const NAV_TIMEOUT_MS = 20000;
+const NAV_TIMEOUT_MS = 15000;
 let port = null;
 
 function connect() {
@@ -76,10 +76,15 @@ async function handle(method, params) {
       return {};
     case "navigate": {
       const tab = await activeTab(params.tab);
-      await chrome.tabs.update(tab.id, { url: params.url });
-      await waitForLoad(tab.id);
+      if (tab.url !== params.url) {
+        const loaded = waitForLoad(tab.id);
+        await chrome.tabs.update(tab.id, { url: params.url });
+        // A change of only the #fragment never fires a load event: do not wait for one.
+        const sameDocument = tab.url && tab.url.split("#")[0] === params.url.split("#")[0];
+        if (!sameDocument) await loaded;
+      }
       const after = await chrome.tabs.get(tab.id);
-      return { url: after.url, title: after.title };
+      return { id: after.id, url: after.url, title: after.title };
     }
     case "back": {
       const tab = await activeTab(params.tab);
@@ -141,8 +146,12 @@ function snapshot(limit, textChars) {
     const r = el.getBoundingClientRect();
     return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
   };
+  // Main content first (an inbox's rows, an article's links), then the rest of what is
+  // on screen, then what is off screen: a short limit should still show what matters.
+  const main = (el) => !!el.closest("main, [role=main]");
+  const rank = (el) => (inView(el) ? 0 : 2) + (main(el) ? 0 : 1);
   const all = [...document.querySelectorAll(SELECTOR)].filter(visible);
-  all.sort((a, b) => Number(inView(b)) - Number(inView(a)));
+  all.sort((a, b) => rank(a) - rank(b));
   const elements = [];
   for (const el of all.slice(0, limit)) {
     const id = `el_${elements.length + 1}`;
@@ -157,8 +166,8 @@ function snapshot(limit, textChars) {
     if (!inView(el)) item.offscreen = true;
     elements.push(item);
   }
-  const main = document.querySelector("main, [role=main], article") || document.body;
-  const text = (main.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
+  const body = document.querySelector("main, [role=main], article") || document.body;
+  const text = (body.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
   return {
     url: location.href,
     title: document.title,

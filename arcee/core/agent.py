@@ -208,7 +208,7 @@ class Agent:
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
-        ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes)
+        ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
                 planned = self._planner is not None and self._plan_if(request)

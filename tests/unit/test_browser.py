@@ -176,26 +176,44 @@ class TestTools:
         assert shared.elements == {}
 
     async def test_navigation_and_tabs(self) -> None:
-        shared, _ = session(
+        shared, client = session(
             {
-                "navigate": {"url": "https://a.example", "title": "A"},
-                "tabs": [{"id": 7}],
+                "tabs": [{"id": 7, "url": "https://b.example/x", "active": True}],
+                "new_tab": {"id": 9},
+                "navigate": {"id": 9, "url": "https://a.example", "title": "A"},
                 "back": {},
             }
         )
 
         opened = await BrowserNavigate(shared).run(NavigateArgs(url="https://a.example"), CTX)
         bad = await BrowserNavigate(shared).run(NavigateArgs(url="a.example"), CTX)
-        listed = await BrowserTabs(shared).run(TabsArgs(), CTX)
         back = await BrowserBack(shared).run(NoArgs(), CTX)
 
         assert opened.summary == "Opened A"
         assert bad.error == "give a full http or https address"
-        assert listed.data == {"tabs": [{"id": 7}]}
         assert back.summary == "Went back"
+        # A new site opens in a new tab, which every later call then targets.
+        assert ("new_tab", {"url": "https://a.example"}) in client.calls
+        assert client.calls[-1] == ("back", {"tab": 9})
+        assert shared.tab == 9
         assert (
             BrowserTabs(shared).tier_for(TabsArgs(action="close", tab=7), Policy()) is Tier.CONFIRM
         )
+
+    async def test_reuses_a_tab_already_on_the_site(self) -> None:
+        shared, client = session(
+            {
+                "tabs": [{"id": 4, "url": "https://mail.example/inbox", "active": False}],
+                "switch_tab": {"id": 4},
+                "navigate": {"id": 4, "url": "https://mail.example/#inbox", "title": "Inbox"},
+            }
+        )
+
+        await BrowserNavigate(shared).run(NavigateArgs(url="https://mail.example/#inbox"), CTX)
+
+        assert [c[0] for c in client.calls] == ["tabs", "switch_tab", "navigate"]
+        assert client.calls[-1][1]["tab"] == 4
+        assert "new_tab" not in [c[0] for c in client.calls]
 
     async def test_bridge_failures_become_tool_errors(self) -> None:
         shared, _ = session({"elements": BrowserError("not connected")})
@@ -227,3 +245,39 @@ def test_web_tools_stay_once_used() -> None:
     ]
 
     assert filters_for(messages) == ALWAYS + WEB
+
+
+async def test_first_read_picks_the_tab_the_request_names() -> None:
+    shared, client = session(
+        {
+            "tabs": [
+                {"id": 1, "title": "Cooking videos - YouTube", "url": "https://www.youtube.com/w"},
+                {
+                    "id": 2,
+                    "title": "Inbox - me@example.com - Gmail",
+                    "url": "https://mail.google.com/",
+                },
+            ],
+            "switch_tab": {"id": 2},
+            "elements": PAGE,
+        }
+    )
+    ctx = ToolContext(task_id="t", home=Path("/h"), request="Check my Gmail inbox for bills")
+
+    await BrowserElements(shared).run(ElementsArgs(), ctx)
+
+    assert shared.tab == 2
+    assert ("switch_tab", {"tab": 2}) in client.calls
+    assert client.calls[-1] == ("elements", {"limit": 60, "tab": 2})
+
+
+async def test_no_matching_tab_uses_the_active_one() -> None:
+    shared, client = session(
+        {"tabs": [{"id": 1, "title": "News", "url": "https://n.example"}], "elements": PAGE}
+    )
+    ctx = ToolContext(task_id="t", home=Path("/h"), request="Read this page for me")
+
+    await BrowserElements(shared).run(ElementsArgs(), ctx)
+
+    assert shared.tab is None
+    assert client.calls[-1] == ("elements", {"limit": 60})

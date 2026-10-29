@@ -10,6 +10,7 @@ field, needs the user's confirmation. Everything read from pages is untrusted.
 import re
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Literal
+from urllib.parse import urlparse
 
 from pydantic import Field
 
@@ -34,6 +35,9 @@ class BrowserSession:
 
     client: BrowserClient = field(default_factory=BrowserClient)
     elements: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    # The tab Arcee is working in. Every page call names it, so the user's other tabs
+    # and windows are never read or changed by accident.
+    tab: int | None = None
 
     def element(self, target: str) -> dict[str, Any]:
         return self.elements.get(target, {})
@@ -49,6 +53,29 @@ class _BrowserTool[A: ToolArgs](Tool[A]):
 
     async def _call(self, method: str, **params: Any) -> Any:
         return await self.session.client.request(method, params)
+
+    async def _page(self, method: str, ctx: ToolContext, **params: Any) -> Any:
+        """A call on the working tab, choosing one from the request the first time."""
+        if self.session.tab is None:
+            self.session.tab = await self._tab_for(ctx.request)
+        if self.session.tab is not None:
+            params["tab"] = self.session.tab
+        return await self._call(method, **params)
+
+    async def _tab_for(self, request: str) -> int | None:
+        """The open tab the request names by its title or site, if exactly one fits best."""
+        words = {w for w in re.findall(r"[a-z0-9]{3,}", request.lower()) if w not in _COMMON}
+        if not words:
+            return None
+        tabs: list[dict[str, Any]] = await self._call("tabs")
+        scored = sorted(
+            ((_overlap(words, t), int(t["id"])) for t in tabs),
+            reverse=True,
+        )
+        if scored and scored[0][0] > 0 and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+            await self._call("switch_tab", tab=scored[0][1])
+            return scored[0][1]
+        return None
 
 
 # --- tabs and navigation --------------------------------------------------------
@@ -83,11 +110,16 @@ class BrowserTabs(_BrowserTool[TabsArgs]):
                 return ToolResult.ok(f"{len(tabs)} tabs open", data={"tabs": tabs})
             if args.action == "new":
                 opened = await self._call("new_tab", url=args.url)
+                self.session.tab = opened["id"]
                 return ToolResult.ok(f"Opened a new tab at {args.url}", data=opened)
             if args.tab is None:
                 return ToolResult.fail("give the tab id from browser.tabs(action='list')")
             method = "switch_tab" if args.action == "switch" else "close_tab"
             result = await self._call(method, tab=args.tab)
+            if args.action == "switch":
+                self.session.tab = args.tab
+            elif self.session.tab == args.tab:
+                self.session.tab = None
             done = "Switched to" if args.action == "switch" else "Closed"
             return ToolResult.ok(f"{done} tab {args.tab}", data=result)
         except BrowserError as exc:
@@ -112,11 +144,29 @@ class BrowserNavigate(_BrowserTool[NavigateArgs]):
         if not re.match(r"^https?://", args.url):
             return ToolResult.fail("give a full http or https address")
         try:
-            page = await self._call("navigate", url=args.url)
+            page = await self._open(args.url)
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
         return ToolResult.ok(f"Opened {page.get('title') or page.get('url')}", data=page)
+
+    async def _open(self, url: str) -> dict[str, Any]:
+        """Go to `url` without taking over a tab the user is using.
+
+        With a working tab, navigate it. Otherwise reuse a tab already on that site
+        (switching to it), or open a new tab.
+        """
+        tabs: list[dict[str, Any]] = await self._call("tabs")
+        if self.session.tab not in {t["id"] for t in tabs}:
+            host = urlparse(url).netloc
+            same = next((t for t in tabs if urlparse(str(t.get("url", ""))).netloc == host), None)
+            if same is None:
+                opened = await self._call("new_tab", url=url)
+                self.session.tab = opened["id"]
+                return await self._call("navigate", url=url, tab=opened["id"])
+            await self._call("switch_tab", tab=same["id"])
+            self.session.tab = same["id"]
+        return await self._call("navigate", url=url, tab=self.session.tab)
 
 
 class BrowserBack(_BrowserTool[NoArgs]):
@@ -127,7 +177,7 @@ class BrowserBack(_BrowserTool[NoArgs]):
 
     async def run(self, args: NoArgs, ctx: ToolContext) -> ToolResult:
         try:
-            await self._call("back")
+            await self._page("back", ctx)
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
@@ -138,7 +188,9 @@ class BrowserBack(_BrowserTool[NoArgs]):
 
 
 class ElementsArgs(ToolArgs):
-    limit: int = Field(default=80, ge=10, le=150, description="Most elements to return")
+    limit: int = Field(
+        default=60, ge=10, le=150, description="Most elements; main content comes first"
+    )
 
 
 class BrowserElements(_BrowserTool[ElementsArgs]):
@@ -156,7 +208,7 @@ class BrowserElements(_BrowserTool[ElementsArgs]):
 
     async def run(self, args: ElementsArgs, ctx: ToolContext) -> ToolResult:
         try:
-            page = await self._call("elements", limit=args.limit)
+            page = await self._page("elements", ctx, limit=args.limit)
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         elements: list[dict[str, Any]] = page.get("elements", [])
@@ -184,7 +236,9 @@ class BrowserReadText(_BrowserTool[ReadArgs]):
 
     async def run(self, args: ReadArgs, ctx: ToolContext) -> ToolResult:
         try:
-            page = await self._call("read_text", selector=args.selector, max_chars=args.max_chars)
+            page = await self._page(
+                "read_text", ctx, selector=args.selector, max_chars=args.max_chars
+            )
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         return ToolResult.ok(f"Read {page.get('title', 'the page')}", data=page)
@@ -202,7 +256,7 @@ class BrowserScroll(_BrowserTool[ScrollArgs]):
 
     async def run(self, args: ScrollArgs, ctx: ToolContext) -> ToolResult:
         try:
-            where = await self._call("scroll", direction=args.direction)
+            where = await self._page("scroll", ctx, direction=args.direction)
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
@@ -235,7 +289,7 @@ class BrowserClick(_BrowserTool[ClickArgs]):
     async def run(self, args: ClickArgs, ctx: ToolContext) -> ToolResult:
         label = _label(self.session, args.target)
         try:
-            page = await self._call("click", target=args.target)
+            page = await self._page("click", ctx, target=args.target)
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
@@ -277,8 +331,8 @@ class BrowserFill(_BrowserTool[FillArgs]):
 
     async def run(self, args: FillArgs, ctx: ToolContext) -> ToolResult:
         try:
-            result = await self._call(
-                "fill", target=args.target, text=args.text, submit=args.submit
+            result = await self._page(
+                "fill", ctx, target=args.target, text=args.text, submit=args.submit
             )
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
@@ -286,6 +340,18 @@ class BrowserFill(_BrowserTool[FillArgs]):
             self.session.elements.clear()
         label = _label(self.session, args.target) or args.target
         return ToolResult.ok(f"Filled {label}", data=result)
+
+
+_COMMON: Final = frozenset(
+    {"the", "and", "for", "from", "with", "tell", "show", "look", "open", "what", "chrome",
+     "tab", "tabs", "page", "browser", "newest", "latest", "please", "into", "this", "that"}
+)  # fmt: skip
+
+
+def _overlap(words: set[str], tab: dict[str, Any]) -> int:
+    """How many request words the tab's title or site contains."""
+    where = f"{tab.get('title', '')} {urlparse(str(tab.get('url', ''))).netloc}".lower()
+    return sum(word in where for word in words)
 
 
 def _label(session: BrowserSession, target: str) -> str:
