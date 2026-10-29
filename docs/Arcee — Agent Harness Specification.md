@@ -10,9 +10,9 @@ Arcee is a model-agnostic desktop agent harness for Ubuntu (GNOME on Wayland). I
 
 **Goals**
 
-- Run entirely on free resources: free-tier cloud APIs plus local models on a 16 GB machine.
+- Run entirely on free resources: local models on a 16 GB machine by default, with cloud APIs optional (decision 0003).
 - Work on Wayland without hacks; no X11 dependency.
-- Own the tool-calling protocol: a strict JSON contract defined by the harness, enforced on any model.
+- Own the tool protocol: the harness defines one canonical action and validates it for every model; the adapter decides whether it travels as a native tool call or a schema-constrained JSON object.
 - Four model roles (planner, core, context manager, embedder) so a strong model is only used where needed.
 - Never lose context: all history stored locally, retrieved by relevance, compressed by summarization.
 - Safe by construction: permission tiers, confirmation prompts, kill switch, full action log.
@@ -41,7 +41,7 @@ The reference machine is the developer's own: Ubuntu 26.04 LTS, GNOME 50 on Wayl
 | Node.js | 20+ (Playwright runtime only) | 20+ |
 | Audio | Any microphone (PipeWire) | Microphone with noise suppression |
 
-**What fits in 4 GB VRAM.** A 4-bit quantized 3-4B model (Gemma 3 4B Q4, Qwen 3 4B Q4, Llama 3.2 3B) occupies about 2.5-3 GB and runs at 20-40 tokens/s on a GTX 1650. A 7-8B model at Q4 needs about 5 GB, so it spills partly to CPU and drops to 5-10 tokens/s: usable for the background summarizer, too slow for the planner on the critical path. Faster-whisper `small` (int8) takes about 500 MB of VRAM; Piper runs on CPU; `nomic-embed-text` takes about 300 MB. The reference machine can therefore keep one 3-4B model, whisper and the embedder resident at once, with the core role on a cloud API.
+**What fits in 4 GB VRAM.** A 4-bit quantized 3-4B model (Gemma 3 4B Q4, Qwen 3 4B Q4, Llama 3.2 3B) occupies about 2.5-3 GB and runs at 20-40 tokens/s on a GTX 1650. A 7-8B model at Q4 needs about 5 GB, so it spills partly to CPU and drops to 5-10 tokens/s: usable for the background summarizer, too slow for the planner on the critical path. Faster-whisper `small` (int8) takes about 500 MB of VRAM; Piper runs on CPU; `nomic-embed-text` takes about 300 MB. The reference machine can therefore keep one 3-4B model, whisper and the embedder resident at once. Measured on the reference machine, the GNOME desktop itself holds 0.8-2 GB of VRAM; LFM3 1.7B at Q4 takes 1.1 GiB and runs at about 65 tokens/s fully on the GPU, which is why it is the default Core (decision 0003). Ollama does not always put every layer on the GPU when VRAM is shared with the desktop, so the adapter sets `num_gpu` explicitly.
 
 **System packages (Ubuntu names)**
 
@@ -91,9 +91,9 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 
 | Role | Job | Called | Needs | Default on reference machine | Fallback |
 | --- | --- | --- | --- | --- | --- |
-| Planner | Turn a raw request into a structured task: resolve ambiguity, pull memory, split into steps, set constraints | Once per task; again on `replan` | Reasoning, 8k+ context, no vision | Gemini Flash (free tier) | Local Qwen 3 4B via Ollama |
-| Core | Given one step and the current observation, return one JSON action | Every step | Instruction following, strict JSON; vision + grounding only for screenshot mode | Gemini Flash (free tier) | Gemma 3 4B local for tree-mode steps |
-| Context | Summarize finished tasks and old history into compact memory; tag records | Background, after each task and nightly | Cheap, local, 4k context is enough | Gemma 3 4B or Llama 3.2 3B via Ollama | Gemini Flash-Lite |
+| Planner | Turn a raw request into a structured task: resolve ambiguity, pull memory, split into steps, set constraints | Once per task; again on `replan` | Reasoning, 8k+ context, no vision | LFM3 1.7B with thinking on | LFM2.5 8B |
+| Core | Given one step and the current observation, return one action | Every step | Tool calling, instruction following; vision + grounding only for screenshot mode | LFM3 1.7B, thinking off | The escalation ladder below |
+| Context | Summarize finished tasks and old history into compact memory; tag records | Background, after each task and nightly | Cheap, local, 4k context is enough | LFM3 1.7B | LFM2.5 8B |
 | Embedder | Turn every record into a vector for retrieval | Every stored record and every query | Fast, local | `nomic-embed-text` via Ollama (768-d) | `bge-small-en` via sentence-transformers |
 
 **Capability flags.** Each configured model carries a profile the orchestrator reads before choosing a strategy. The user sets these in the app; presets fill them for known models.
@@ -102,21 +102,40 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 | --- | --- | --- |
 | `vision` | bool | Model can receive images. Without it, screenshot tools are hidden from the Core and only tree/marks mode is offered. |
 | `grounding` | none / marks / coords | `coords`: model may return raw `x,y`. `marks`: model picks numbered elements from a marked screenshot. `none`: accessibility tree only. |
+| `call_mode` | native / schema | How the Core's action travels (section 5): `native` uses the provider's tool-calling field and `tool` messages; `schema` asks for one JSON object. |
 | `json_mode` | none / schema / grammar | How the harness enforces output: `schema` passes a JSON schema (Gemini, OpenAI-style, Ollama `format`), `grammar` uses llama.cpp GBNF, `none` relies on prompt + retry. |
+| `thinking` | bool / unset | Reasoning before answering; unset keeps the provider default. Tier 2 of the escalation ladder turns it on. |
 | `context_tokens` | int | Budget the Context manager fills to (minus a 20% safety margin). |
 | `rpm`, `rpd` | int | Rate limits; the adapter throttles and queues to stay under them. |
 | `cost_tier` | free / paid / local | Shown in the UI; `paid` models require an explicit opt-in per task. |
 | `max_image_px` | int | Longest side the harness downscales screenshots to before sending (default 1280). |
 
+**Escalation ladder.** A role can list several models in order. The orchestrator starts every step on the first and climbs only on failures it can detect: output still invalid after retries, tool arguments rejected by the registry, a loop, the same step failing twice, or `confidence` below 0.5. The next step starts at the bottom again. A confidently wrong action looks like success and does not escalate; the permission gate and confirmations are the protection there.
+
+| Tier | Core model on the local preset | Cost |
+| --- | --- | --- |
+| 1 | LFM3 1.7B, thinking off | about 1.5 s per step |
+| 2 | LFM3 1.7B, thinking on | about 4.5 s; same weights, no swap |
+| 3 | LFM2.5 8B | partly on CPU; seconds per step plus a model swap |
+
 **Role presets shipped with v1**
 
-- *Free cloud:* Planner = Gemini Flash, Core = Gemini Flash, Context = local Gemma 3 4B, Embedder = nomic-embed-text.
-- *Fully local (16 GB, 4 GB VRAM):* Planner = Qwen 3 4B, Core = Qwen 3 4B (tree mode only), Context = Gemma 3 4B, Embedder = nomic-embed-text. Slower, no quota, private.
+- *Local (default; 16 GB, 4 GB VRAM):* Planner = LFM3 1.7B thinking, Core = the ladder above (tree mode only), Context = LFM3 1.7B, Embedder = nomic-embed-text. No quota, private, works offline.
+- *Cloud:* any configured cloud model per role for users who bring a key (the Gemini adapter is parked on a branch, decision 0003).
 - *Custom:* any OpenAI-compatible endpoint (vLLM, LM Studio, OpenRouter) per role.
 
 ## 5. Model adapter layer
 
-The adapter layer makes every model look the same to the orchestrator: text in, one validated JSON object out. Arcee never uses a provider's native function-calling feature; the tool protocol is defined once in the harness and enforced through the system prompt, schema passthrough where available, and a parse-validate-retry loop.
+The adapter layer makes every model look the same to the orchestrator: a request in, one validated object out. The protocol objects (section 7) are defined once in the harness; how the Core's action reaches the model and comes back is the adapter's concern, chosen per model by `call_mode`.
+
+**Call modes**
+
+| Mode | Request | Reply | Used for |
+| --- | --- | --- | --- |
+| `native` | Tool schemas in the provider's `tools` field; earlier steps replayed as assistant tool calls with `tool` result messages | A tool call, mapped to `Action`; a plain-text reply maps to `control.done` with that text | Models trained for tool calling (LFM3, Qwen3.5); measured faster and better without examples (decision 0003) |
+| `schema` | The protocol block below in the system prompt; the step packed into one user message | One JSON object validated as `CoreAction` | Models without tool calling, and the Planner, whose output is not a tool call |
+
+Both modes end in the same validated `CoreAction`, so the executor and gate never know which was used. Tool names are mapped for providers that forbid dots (`fs.list` ↔ `fs_list`). In native mode the model's `thought` comes from its reasoning trace when thinking is on and is otherwise empty; `step_status` is inferred (`control.done` → `task_done`, `control.replan` → `stuck`, anything else `in_progress`).
 
 **Interface every adapter implements**
 
@@ -149,11 +168,11 @@ Providers implement only `_send` and `health`; the parse-validate-retry loop bel
 | --- | --- | --- | --- | --- |
 | `gemini` | REST `generativelanguage.googleapis.com` | `responseMimeType=application/json` + `responseSchema` | Yes | Free tier; adapter reads `rpm`/`rpd` from profile and throttles |
 | `openai_compat` | `/v1/chat/completions` | `response_format: {type: json_schema}` when supported, else prompt only | Depends on endpoint | Covers OpenRouter, vLLM, LM Studio, Groq, Mistral |
-| `ollama` | `/api/chat` on `127.0.0.1:11434` | `format: <json schema>` (Ollama 0.5+) | Yes for vision models (llava, gemma3, qwen-vl) | Also exposes `/api/embed` for the Embedder role |
+| `ollama` | `/api/chat` on `127.0.0.1:11434` | `tools` (native mode, parsed by Ollama's per-model renderer) or `format: <json schema>` | Yes for vision models (qwen3.5, gemma3, qwen-vl) | The default provider. Sets `num_gpu` so all layers stay on the GPU, `think` from the profile, and the model's recommended sampling (LFM: temperature 0.1, top_k 50, repeat penalty 1.1). Also exposes `/api/embed` for the Embedder role |
 | `llamacpp` | `llama-server` HTTP | GBNF grammar generated from the Pydantic schema | Via `--mmproj` | Optional; for users who want grammar-level guarantees |
 | `anthropic` | Messages API | Prompt only (tool protocol in system prompt) | Yes | Paid only; included for completeness |
 
-**The protocol in the system prompt.** Every role prompt ends with the same block, generated from the role's Pydantic schema:
+**The protocol in the system prompt** (schema mode). Every role prompt ends with the same block, generated from the role's Pydantic schema:
 
 ```text
 OUTPUT RULES
@@ -167,7 +186,7 @@ OUTPUT RULES
 
 1. Strip code fences and any text before the first `{` or after the last matching `}` (models add them anyway).
 2. `json.loads`; on failure try `json_repair` (fixes trailing commas, single quotes).
-3. Validate against the schema with Pydantic; unknown tool names and bad argument types are errors.
+3. Validate against the schema with Pydantic, then the arguments against the tool's own args model through the registry (section 11); unknown tools, unknown arguments and bad types are errors, with a "did you mean" hint when a close name exists. In native mode steps 1-2 are skipped (the provider returns parsed calls), and step 3 applies the same way.
 4. On any failure, append an assistant message with the raw output and a user message `VALIDATION ERROR: <pydantic error>. Return a corrected JSON object.` and retry. Maximum 2 retries, then the step fails with `status: "model_error"`.
 5. Log `attempts` per call; the app's diagnostics page shows the first-try success rate per model, which is the metric for choosing models.
 
@@ -190,7 +209,7 @@ The Core's `control.*` actions are the only way out of the loop: `done` ends the
 **Step loop in detail**
 
 1. **Build context.** Context manager returns: the structured task, the current step, the last 3 observations in full, older observations as one-line summaries, and up to 6 retrieved memory snippets. The observation for GUI steps is the accessibility tree or marked screenshot chosen by section 9.
-2. **Core call.** Adapter returns a validated `CoreAction` (section 7). Temperature 0.1.
+2. **Core call.** Adapter returns a validated `CoreAction` (section 7), from the lowest tier of the escalation ladder (section 4) that produces a valid action. Temperature 0.1. The Core is offered only the tools that fit the step: the Planner's `steps[].tools` filter, minus tools the guards below rule out (for example `control.done` before anything has been observed in a task that needs a lookup).
 3. **Validate.** Tool exists, args match the tool's schema, element ids or coordinates are inside the current observation. Invalid → retry with the error, max 2.
 4. **Permission gate.** Looks up the tool's tier and the task's constraints. `auto` executes; `confirm` emits `ConfirmRequested` and waits (timeout 120 s → treated as denied); `never` returns a refusal observation to the Core.
 5. **Execute.** The tool runs with a per-tool timeout (default 30 s; browser navigation 60 s; shell 120 s). Output is truncated to 4,000 characters for the model; the full output is stored.
@@ -202,7 +221,10 @@ The Core's `control.*` actions are the only way out of the loop: `done` ends the
 - 40 steps per task, or 10 minutes wall time (both configurable). Hitting either produces a `failed` task with the reason, never a silent stop.
 - 3 consecutive identical actions (same tool and args) → treated as a loop; the orchestrator injects a note and forces one `replan`. A second loop fails the task.
 - 2 `replan` calls per task; a third stuck report fails the task and asks the user.
+- 3 lookups in a row (`fs.search`, `web.search` and similar) that return nothing → the orchestrator asks the user itself instead of offering a fourth search.
 - Kill switch (global shortcut, default `Super+Escape`) or `Cancel` from the UI: current tool is cancelled, held keys and mouse buttons are released, state goes to `cancelled`.
+
+**Code guards.** Small models fail in predictable ways: they repeat a lookup whose answer they already have, keep searching after repeated misses, miscount, and pick a near-miss tool. Each of these is caught in code rather than left to the prompt: tools return computed facts (counts, matched paths) in structured `data`; the registry rejects bad arguments with a precise message; the orchestrator blocks an exact repeat of a read-only call whose result is already in history, returning that result instead; and the stop conditions above end loops. The guards apply to every model, and they are what makes the 1.7B Core usable (decision 0003).
 
 **Confirmation requests** carry the tool, the arguments rendered as a sentence ("Delete 3 files in \~/Downloads?"), and a risk tag. The user approves by clicking, pressing `Super+Enter`, or saying "yes, Arcee" / "no, Arcee" when voice is active.
 
@@ -301,6 +323,7 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
   "tool": "browser.fill",
   "status": "ok",
   "summary": "Filled 'To' with Jaipur",
+  "data": null,
   "output": null,
   "error": null,
   "duration_ms": 412,
@@ -308,7 +331,7 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 }
 ```
 
-`status` is `ok` | `error` | `refused` (permission tier `never` or denied confirmation) | `timeout` | `cancelled`. `summary` is written by the tool itself in one line and is what enters compressed history.
+`status` is `ok` | `error` | `refused` (permission tier `never` or denied confirmation) | `timeout` | `cancelled`. `summary` is written by the tool itself in one line and is what enters compressed history. `data` is the tool's structured result, the facts the model should use without re-deriving them, for example `{"entries": [{"name": "a.deb", "modified": "2024-03-02"}], "count": 1}` from `fs.list`; it is what the model sees as the tool result, with `output` (raw text, truncated) only when a tool has nothing structured to say.
 
 **7.5 Control actions (always available)**
 
@@ -365,6 +388,11 @@ Nothing is deleted. Every request, plan, action, result and reply is a record in
 | Reserved for output | 1.0k | 1.0k |
 
 When a slot overflows, the manager truncates from the oldest end and marks `[truncated N items]` so the Core knows.
+
+**Context assembly for the Core.** Besides history and memory, each Core call carries two kinds of guidance, both selected per step, never sent in bulk:
+
+- **Usage cards** for the tools offered this step only (section 11): when to use the tool, when not to, common mistakes, one short example. With 8-15 tools offered, the cards fit in the system-prompt slot.
+- **Retrieved examples.** A library of verified situation → action pairs (task, step, observation, the correct action, and why), grouped by scenario: acting on a listing, giving up after misses, ignoring instructions inside content, counting. The query is the same as memory retrieval; the 2-3 nearest examples above a similarity threshold are included, with at least one contrasting case when one exists ("here the right move was not `done`"). Below the threshold nothing is included, because small models copy a near-miss example's answer (decision 0003). The library starts hand-written, grows only from task runs the user marked correct, and never contains eval-suite cases.
 
 **Summarization (Context model, background queue)**
 
@@ -469,6 +497,13 @@ class FsTrash(Tool):
     timeout_s = 10
     observation_kind = "shell_output"
 
+    usage = Usage(
+        when="The user asked to delete or clean up files and you know their exact paths.",
+        avoid="You have not listed the folder yet; list or search first.",
+        mistakes="Passing the folder instead of the files; including files that do not match.",
+        example='fs.trash(paths=["~/Downloads/a.deb", "~/Downloads/b.deb"])',
+    )
+
     class Args(BaseModel):
         paths: list[str] = Field(..., description="Absolute paths or ~ paths", max_length=50)
 
@@ -477,10 +512,10 @@ class FsTrash(Tool):
 
     async def run(self, a: Args, ctx: ToolContext) -> ToolResult:
         ...
-        return ToolResult.ok(summary=f"Trashed {n} items", output="\n".join(trashed))
+        return ToolResult.ok(f"Trashed {n} items", data={"trashed": trashed, "count": n})
 ```
 
-`ToolContext` gives a tool the task id, the platform layer, the browser worker, the store, a cancellation token and the current `ScreenMap`. `ToolResult` is the 7.4 object. A tool declares `observation_kind` so the orchestrator knows what observation to capture after it runs (`none` for pure side effects, `screenshot_auto` to let section 9 decide).
+`usage` is the tool's usage card (section 8, context assembly): rendered into the tool's description for native mode and into the tool block for schema mode, and only for tools offered this step. `ToolContext` gives a tool the task id, the platform layer, the browser worker, the store, a cancellation token and the current `ScreenMap`. `ToolResult` is the 7.4 object. A tool declares `observation_kind` so the orchestrator knows what observation to capture after it runs (`none` for pure side effects, `screenshot_auto` to let section 9 decide).
 
 **Permission tiers**
 
@@ -565,7 +600,9 @@ The user can move any tool between `auto` and `confirm` in the app; tools marked
 
 **MCP client.** Settings can list MCP servers (stdio or HTTP). Their tools appear as `mcp.<server>.<tool>` with tier `confirm` by default and a user-set override. Their results are treated as untrusted content (section 12).
 
-**Tool prompt rendering.** Each tool is rendered as one line `name(args) tier: description` plus a compact JSON schema for its args; the Planner's `steps[].tools` filter limits the list the Core receives, typically to 8-15 tools, which keeps the system prompt under 2.5k tokens.
+**Tool rendering.** The registry renders the same tool set two ways. In native mode, each tool becomes a provider tool definition: the wire name (`fs_list`), the description followed by its usage card, and the flattened args schema. In schema mode, each tool is one line `name(args) tier: description` plus the usage card and a compact JSON schema for its args. Either way the Planner's `steps[].tools` filter and the guards (section 6) limit the list the Core receives, typically to 8-15 tools, which keeps the system prompt under 2.5k tokens. Past about 30 tools, LFM3's deferred loading (a `search_tools` tool that returns definitions on demand) is the planned way to keep the prompt short; it is not needed for phase 1.
+
+**Argument validation.** `Registry.validate(action)` resolves the tool, accepts its wire name too, and validates `args` with the tool's args model. Errors come back as one line per problem, ready for the retry message, with a close-match hint: `fs.search: unknown argument 'qeury' (did you mean 'query'?); arguments are query, root, by`. Listing the real argument names matters as much as the hint: in the benchmarks, small models wrote `path` where `fs.search` takes `root`. An unknown tool name gets the same treatment against the tool names offered this step.
 
 ## 12. Safety and permissions
 
@@ -791,32 +828,32 @@ The table below carries the same content as the drawing, so it reads the same in
 
 | Phase | Weeks | Deliverables | Gate (measured) |
 | --- | --- | --- | --- |
-| 1. Core loop | 1-2 | `protocol.py`, Gemini and Ollama adapters, `jsonfix`, limiter, tool registry, permission gate, control/shell/app/fs tools, sandbox helper with a dev install script for its AppArmor profile, Planner, orchestrator, executor, minimal SQLite store (`tasks`, `steps`, `observations`) and `actions.jsonl`, in-task history packing (last 3 full, older one line each; no retrieval yet), `arcee-cli` with stdin confirmations, the text-mode eval tasks and `arcee eval` runner, unit tests | JSON first-try validity above 90% on both models; 60% pass on the text-mode tasks of the eval suite |
+| 1. Core loop | 1-2 | `protocol.py`, Ollama adapter (native and schema call modes), `jsonfix`, limiter, tool registry with usage cards and argument validation, permission gate, code guards, control/shell/app/fs tools, sandbox helper with a dev install script for its AppArmor profile, Planner, orchestrator, executor, minimal SQLite store (`tasks`, `steps`, `observations`) and `actions.jsonl`, in-task history packing (last 3 full, older one line each; no retrieval yet), `arcee-cli` with stdin confirmations, the text-mode eval tasks and `arcee eval` runner, unit tests | Valid action on the first try above 90% for LFM3 1.7B in native mode; 60% pass on the text-mode tasks of the eval suite on the local preset |
 | 2. Browser and desktop tree | 3-4 | Playwright worker, DOM tree extraction (grounding level 1), AT-SPI tools (level 2), `ui.act` (AT-SPI actions only; the pointer fallback arrives with phase 3), Planner `steps[].tools` filter, window API stub | A web form fill and a GUI file rename both complete using trees only, with zero screenshots sent |
 | 3. Wayland capture and input | 5-6 | ScreenCast and RemoteDesktop portals with restore tokens, ydotool fallback, `ScreenMap`, set-of-marks, `screen.ocr_find`, levels 3-4, kill switch, `release_all`, watchdog thread | Clicks land within 5 px of target on two monitors (a virtual second monitor counts) with fractional scaling; kill switch returns in under 100 ms |
 | 4. Daemon, extension, app | 7-9 | `systemd --user` unit, D-Bus service and activation, GNOME extension (indicator, dropdown, confirm bubble, keybindings, `org.arcee.Shell`), GTK4 pages Models, Tools, History, Diagnostics, first-run wizard, a local dev deb (`dpkg-buildpackage`, no APT repository) | On a fresh user account on the reference machine: install the dev deb, finish the wizard and complete a first task within 10 minutes |
 | 5. Context manager and voice | 10-12 | LanceDB vector store on top of the phase 1 SQLite store, embeddings, retrieval and budget packing, summarizer and nightly timer, Memory page, both wake-word models, VAD, faster-whisper, Piper, follow-up mode, optional verifier | Wake word to transcript in under 1.5 s; a fact from a week-old task is recalled correctly without being restated |
 | 6. Packaging and release | 13-14 | release deb (AppArmor profile loaded in postinst, sandbox helper), APT repository, docs, MCP client, eval report, v1.0 tag, extension submitted to extensions.gnome.org | 75% eval pass rate on the free preset; 20 external testers each complete a task |
 
-**Phase 1 deliverable**, the first code to write: `arcee/core/protocol.py`, `arcee/models/{base,gemini,ollama,jsonfix,limiter}.py`, `arcee/tools/{base,registry}.py`, the control, shell, app and fs tools, `arcee/core/{planner,orchestrator,executor,gate}.py`, a minimal `arcee/context/store.py` (SQLite tasks, steps, observations, plus `actions.jsonl`), the text-mode tasks in `tests/eval/` with the `arcee eval` runner, and `arcee-cli` that runs a task from a terminal with confirmations on stdin. Tested against Gemini Flash (free) and Qwen 3 4B on Ollama.
+**Phase 1 deliverable**, the first code to write: `arcee/core/protocol.py`, `arcee/models/{base,ollama,jsonfix,limiter}.py`, `arcee/tools/{base,registry}.py`, the control, shell, app and fs tools, `arcee/core/{planner,orchestrator,executor,gate}.py`, a minimal `arcee/context/store.py` (SQLite tasks, steps, observations, plus `actions.jsonl`), the text-mode tasks in `tests/eval/` with the `arcee eval` runner, and `arcee-cli` that runs a task from a terminal with confirmations on stdin. Tested against LFM3 1.7B on Ollama, with LFM2.5 8B as the top of the escalation ladder (decision 0003).
 
 **Order inside later phases** is flexible, with two fixed rules: the kill switch ships with the first tool that moves the pointer (phase 3), and the permission gate exists from phase 1 even when every tool is `auto`.
 
 ## 18. Open questions and risks
 
-The three risks that could change the design are free-tier volatility, GNOME portal behaviour across versions, and whether a 4B local model is good enough for the Planner. Each has a fallback already in the design; the open questions below need a decision before the matching phase starts.
+The three risks that could change the design are GNOME portal behaviour across versions, whether a 1.7B local model is good enough with the guards around it, and VRAM shared with the desktop. Each has a fallback already in the design; the open questions below need a decision before the matching phase starts.
 
 **Risks**
 
 | Risk | Likelihood | Impact | Mitigation in the design |
 | --- | --- | --- | --- |
-| Google changes or removes free-tier limits again (it did in Dec 2025 and Apr 2026) | High | Core role becomes slow or unavailable | Role-level fallback to local model; adapters are provider-neutral; usage shown against limits so the user sees it coming |
+| Google changes or removes free-tier limits again (it did in Dec 2025 and Apr 2026) | High | Cloud preset becomes slow or unavailable | The default preset is local (decision 0003); adapters are provider-neutral; usage shown against limits so cloud users see it coming |
 | GNOME changes portal or Shell APIs between releases | Medium | Capture, input or the extension break on upgrade | Platform layer behind one interface; extension `shell-version` pinned per release; v1 is tested on GNOME 50 only, and a VM matrix (46, 48, 50) is added after v1 |
 | ML packages lack Python 3.14 wheels (faster-whisper/CTranslate2, onnxruntime, lancedb) | Medium | Voice or the vector store cannot load in the daemon's interpreter | Not needed before phase 5; checked at phase 5 start; fallback runs the voice pipeline as a separate `uv`-managed Python 3.12 process talking to the daemon over stdio |
-| 4B local models fail at planning multi-step tasks | Medium | Fully-local preset is weak | Planner prompt uses few-shot examples and a smaller step vocabulary; preset labelled "experimental"; 7-8B models possible on 8 GB VRAM machines |
+| A 1.7B local model fails at planning or at harder steps | Medium | Default preset is weak on multi-step tasks | Code guards, structured tool results and per-step context (sections 6, 8); escalation to thinking mode and then LFM2.5 8B; the eval suite measures each layer; 7-8B models fit on 8 GB VRAM machines |
 | AT-SPI trees are empty for popular Electron apps (VS Code, Slack, Discord) | High | Those apps need screenshots every step | Marks mode with OCR; per-app launch flags added by the wizard (`--force-renderer-accessibility`) |
 | Free-tier terms allow training on inputs; screenshots may contain private data | Certain | Privacy exposure for cloud users | Warning badge per model; screenshot-free modes; incognito tasks; local preset |
-| Gemma via API has 15k tokens/min, too small for screenshot steps | Certain | Gemma only works for tree-mode steps | Capability flags hide screenshot tools for it; Core switches to Flash or local for GUI steps |
+| The desktop takes 0.8-2 GB of the 4 GB VRAM, and Ollama then splits models across CPU and GPU | Certain | A model that fits runs 2-3× slower (measured: Qwen3.5 2B at 11 tokens/s instead of 32) | The Ollama adapter sets `num_gpu`; only one escalation model is loaded beside the Core; the Models page shows how much of each model is on the GPU |
 | ydotool requires group membership and a re-login | Certain | Confusing first run | Wizard explains it; portal path needs no re-login and is tried first |
 | Prompt injection through web pages | Medium | Unwanted actions | Untrusted wrappers, detector, forced confirmation, `never` tier on exfiltration tools |
 
@@ -831,4 +868,4 @@ The three risks that could change the design are free-tier volatility, GNOME por
 - [x] Minimum GNOME version: Decided: v1 is built and tested on GNOME 50 (Ubuntu 26.04, the reference machine). 46 (Ubuntu 24.04) is the lowest version with RemoteDesktop restore tokens and is tested after v1; 42 (22.04) would mean ydotool-only input and per-task screenshot dialogs and is not planned.
 - [ ] Name collision check: "Arcee" is also a character name in a toy franchise and a company name in AI; fine for a personal project, worth checking before a public release.
 
-**Decisions already taken in this spec** (for the record): own JSON protocol over native function calling; Planner once per task; local Context manager and Embedder; GTK4 app plus GNOME extension packaged together as a deb; GNOME on Wayland only in v1, built and tested on GNOME 50 / Ubuntu 26.04; system Python 3.14; D-Bus only between UI and daemon, with caller checks; no permanent-delete tool; no sudo.
+**Decisions already taken in this spec** (for the record): one canonical action owned by the harness, carried as a native tool call or a JSON object per model (decision 0003); local-first model presets; Planner once per task; local Context manager and Embedder; GTK4 app plus GNOME extension packaged together as a deb; GNOME on Wayland only in v1, built and tested on GNOME 50 / Ubuntu 26.04; system Python 3.14; D-Bus only between UI and daemon, with caller checks; no permanent-delete tool; no sudo.
