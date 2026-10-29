@@ -146,7 +146,7 @@ async def run(
     limits: Limits,
     verbose: bool,
     plan: Literal["auto", "always", "never"],
-    no_examples: bool = False,
+    examples: bool = False,
 ) -> int:
     terminal = Terminal(verbose=verbose)
     ladder = local_core_ladder(host)
@@ -178,7 +178,7 @@ async def run(
             limits=limits,
             planner=planner,
             notes=store,
-            examples=None if no_examples else ExampleLibrary.load(),
+            examples=ExampleLibrary.load() if examples else None,
             plan_if=needs_plan if plan == "auto" else lambda request: True,
             on_event=on_event,
         )
@@ -269,7 +269,7 @@ async def evaluate(
     only: str,
     report: Path | None,
     raw: bool,
-    no_examples: bool,
+    examples: bool,
 ) -> int:
     """Run the eval suite on one tier of the local ladder and print the results."""
     cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
@@ -292,7 +292,7 @@ async def evaluate(
                 line += "  " + style.dim("; ".join(result.problems)[:150])
             print(line, flush=True)
 
-        library = None if no_examples else ExampleLibrary.load()
+        library = ExampleLibrary.load() if examples else None
         results = await run_cases(
             model,
             builtin_registry(),
@@ -312,7 +312,7 @@ async def evaluate(
 
 
 async def evaluate_tasks(
-    tasks_path: Path, *, host: str, only: str, plan: str, no_examples: bool
+    tasks_path: Path, *, host: str, only: str, plan: str, examples: bool
 ) -> int:
     """Run whole tasks end to end in throwaway homes and check their outcomes."""
     tasks = [task for task in load_tasks(tasks_path) if only in task.id]
@@ -320,14 +320,14 @@ async def evaluate_tasks(
     planner_model = local_planner(host)
     style = Style(sys.stdout)
     terminal = Terminal(verbose=False)
-    library = None if no_examples else ExampleLibrary.load()
+    library = ExampleLibrary.load() if examples else None
     results: list[TaskResult] = []
     try:
         usable = await _usable(ladder, terminal)
         if not usable:
             print(f"{ladder[0].profile.model} is not available")
             return 2
-        print(f"{len(tasks)} tasks, plan={plan}, examples={'off' if no_examples else 'on'}\n")
+        print(f"{len(tasks)} tasks, plan={plan}, examples={'on' if examples else 'off'}\n")
         for task in tasks:
             result = await run_task(
                 task, usable, planner_model=planner_model, plan=plan, examples=library
@@ -377,9 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--max-seconds", type=float, default=600.0)
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
-    run_cmd.add_argument(
-        "--no-examples", action="store_true", help="leave the worked examples out of prompts"
-    )
+    run_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
     run_cmd.add_argument(
         "--plan",
         choices=("auto", "always", "never"),
@@ -395,7 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tasks_cmd.add_argument("--tasks", type=Path, default=Path("tests/eval/tasks.toml"))
     tasks_cmd.add_argument("--only", default="", help="task id substring")
     tasks_cmd.add_argument("--plan", choices=("auto", "always", "never"), default="auto")
-    tasks_cmd.add_argument("--no-examples", action="store_true")
+    tasks_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
     tasks_cmd.add_argument("--host", default=host)
 
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
@@ -407,9 +405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     eval_cmd.add_argument(
         "--raw", action="store_true", help="judge the raw model, without the reply guards"
     )
-    eval_cmd.add_argument(
-        "--no-examples", action="store_true", help="leave the worked examples out of prompts"
-    )
+    eval_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
     eval_cmd.add_argument("--host", default=host)
 
     args = parser.parse_args(argv)
@@ -423,7 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     host=_host(args.host),
                     only=args.only,
                     plan=args.plan,
-                    no_examples=args.no_examples,
+                    examples=args.examples,
                 )
             )
         if args.command == "eval":
@@ -436,7 +432,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     only=args.only,
                     report=args.report,
                     raw=args.raw,
-                    no_examples=args.no_examples,
+                    examples=args.examples,
                 )
             )
         limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
@@ -448,12 +444,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 limits=limits,
                 verbose=args.verbose,
                 plan=args.plan,
-                no_examples=args.no_examples,
+                examples=args.examples,
             )
         )
     except KeyboardInterrupt:
         print("\ncancelled", file=sys.stderr)
         return 130
+
+
+# Off by default: on LFM3-Omni they lowered the eval from 91% to 89% and whole
+# tasks from 15/15 to 13/15, and made runs slower (decision 0006).
+EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
 
 
 def _host(value: str) -> str:
