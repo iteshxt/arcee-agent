@@ -34,6 +34,7 @@ from arcee.core.policy import Tier
 from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
+from arcee.models.errors import MalformedReplyError
 from arcee.tools.base import ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
 from arcee.tools.registry import AnyTool, Registry, ToolCall, ToolCallError, native_tools
@@ -46,6 +47,10 @@ MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
 MAX_REPLANS: Final = 2
+BROKEN_CALL_NUDGE: Final = (
+    "Your last reply was a broken tool call. Reply again with one valid tool call, "
+    "or answer in plain text."
+)
 MAX_CLARIFY: Final = 2
 
 
@@ -256,7 +261,13 @@ class Agent:
         offered = self._offered(state, step)
         while state.steps < self._limits.max_steps:
             state.steps += 1
-            completion = await self._turn(state, offered)
+            try:
+                completion = await self._turn(state, offered)
+            except MalformedReplyError as error:
+                self._emit(Guarded(state.steps, "the model wrote a broken tool call; asking again"))
+                state.messages.append(Message("user", BROKEN_CALL_NUDGE))
+                self._strike(state, str(error))
+                continue
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
                 if reply := completion.text.strip():
@@ -319,10 +330,10 @@ class Agent:
     async def _turn(self, state: _State, offered: Sequence[AnyTool]) -> Completion:
         model = self._ladder[state.tier]
         started = time.monotonic()
+        state.model_calls += 1
         completion = await model.respond(
             self.core_request(state.messages, offered, plan=state.plan, index=state.index)
         )
-        state.model_calls += 1
         self._emit(
             ModelTurn(
                 state.steps,

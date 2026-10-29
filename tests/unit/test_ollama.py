@@ -13,7 +13,7 @@ from arcee.models.base import (
     WireCall,
     provider_schema,
 )
-from arcee.models.errors import ModelUnavailableError
+from arcee.models.errors import MalformedReplyError, ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST, OllamaAdapter
 from tests.fakes import FakeClock
 
@@ -182,6 +182,14 @@ class TestErrors:
 
         assert completion.text == "ok"
         assert len(server.requests) == 2
+
+    async def test_parser_failures_are_malformed_replies_not_retried(self) -> None:
+        error = {"error": "XML syntax error on line 5: unexpected EOF"}
+        server = Server(httpx.Response(500, json=error))
+
+        with pytest.raises(MalformedReplyError, match="unparseable reply: XML syntax error"):
+            await adapter(server).respond(tool_request())
+        assert len(server.requests) == 1
 
     async def test_timeout_is_unavailable(self) -> None:
         with pytest.raises(ModelUnavailableError, match="timed out"):

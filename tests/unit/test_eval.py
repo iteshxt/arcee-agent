@@ -6,6 +6,7 @@ import pytest
 from arcee.eval.cases import Case, Decision, Expect, PriorCall, PriorUser, check, load
 from arcee.eval.runner import conversation, decide, run_cases, summary
 from arcee.models.base import Completion, ModelProfile, WireCall
+from arcee.models.errors import MalformedReplyError
 from arcee.models.fake import FakeAdapter
 from arcee.tools.builtin import builtin_registry
 
@@ -144,3 +145,12 @@ async def test_run_cases_scores_and_repeats() -> None:
     assert "use-result" in report
     assert "overall" in report
     assert "valid first reply: 2/2 (100%)" in report
+
+
+async def test_unparseable_replies_count_as_invalid() -> None:
+    model = FakeAdapter([MalformedReplyError("XML syntax error")], PROFILE)
+
+    [result] = await run_cases(model, TOOLS, [CASE])
+
+    assert (result.decision.kind, result.passed) == ("invalid", False)
+    assert "malformed reply" in result.decision.error

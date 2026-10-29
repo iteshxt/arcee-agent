@@ -13,6 +13,7 @@ from arcee.core.gate import Gate
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest
 from arcee.models.base import Completion, Message, ModelProfile, ToolRequest, WireCall
+from arcee.models.errors import MalformedReplyError
 from arcee.models.fake import FakeAdapter
 from arcee.tools.control import CONTROL_TOOLS
 from arcee.tools.files import FsList, FsSearch, FsTrash
@@ -58,7 +59,7 @@ def home(tmp_path: Path) -> Path:
 
 def make(
     home: Path,
-    *scripts: Sequence[Completion],
+    *scripts: Sequence[Completion | Exception],
     user: User | None = None,
     limits: Limits = TEN_STEPS,
 ) -> tuple[Agent, list[FakeAdapter], list[Event], User]:
@@ -217,6 +218,19 @@ async def test_failures_climb_the_ladder_and_success_drops_back(home: Path) -> N
     assert escalated.reason.startswith("invalid call: unknown tool 'fs_nope'; tools are fs_list")
     assert len(strong.requests) == 1
     assert len(cheap.requests) == 3
+
+
+async def test_broken_tool_calls_are_retried_with_a_nudge(home: Path) -> None:
+    broken = MalformedReplyError("lfm3 wrote an unparseable reply: XML syntax error")
+    agent, [_, strong], events, _ = make(home, [broken, broken], [say("Hello!")])
+
+    outcome = await agent.run("Hi Arcee!")
+
+    assert (outcome.status, outcome.reply) == ("done", "Hello!")
+    assert Guarded(1, "the model wrote a broken tool call; asking again") in events
+    assert any(isinstance(e, Escalated) for e in events)
+    assert strong.requests[0].messages[-1].text.startswith("Your last reply was a broken tool call")
+    assert outcome.model_calls == 3
 
 
 async def test_top_tier_keeps_going_until_the_step_limit(home: Path) -> None:
