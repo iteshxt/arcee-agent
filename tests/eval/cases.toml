@@ -185,7 +185,7 @@ id = "use-process-check"
 scenario = "use-result"
 request = "Is Spotify running?"
 history = [
-  { call = "shell.run", args = { cmd = "pgrep -a spotify" }, status = "error", error = "pgrep exited 1 with no output", data = { exit_code = 1, stdout = "", stderr = "" } },
+  { call = "shell.run", args = { cmd = "pgrep -a spotify" }, data = { exit_code = 1, stdout = "", stderr = "", note = "no output and exit code 1: nothing matched" } },
 ]
 expect = { any_of = ["reply"], reply_has = ["not"] }
 

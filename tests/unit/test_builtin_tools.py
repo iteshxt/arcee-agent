@@ -192,6 +192,16 @@ class TestShell:
         assert result.data == {"exit_code": 0, "stdout": "6\n", "stderr": ""}
         assert result.summary == "`ls Documents | wc -l` exited 0: 6"
 
+    async def test_no_match_is_an_answer_not_an_error(self, ctx: ToolContext) -> None:
+        result = await ShellRun(limits=False).run(RunArgs(cmd="grep -r zzz-none Documents"), ctx)
+
+        assert (result.status, result.summary) == (
+            "ok",
+            "`grep -r zzz-none Documents` found nothing",
+        )
+        assert result.data is not None
+        assert result.data["note"] == "no output and exit code 1: nothing matched"
+
     async def test_failure_reports_stderr(self, ctx: ToolContext) -> None:
         result = await ShellRun(limits=False).run(RunArgs(cmd="ls nope"), ctx)
 
