@@ -6,6 +6,7 @@ model's call, the result, guards and escalations, so a run doubles as a trace.
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 import time
@@ -18,6 +19,8 @@ from arcee.core.executor import Executor
 from arcee.core.gate import Gate
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest
+from arcee.eval.cases import load as load_cases
+from arcee.eval.runner import CaseResult, run_cases, summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
@@ -153,22 +156,91 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool) -> int:
         await asyncio.gather(*(model.aclose() for model in ladder))
 
 
+async def evaluate(
+    cases_path: Path, *, host: str, tier: int, repeat: int, only: str, report: Path | None
+) -> int:
+    """Run the eval suite on one tier of the local ladder and print the results."""
+    cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
+    ladder = local_core_ladder(host)
+    model = ladder[tier - 1]
+    style = Style(sys.stdout)
+    try:
+        if not await model.health():
+            print(f"{model.profile.model} is not available: ollama pull {model.profile.model}")
+            return 2
+        thinking = ", thinking" if model.profile.thinking else ""
+        print(f"{len(cases)} cases x{repeat} on tier {tier} ({model.profile.model}{thinking})\n")
+
+        def show(result: CaseResult) -> None:
+            mark = style.green("PASS") if result.passed else style.red("FAIL")
+            line = f"{mark} {result.case.id:<34} {result.seconds:5.1f}s"
+            if not result.passed:
+                line += "  " + style.dim("; ".join(result.problems)[:150])
+            print(line, flush=True)
+
+        results = await run_cases(model, builtin_registry(), cases, repeat=repeat, on_result=show)
+    finally:
+        await asyncio.gather(*(m.aclose() for m in ladder))
+    print("\n" + summary(results))
+    if report is not None:
+        text = json.dumps([_row(r) for r in results], indent=1)
+        await asyncio.to_thread(report.write_text, text)
+    return 0
+
+
+def _row(result: CaseResult) -> dict[str, object]:
+    d = result.decision
+    return {
+        "id": result.case.id,
+        "scenario": result.case.scenario,
+        "passed": result.passed,
+        "problems": list(result.problems),
+        "kind": d.kind,
+        "tool": d.tool,
+        "args": dict(d.args),
+        "text": d.text,
+        "error": d.error,
+        "seconds": round(result.seconds, 2),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="arcee-cli", description="Run one Arcee task from the terminal."
+        prog="arcee-cli", description="Run Arcee tasks and evals from the terminal."
     )
+    host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
     sub = parser.add_subparsers(dest="command", required=True)
+
     run_cmd = sub.add_parser("run", help="carry out a request")
     run_cmd.add_argument("request", nargs="+", help="what to do, in plain words")
     run_cmd.add_argument("--max-steps", type=int, default=25)
     run_cmd.add_argument("--max-seconds", type=float, default=600.0)
-    run_cmd.add_argument("--host", default=os.environ.get("OLLAMA_HOST", DEFAULT_HOST))
+    run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
-    args = parser.parse_args(argv)
 
-    limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
-    request = " ".join(args.request)
+    eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
+    eval_cmd.add_argument("--cases", type=Path, default=Path("tests/eval/cases.toml"))
+    eval_cmd.add_argument("--tier", type=int, choices=(1, 2, 3), default=1)
+    eval_cmd.add_argument("--repeat", type=int, default=1)
+    eval_cmd.add_argument("--only", default="", help="case id or scenario substring")
+    eval_cmd.add_argument("--report", type=Path, help="write per-case results as JSON")
+    eval_cmd.add_argument("--host", default=host)
+
+    args = parser.parse_args(argv)
     try:
+        if args.command == "eval":
+            return asyncio.run(
+                evaluate(
+                    args.cases,
+                    host=_host(args.host),
+                    tier=args.tier,
+                    repeat=args.repeat,
+                    only=args.only,
+                    report=args.report,
+                )
+            )
+        limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
+        request = " ".join(args.request)
         return asyncio.run(run(request, host=_host(args.host), limits=limits, verbose=args.verbose))
     except KeyboardInterrupt:
         print("\ncancelled", file=sys.stderr)
