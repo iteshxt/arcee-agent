@@ -49,6 +49,14 @@ class TestCheck:
         assert check(Expect(("ask",)), Decision("reply", text="Which report do you mean?")) == []
         assert check(Expect(("ask",)), Decision("reply", text="Done.")) != []
 
+    def test_argument_checks_apply_to_the_chosen_tools_arguments(self) -> None:
+        expect = Expect(("shell.run", "fs.list"), args_contain={"cmd": "du", "path": "videos"})
+
+        assert check(expect, Decision("tool", "fs.list", {"path": "~/Videos"})) == []
+        assert check(expect, Decision("tool", "shell.run", {"cmd": "ls ~/Videos"})) == [
+            "cmd lacks 'du'"
+        ]
+
     def test_argument_checks_skip_replies(self) -> None:
         expect = Expect(("fs.trash", "reply"), args_contain={"paths": "x"})
 
@@ -71,6 +79,14 @@ class TestLoad:
             for prior in case.history:
                 if isinstance(prior, PriorCall):
                     assert prior.tool in names, case.id
+
+    def test_repo_case_arguments_exist_on_some_expected_tool(self) -> None:
+        fields = {tool.name: set(tool.args_model.model_fields) for tool in TOOLS}
+
+        for case in load(REPO_CASES):
+            known = set().union(*(fields.get(name, set()) for name in case.expect.any_of))
+            named = set(case.expect.args_contain) | set(case.expect.args_lack)
+            assert named <= known, f"{case.id}: {named - known}"
 
     def test_rejects_duplicates_and_missing_fields(self, tmp_path: Path) -> None:
         dupes = tmp_path / "d.toml"
@@ -144,7 +160,7 @@ async def test_run_cases_scores_and_repeats() -> None:
     report = summary(results)
     assert "use-result" in report
     assert "overall" in report
-    assert "valid first reply: 2/2 (100%)" in report
+    assert "valid reply: 2/2 (100%)" in report
 
 
 async def test_unparseable_replies_count_as_invalid() -> None:
@@ -154,3 +170,22 @@ async def test_unparseable_replies_count_as_invalid() -> None:
 
     assert (result.decision.kind, result.passed) == ("invalid", False)
     assert "malformed reply" in result.decision.error
+
+
+async def test_guards_send_back_unseen_facts_like_the_live_loop() -> None:
+    case = Case(
+        id="ip",
+        scenario="use-result",
+        request="What's my IP?",
+        expect=Expect(("reply",), reply_has=("10.0.0.5",)),
+        history=(PriorCall("shell.run", {"cmd": "ip a"}, data={"stdout": "inet 10.0.0.5/24"}),),
+    )
+    guarded = FakeAdapter([Completion("It is 10.0.0.6."), Completion("It is 10.0.0.5.")], PROFILE)
+    raw = FakeAdapter([Completion("It is 10.0.0.6.")], PROFILE)
+
+    [with_guards] = await run_cases(guarded, TOOLS, [case])
+    [without] = await run_cases(raw, TOOLS, [case], guards=False)
+
+    assert (with_guards.passed, with_guards.guarded) == (True, "reply stated 10.0.0.6 unseen")
+    assert guarded.requests[1].messages[-1].text.startswith("Your answer mentions '10.0.0.6'")
+    assert (without.passed, without.guarded) == (False, "")

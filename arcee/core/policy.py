@@ -156,8 +156,12 @@ def _never_reason(argv: list[str], *, piped_into: bool) -> str | None:
         return f"{name!r} is never run by Arcee"
     if piped_into and name in _SHELLS:
         return "piping into a shell or interpreter runs unreviewed code"
-    if name == "rm" and _has_recursive(argv):
-        return "recursive delete; use fs.trash instead"
+    if name in {"rm", "unlink", "rmdir"}:
+        # Deleting goes through the trash, recoverably; there is no permanent delete.
+        targets = [arg for arg in argv[1:] if not arg.startswith("-")]
+        hint = f" with paths {targets}" if targets else ""
+        kind = "recursive delete" if _has_recursive(argv) else "permanent delete"
+        return f"{kind}; use fs.trash{hint} instead"
     if name in {"chmod", "chown"} and _has_recursive(argv):
         return f"recursive {name}"
     if name == "systemctl" and any(a in {"poweroff", "reboot", "halt"} for a in argv):

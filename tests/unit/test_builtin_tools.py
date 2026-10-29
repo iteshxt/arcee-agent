@@ -52,6 +52,18 @@ class TestList:
         assert result.data["entries"][0]["type"] == "folder"
         assert result.data["entries"][1]["size"].endswith(" B")
 
+    async def test_reports_counts_by_type_and_total_size(self, ctx: ToolContext) -> None:
+        result = await FsList().run(ListArgs(path="~/Documents"), ctx)
+
+        assert result.data is not None
+        assert result.data["by_type"] == {".pdf": 3, "folders": 1, ".jpg": 1, ".txt": 1}
+        assert next(iter(result.data["by_type"])) == ".pdf"
+        # Every file under the folder, hidden and nested ones included, like du.
+        expected = sum(
+            p.stat().st_size for p in ctx.home.joinpath("Documents").rglob("*") if p.is_file()
+        )
+        assert result.data["total_size"] == f"{expected} B"
+
     async def test_glob_counts_matches_case_insensitively(self, ctx: ToolContext) -> None:
         result = await FsList().run(ListArgs(path="Documents", glob="*.pdf"), ctx)
 
@@ -145,6 +157,20 @@ class TestSearch:
 
         assert result.data is not None
         assert result.data["matches"] == ["~/Documents/notes.txt"]
+
+    @pytest.mark.parametrize(
+        ("query", "root"),
+        [("notes.txt", "~/Documents/notes.txt"), ("~/Documents/notes.txt", "~")],
+    )
+    async def test_a_known_path_is_its_own_match(
+        self, ctx: ToolContext, query: str, root: str
+    ) -> None:
+        result = await FsSearch().run(SearchArgs(query=query, root=root), ctx)
+
+        assert result.status == "ok"
+        assert result.data is not None
+        assert result.data["matches"] == ["~/Documents/notes.txt"]
+        assert result.data["note"] == "This exact path exists; no search was needed."
 
     async def test_no_matches_is_still_ok(self, ctx: ToolContext) -> None:
         result = await FsSearch().run(SearchArgs(query="tax"), ctx)
@@ -250,7 +276,9 @@ class TestShell:
     def test_refusal_names_the_rule(self) -> None:
         reason = ShellRun().refusal(RunArgs(cmd="rm -rf ~"), Policy())
 
-        assert reason == "recursive delete; use fs.trash instead; this command will never run"
+        assert reason == (
+            "recursive delete; use fs.trash with paths ['~'] instead; this command will never run"
+        )
 
 
 async def test_control_tools_are_not_run(ctx: ToolContext) -> None:
@@ -266,6 +294,8 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "fs.read",
         "fs.search",
         "fs.trash",
+        "system.status",
+        "network.status",
         "shell.run",
         "control.done",
         "control.ask_user",

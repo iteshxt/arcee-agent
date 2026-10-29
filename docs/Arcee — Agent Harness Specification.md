@@ -224,7 +224,7 @@ The Core's `control.*` actions are the only way out of the loop: `done` ends the
 - 3 lookups in a row (`fs.search`, `web.search` and similar) that return nothing → the orchestrator asks the user itself instead of offering a fourth search.
 - Kill switch (global shortcut, default `Super+Escape`) or `Cancel` from the UI: current tool is cancelled, held keys and mouse buttons are released, state goes to `cancelled`.
 
-**Code guards.** Small models fail in predictable ways: they repeat a lookup whose answer they already have, keep searching after repeated misses, miscount, group badly, pick a near-miss tool, and think aloud in plain text, which in native mode would end the task. Each of these is caught in code rather than left to the prompt: tools return computed facts (counts, matched paths) in structured `data`; the registry rejects bad arguments with a precise message; the orchestrator blocks an exact repeat of a read-only call whose result is already in history, returning that result instead; a plain-text "answer" that names a tool (`fs_search`) is treated as narration and answered with a nudge instead of ending the task; every tool result is capped at 4,000 characters before the model sees it by shortening its longest lists, with a note saying how many items are shown; and the stop conditions above end loops. The guards apply to every model, and they are what makes the 1.7B Core usable (decision 0003).
+**Code guards.** Small models fail in predictable ways: they repeat a lookup whose answer they already have, keep searching after repeated misses, miscount, group badly, pick a near-miss tool, and think aloud in plain text, which in native mode would end the task. Each of these is caught in code rather than left to the prompt: tools return computed facts (counts, matched paths) in structured `data`; the registry rejects bad arguments with a precise message; the orchestrator blocks an exact repeat of a read-only call whose result is already in history, returning that result instead; a would-be answer (plain text or `control.done`) is reviewed before it is accepted: one that names a tool (`fs_search`) is narration, and one that states an IP address, path or file name that appears in neither the request nor any tool result is sent back with the unseen facts named (at most twice per task, then accepted); the eval suite applies the same review unless run with `--raw`; every tool result is capped at 4,000 characters before the model sees it by shortening its longest lists, with a note saying how many items are shown; and the stop conditions above end loops. The guards apply to every model, and they are what makes the 1.7B Core usable (decision 0003).
 
 **Confirmation requests** carry the tool, the arguments rendered as a sentence ("Delete 3 files in \~/Downloads?"), and a risk tag. The user approves by clicking, pressing `Super+Enter`, or saying "yes, Arcee" / "no, Arcee" when voice is active.
 
@@ -542,7 +542,7 @@ The user can move any tool between `auto` and `confirm` in the app; tools marked
 | `control.wait` | `seconds<=30` | auto | screenshot\_auto | After loads |
 | `control.speak` | `text` | auto | none | TTS mid-task |
 | `control.note` | `text`, `importance?` | auto | none | Saves a memory |
-| `shell.run` | `cmd`, `cwd?`, `timeout_s?` | auto if allowlisted, else confirm | shell\_output | Allowlist: `ls cat grep find head tail wc df du ps pgrep which date uname free nproc git-status git-log`; `sudo`, `rm -r`, `mkfs`, `dd`, `chmod -R`, `>`/`>>` to system paths are `never` |
+| `shell.run` | `cmd`, `cwd?`, `timeout_s?` | auto if allowlisted, else confirm | shell\_output | Allowlist: `ls cat grep find head tail wc df du ps pgrep which date uname free nproc git-status git-log`; `sudo`, any `rm`/`unlink`/`rmdir` (deleting goes through `fs.trash`, and the refusal names the paths to pass it), `mkfs`, `dd`, `chmod -R`, `>`/`>>` to system paths are `never`, also when chained or substituted |
 | `shell.script` | `language (bash,python)`, `code` | confirm | shell\_output | Args also take network (default false). Temp HOME, read-only real home, no network by default, 120 s limit (section 12) |
 | `app.open` | `name_or_desktop_id`, `args?` | auto | screenshot\_auto | Resolves via `Gio.DesktopAppInfo` search |
 | `app.close` | `window_id` | confirm | none | Graceful close via extension |
@@ -554,15 +554,16 @@ The user can move any tool between `auto` and `confirm` in the app; tools marked
 | `media.control` | `play, pause, next, prev` | auto | none | MPRIS over D-Bus |
 | `display.brightness` | `percent` | auto | none | `org.gnome.SettingsDaemon.Power` |
 | `network.wifi` | `on, off, connect(ssid)` | confirm | text | `nmcli`; never stores passwords |
-| `network.status` |  | auto | text | Connectivity, IP, SSID |
+| `network.status` |  | auto | text | Main local IP (from the route `ip route get` picks), interface, gateway, online, every interface's IPv4 |
+| `system.status` |  | auto | text | RAM, disk for `/` and home, CPU cores and load, uptime, OS and kernel; read from `/proc` and `statvfs`, not from command output |
 | `power.action` | `lock, suspend, logout` | confirm | none | `loginctl`; `shutdown`/`reboot` are `never` by default |
 | `notify.send` | `title`, `body`, `urgency?` | auto | none | `Gio.Notification` |
 | `clipboard.get` |  | auto | text | `wl-paste` |
 | `clipboard.set` | `text` | auto | none | `wl-copy` |
-| `fs.list` | `path`, `depth?`, `glob?` | auto | text | Size, mtime, type |
+| `fs.list` | `path`, `glob?`, `hidden?`, `sort?` (name, largest, newest, oldest), `limit?` | auto | text | Size, mtime, type per entry; `count`, `by_type` counts and the folder's `total_size` |
 | `fs.read` | `path`, `max_bytes?` | auto | file\_content | Text, PDF (text layer), docx, xlsx via converters |
 | `fs.write` | `path`, `content`, `mode (create, overwrite, append)` | auto in `~/Arcee/` and task workspace; confirm elsewhere | text | Never writes outside `$HOME` |
-| `fs.search` | `query`, `root?`, `by (name, content)` | auto | text | `fd` + `rg`; content search capped at 200 hits |
+| `fs.search` | `query`, `root?`, `by (name, content)` | auto | text | Matches with `count` and `by_folder` counts; walks are bounded |
 | `fs.move` / `fs.copy` | `src`, `dst` | confirm | text |  |
 | `fs.trash` | `paths` | confirm | text | `gio trash`; no permanent delete tool exists |
 | `fs.open_with_default` | `path` | auto | screenshot\_auto | `gio open` |
