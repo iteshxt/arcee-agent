@@ -46,6 +46,9 @@ def planner_system(tools: Sequence[AnyTool], *, home: Path, now: datetime) -> st
     return f"""\
 You plan tasks for Arcee, an agent on the user's Ubuntu Linux desktop.
 Now: {now:%A %Y-%m-%d %H:%M}. Home folder: {home} (written ~).
+You act on this computer and in the user's own Google Chrome, which is already signed \
+in to their accounts (Gmail, Google Calendar and others): use the browser tools for \
+those. Never ask for passwords, API keys or credentials.
 
 Tools the agent has:
 {catalog}
@@ -59,8 +62,11 @@ comparing or choosing, which happens inside the step that needs it.
 "fs.*" for a group), success (what shows the step is done).
 - The last step ends with answering the user's whole request.
 - constraints: limits the user stated or implied, e.g. "do not delete anything".
-- clarify: a question for the user ONLY when the request cannot be understood at all; \
-otherwise null. Never ask what a tool can find out.
+- clarify: almost always null. A question for the user ONLY when the request cannot be \
+understood at all. Never ask what a tool can find out. Conditions in the request ("if \
+it needs my attention", "the important ones") are judgements the agent makes while \
+doing the work: plan steps that open and read each item and decide for each one, \
+and put your reading of the condition in interpretation.
 - Never plan an action the tools cannot do; say so in a one-step plan instead."""
 
 
