@@ -9,15 +9,15 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | Phase | Name | Status | Gate | Tag |
 | --- | --- | --- | --- | --- |
 | 0 | Repository foundation | 🟨 | Tooling and CI green | — |
-| 1 | Core loop (terminal agent) | 🟨 | JSON first-try > 90%, 60% text-mode eval pass | `v0.1.0` |
+| 1 | Core loop (terminal agent) | 🟨 | Valid action first try > 90% on LFM3 1.7B, 60% text-mode eval pass | `v0.1.0` |
 | 2 | Browser and desktop tree | ⬜ | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
 | 3 | Wayland capture and input | ⬜ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
 | 4 | Daemon, extension, app | ⬜ | Fresh account: install, wizard, first task < 10 min | `v0.4.0` |
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
-| 6 | Packaging and release | ⬜ | 75% eval pass on free preset; 20 external testers | `v1.0.0` |
+| 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base and rate limiter merged (1.1-1.4); next is the Gemini adapter (1.5).
-**Last updated:** 2026-10-23
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Next: tool registry (1.7), then the Ollama adapter (1.6).
+**Last updated:** 2026-10-29
 
 ## Target machine
 
@@ -60,8 +60,8 @@ Prerequisites: none.
 
 Prerequisites on the machine:
 
-- [ ] Gemini API key available as an environment variable (never committed)
-- [ ] Ollama installed, `qwen3:4b` pulled (thinking disabled for JSON output)
+- [x] Ollama installed, `lfm3` (LFM3 1.7B) pulled
+- [ ] `lfm2.5:8b` pulled (top of the escalation ladder)
 
 Protocol and models
 
@@ -69,12 +69,12 @@ Protocol and models
 - [x] 1.2 `arcee/models/jsonfix.py`: strip fences and surrounding text, `json_repair`, validation-error retry message
 - [x] 1.3 `arcee/models/base.py`: `ModelAdapter`, `ModelProfile`, `ModelRequest`, `ModelResponse`, plus a scripted `FakeAdapter` for tests
 - [x] 1.4 `arcee/models/limiter.py`: sliding-window `rpm`, daily `rpd` counter, 429 backoff (the fallback switch is per-task state, so it moved to 1.16)
-- [ ] 1.5 `arcee/models/gemini.py`: REST client with `responseSchema`
-- [ ] 1.6 `arcee/models/ollama.py`: `/api/chat` with `format` schema, `/api/embed`
+- [ ] ~~1.5 `arcee/models/gemini.py`~~: built and tested, parked unmerged on `feat/models-gemini` (decision 0003)
+- [ ] 1.6 `arcee/models/ollama.py`: `call_mode` native (`tools`, `tool` messages) and schema (`format`); `num_gpu`, `think` and recommended sampling per profile; `/api/embed`
 
 Tools and safety
 
-- [ ] 1.7 `arcee/tools/base.py`, `registry.py`: `Tool`, `ToolContext`, `ToolResult`, discovery, prompt rendering
+- [ ] 1.7 `arcee/tools/base.py`, `registry.py`: `Tool` with usage card, `ToolContext`, `ToolResult` with structured `data`, registration, wire names, per-tool argument validation with hints, per-step selection, native and schema rendering
 - [ ] 1.8 `arcee/core/gate.py` and `config/policy.toml` defaults: tiers, shell allowlist, `never` list, path rules, stdin confirmer
 - [ ] 1.9 Control tools: `control.done`, `ask_user`, `confirm`, `replan`, `wait`, `speak` (prints in CLI), `note`
 - [ ] 1.10 File tools: `fs.list`, `read`, `write`, `search`, `move`, `copy`, `trash`, `open_with_default`
@@ -86,14 +86,14 @@ Loop and storage
 - [ ] 1.13 `arcee/context/store.py` (minimal): SQLite `tasks`, `steps`, `observations`; `actions.jsonl` with secret redaction
 - [ ] 1.14 `arcee/core/executor.py`: validate, gate, run with timeouts, truncate output, store
 - [ ] 1.15 Prompt templates `planner.j2`, `core.j2`, `tools.j2`; `arcee/core/planner.py`
-- [ ] 1.16 `arcee/core/orchestrator.py`: task lifecycle, step loop, in-task history packing, role fallback switch, stop conditions (step and time limits, identical-action loop, replan limit)
+- [ ] 1.16 `arcee/core/orchestrator.py`: task lifecycle, step loop, in-task history packing, escalation ladder, code guards (repeat-lookup block, 3 empty lookups → ask), stop conditions (step and time limits, identical-action loop, replan limit)
 - [ ] 1.17 `arcee-cli`: run a task from the terminal, confirmations and questions on stdin
-- [ ] 1.18 `tests/eval/`: 10-15 text-mode tasks with machine-checkable criteria, and the `arcee eval` runner
+- [ ] 1.18 `tests/eval/`: text-mode tasks with machine-checkable criteria, growing to about 50 single-decision cases, and the `arcee eval` runner; reports results per call mode and escalation tier
+- [ ] 1.19 Example library and retrieval for the Core (spec §8, context assembly), measured against the eval suite with the library on and off
 
 **Gate:**
 
-- [ ] JSON first-try validity above 90% on Gemini Flash
-- [ ] JSON first-try validity above 90% on Qwen 3 4B (Ollama)
+- [ ] Valid action on the first try above 90% for LFM3 1.7B (native mode)
 - [ ] 60% or more of the text-mode eval tasks pass
 - [ ] Tag `v0.1.0`
 
@@ -165,7 +165,7 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - [ ] User docs
 - [ ] Extension submitted to extensions.gnome.org
 
-**Gate:** 75% eval pass rate on the free preset; 20 external testers each complete a task. Tag `v1.0.0`.
+**Gate:** 75% eval pass rate on the local preset; 20 external testers each complete a task. Tag `v1.0.0`.
 
 ---
 
@@ -183,3 +183,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 
 - **2026-10-23** — Spec reviewed. Ambiguities fixed: D-Bus-only UI events, kill-switch last resort, AppArmor sandbox helper, wake-word models, Core sees the full plan, roadmap table with gates. Retargeted v1 to the reference machine (Ubuntu 26.04, GNOME 50, Python 3.14); added D-Bus caller checks, `pressed.json` for input release, minimal store and eval tasks in phase 1, dev deb in phase 4. This roadmap added.
 - **2026-10-23** — Phase 0: uv project on system Python 3.14 (decision 0001), Ruff, Pyright strict, pytest, pre-commit, GitHub Actions CI, contributing guide. Phase 1: `protocol.py`, `jsonfix.py`, adapter base with shared retry loop and `FakeAdapter`, sliding-window limiter with 429 backoff. 85 unit tests. Spec updated: no `task_id` in Planner output, `text` observation kind, adapter template method, limiter details.
+- **2026-10-29** — Model selection. Gemini adapter built (5xx retry, thinking levels, live tests), then parked: the free tier's daily cap is too low for an agent. NVIDIA free endpoints (MiniMax, GLM) queued or never answered. Local benchmarks on 8 agent-decision cases: Qwen3.5 0.8B 2/8, Qwen3.5 2B 4/8 (5/8 with rules and examples), LFM3 1.7B 3/8 plain, 7/8 with rules and examples, 5/8 with native tool calling at 1.55 s. Decision 0003: local-first, LFM3 1.7B Core with an escalation ladder to thinking mode and LFM2.5 8B, native and schema call modes, code guards, usage cards and retrieved examples. Generic retry and thinking changes merged from the Gemini work.
