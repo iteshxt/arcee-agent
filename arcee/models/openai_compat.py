@@ -21,7 +21,7 @@ from arcee.models.base import (
     RawRequest,
     TokenUsage,
     WireCall,
-    estimate_tokens,
+    estimate_input_tokens,
 )
 from arcee.models.budget import HeaderBudget
 from arcee.models.errors import (
@@ -107,12 +107,17 @@ class OpenAICompatAdapter(ModelAdapter):
             }
         if self.budget is not None:
             # Hold back only if the provider's last count says this will not fit now.
-            tokens = estimate_tokens(request)
+            tokens = estimate_input_tokens(request) + self.budget.expected_output(
+                self.profile.model
+            )
             if (wait := self.budget.wait_s(self.profile.model, tokens)) > 0:
                 await self._clock.sleep(wait)
                 self.last_wait_s += wait
             self.budget.spend(self.profile.model, tokens)
-        return _completion(await self._post("/chat/completions", body))
+        completion = _completion(await self._post("/chat/completions", body))
+        if self.budget is not None:
+            self.budget.note_output(self.profile.model, completion.usage.output_tokens)
+        return completion
 
     async def health(self) -> bool:
         try:
