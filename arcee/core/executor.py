@@ -16,6 +16,7 @@ from typing import Any, Literal
 from arcee.core.gate import Gate, Verdict
 from arcee.core.policy import Tier
 from arcee.core.protocol import ExecutorResult
+from arcee.core.untrusted import scan, suspicious
 from arcee.tools.base import ToolContext
 from arcee.tools.registry import ToolCall
 
@@ -92,6 +93,7 @@ class Executor:
                 error=f"{type(exc).__name__}: {exc}",
                 duration_ms=_ms(started),
             )
+        flagged = scan(result.data) + suspicious(result.output or "") if tool.untrusted else []
         return ExecutorResult(
             n=n,
             tool=tool.name,
@@ -102,6 +104,8 @@ class Executor:
             error=result.error,
             duration_ms=_ms(started),
             screen_changed=result.screen_changed,
+            untrusted=tool.untrusted,
+            suspicious=tuple(flagged),
         )
 
 

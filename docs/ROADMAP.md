@@ -102,8 +102,9 @@ Loop and storage
 
 Prerequisites on the machine:
 
-- [ ] `python3-pyatspi` installed
+- [ ] `python3-pyatspi` installed (`sudo apt install python3-pyatspi`)
 - [ ] `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
+- [ ] Playwright npm package (drives the installed Google Chrome; no browser download)
 
 - [ ] Playwright worker (`browser-worker/`, Node, JSON-RPC over stdio), dedicated profile
 - [ ] DOM tree extraction, grounding level 1, and the `browser.*` tools
@@ -111,7 +112,7 @@ Prerequisites on the machine:
 - [ ] `ui.act` using AT-SPI actions only (pointer fallback comes in phase 3)
 - [ ] Planner `steps[].tools` filter applied to the Core's tool list
 - [ ] Window API stub (until the extension exists in phase 4)
-- [ ] `web.search`, `web.fetch`; untrusted-content wrapper and injection detector
+- [x] `web.search` (SearXNG or DuckDuckGo HTML), `web.fetch` (no local addresses); untrusted marking and injection detector that forces confirmation of the next action
 
 **Gate:** a web form fill and a GUI file rename both complete using trees only, with zero screenshots sent. Tag `v0.2.0`.
 
@@ -192,3 +193,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-29** — Closing the LFM3-Omni gap in code: 85% → 89% (96/108, two runs, 100% valid replies, 3.2 s median; using a result it already has went to 24/24). Its misses were picking the wrong fact from text that held the right one (loopback instead of the real IP, 2 of 3 photos, `df` for RAM), so the fix was tools that return the answer: `network.status` (main IP from the route), `system.status` (RAM, disk, CPU, OS), and `fs.list` with `by_type` counts and `total_size`. Every `rm`/`unlink` is refused with the paths to pass `fs.trash`; live, the model's next call was `fs.trash` with them. Final answers are checked for IPs, paths and file names no tool showed (grounding guard; it did not fire on the eval because the model picks real but wrong facts). `fs.search` returns an existing path instead of searching for it. Eval answers now go through the live loop's reply guards (`--raw` for the bare model). Ollama unloads the previous model when the ladder switches. 333 unit tests.
 - **2026-10-29** — Phase 1 tool set complete (23 tools): `fs.write`/`move`/`copy`/`open_with_default`, `app.list`/`app.open` from `.desktop` files, `shell.script` in bubblewrap (verified: home stays read-only, no network), `control.wait`/`speak`/`note` with a memories table. With all of them, LFM3-Omni reached 91% (98/108) on the single-decision eval at a 2.0 s median, faster than before. Worked-example library built and measured: 89% with it against 91% without, whole tasks 13/15 against 15/15, slower, so it is off by default (decision 0006). Whole-task eval added: 15/15 with `--plan auto` (median 22 s), 12/15 with `--plan always` (median 65 s), which backs decision 0004. 371 unit tests.
 - **2026-10-29** — Phase 1 gate passed on LFM3-Omni: 100% valid first replies (gate: 90%), whole tasks 15/15 (gate: 60%). Tagged `v0.1.0`.
+- **2026-10-29** — Phase 2 started: `web.search` and `web.fetch` (25 tools), untrusted-content marking with an injection detector that forces confirmation of the next action (verified end to end in a test: a file saying "ignore previous instructions" made the following `fs.list` need approval). DuckDuckGo started answering 202 bot challenges after a few requests from this machine, so search also takes a SearXNG instance. 389 unit tests.

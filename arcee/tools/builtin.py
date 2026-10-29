@@ -15,6 +15,7 @@ from arcee.tools.files import (
 from arcee.tools.registry import Registry
 from arcee.tools.shell import ShellRun, ShellScript
 from arcee.tools.system import NetworkStatus, SystemStatus
+from arcee.tools.web import WebFetch, WebSearch
 
 
 def builtin_registry(*, shell_limits: bool = True) -> Registry:
@@ -33,6 +34,8 @@ def builtin_registry(*, shell_limits: bool = True) -> Registry:
             AppOpen(),
             SystemStatus(),
             NetworkStatus(),
+            WebSearch(),
+            WebFetch(),
             ShellRun(limits=shell_limits),
             ShellScript(limits=shell_limits),
             *(tool() for tool in UTILITY_CONTROL_TOOLS),
