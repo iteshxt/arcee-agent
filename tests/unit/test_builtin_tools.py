@@ -59,6 +59,27 @@ class TestList:
         assert result.data["count"] == 3
         assert result.summary == "Listed ~/Documents: 3 entries matching *.pdf"
 
+    async def test_largest_first_with_limit(self, ctx: ToolContext, home: Path) -> None:
+        (home / "Documents" / "big.iso").write_bytes(b"x" * 5000)
+        (home / "Documents" / "mid.zip").write_bytes(b"x" * 2000)
+
+        result = await FsList().run(ListArgs(path="~/Documents", sort="largest", limit=2), ctx)
+
+        assert result.data is not None
+        assert [e["name"] for e in result.data["entries"]] == ["big.iso", "mid.zip"]
+        assert result.data["entries"][0]["size"] == "4.9 KB"
+        assert (result.data["count"], result.data["shown"]) == (8, 2)
+        assert result.summary == "Listed ~/Documents: 8 entries, largest first: big.iso"
+
+    async def test_newest_first(self, ctx: ToolContext, home: Path) -> None:
+        os.utime(home / "Documents" / "notes.txt", (0, 4_000_000_000))
+
+        result = await FsList().run(ListArgs(path="~/Documents", sort="newest", limit=1), ctx)
+
+        assert result.data is not None
+        assert result.data["entries"][0]["name"] == "notes.txt"
+        assert "_mtime" not in result.data["entries"][0]
+
     async def test_hidden_entries_on_request(self, ctx: ToolContext) -> None:
         result = await FsList().run(ListArgs(path="~/Documents", hidden=True), ctx)
 
