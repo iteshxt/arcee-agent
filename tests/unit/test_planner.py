@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,7 @@ import pytest
 from arcee.core.agent import Agent, Event, Guarded, Planned, StepStarted
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
-from arcee.core.planner import Planner
+from arcee.core.planner import Planner, needs_plan
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest, ReplanContext
 from arcee.models.base import Completion, ModelProfile, WireCall
@@ -64,6 +64,7 @@ def make(
     core: Sequence[Completion],
     user: User | None = None,
     home: Path = Path("/tmp"),
+    plan_if: Callable[[str], bool] = lambda request: True,
 ) -> tuple[Agent, FakeAdapter, FakeAdapter, list[Event], User]:
     user = user or User()
     planner_model = FakeAdapter(plans, PLANNER)
@@ -76,6 +77,7 @@ def make(
         user,
         home=home,
         planner=Planner(planner_model, TOOLS, home=home, clock=lambda: NOW),
+        plan_if=plan_if,
         on_event=events.append,
         clock=lambda: NOW,
     )
@@ -136,7 +138,7 @@ class TestPlannedTasks:
         assert "1. [current] List the folder" in first.system
         assert "2. [next] Report the count" in first.system
         assert "2. [current] Report the count" in third.system
-        assert "That reply is your answer to the user." in third.system
+        assert "answer their whole request" in third.system
         assert [m.text for m in third.messages if m.role != "tool"][-2:] == [
             "Found 0 files.",
             "Now step 2: Report the count",
@@ -207,6 +209,27 @@ class TestPlannedTasks:
 
         assert (outcome.status, outcome.reply) == ("failed", "I could not finish: nope")
 
+    async def test_control_only_steps_offer_only_control_tools(self) -> None:
+        agent, _, core, events, _ = make([plan(("Greet", ["control.*"]))], [Completion("Hi!")])
+
+        await agent.run("hi")
+
+        assert [t["function"]["name"] for t in core.requests[0].tools] == [
+            "control_done",
+            "control_ask_user",
+            "control_replan",
+        ]
+        assert not [e for e in events if isinstance(e, Guarded)]
+
+    async def test_simple_requests_skip_the_planner(self) -> None:
+        agent, planner, _, _, _ = make([], [Completion("Hello!")], plan_if=needs_plan)
+
+        outcome = await agent.run("Hi Arcee!")
+
+        assert outcome.reply == "Hello!"
+        assert planner.requests == []
+        assert outcome.model_calls == 1
+
     async def test_unknown_tool_filters_fall_back_to_everything(self) -> None:
         agent, _, core, events, _ = make([plan(("Do it", ["browser.*"]))], [Completion("ok")])
 
@@ -214,3 +237,19 @@ class TestPlannedTasks:
 
         assert len(core.requests[0].tools) == len(TOOLS)
         assert Guarded(0, "plan step named no known tools; offering all") in events
+
+
+@pytest.mark.parametrize(
+    ("request_text", "expected"),
+    [
+        ("Hi Arcee!", False),
+        ("How much free disk space do I have?", False),
+        ("Find the biggest file in Downloads, then tell me the free disk space", False),
+        ("List my Documents. Delete the zip files there.", False),
+        ("First find my CV, then my cover letter, then zip them both", True),
+        ("Check the logs. Find the errors. Summarise what broke.", True),
+        (" ".join(["word"] * 30), True),
+    ],
+)
+def test_needs_plan(request_text: str, expected: bool) -> None:
+    assert needs_plan(request_text) is expected

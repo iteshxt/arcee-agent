@@ -233,6 +233,17 @@ async def test_broken_tool_calls_are_retried_with_a_nudge(home: Path) -> None:
     assert outcome.model_calls == 3
 
 
+async def test_narration_naming_tools_is_not_an_answer(home: Path) -> None:
+    musing = say("Let me use fs_search to look for it, or maybe shell_run.")
+    agent, [model], events, _ = make(home, [musing, say("It's in ~/Documents.")])
+
+    outcome = await agent.run("where is my cv?")
+
+    assert outcome.reply == "It's in ~/Documents."
+    assert Guarded(1, "reply was narration naming fs_search; nudged") in events
+    assert model.requests[1].messages[-1].text.startswith("That was a note to yourself")
+
+
 async def test_top_tier_keeps_going_until_the_step_limit(home: Path) -> None:
     agent, _, _, _ = make(home, [say("")] * 3, limits=Limits(max_steps=3))
 

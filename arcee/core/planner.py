@@ -6,13 +6,39 @@ retries. The Planner sees tool names and one-line descriptions only; the usage
 cards are for the Core, which picks the actual calls.
 """
 
+import re
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 
 from arcee.core.protocol import PlannerOutput, ReplanContext
 from arcee.models.base import Message, ModelAdapter, ModelRequest
 from arcee.tools.registry import AnyTool, Registry
+
+# Words that signal another phase of work.
+_MULTI_STEP: Final = re.compile(
+    r"\b(then|after that|afterwards|and also|as well as|followed by|finally|first|next)\b|;",
+    re.IGNORECASE,
+)
+LONG_REQUEST_WORDS: Final = 30
+
+
+def needs_plan(request: str) -> bool:
+    """Whether a request is long enough to be worth a plan.
+
+    Measured on the reference machine with LFM3 1.7B, a two-part request ("find
+    the biggest file, then tell me the free space") took 20 s and 3 model calls
+    without a plan and 98-137 s and 8-9 calls with one, because the small Planner
+    splits work into too many steps. So only long or clearly multi-phase requests
+    are planned; `--plan always` and `--plan never` override this.
+    """
+    sentences = [s for s in re.split(r"[.?!]+", request) if len(s.split()) >= 3]
+    return (
+        len(request.split()) >= LONG_REQUEST_WORDS
+        or len(sentences) >= 3
+        or len(_MULTI_STEP.findall(request)) >= 2
+    )
 
 
 def planner_system(tools: Sequence[AnyTool], *, home: Path, now: datetime) -> str:
@@ -26,11 +52,12 @@ Tools the agent has:
 
 Turn the user's request into a short plan:
 - goal: the request restated precisely. interpretation: assumptions you made.
-- steps: as few as possible. A simple question or one action is ONE step. Use more \
-only when the work has separate phases, like find, then act, then report.
+- steps: as few as possible. A simple question or one action is ONE step. A step is \
+tool work (look something up, act on something); never a step only for thinking, \
+comparing or choosing, which happens inside the step that needs it.
 - Each step: id (1, 2, ...), do (one instruction), tools (the tool names it needs, or \
 "fs.*" for a group), success (what shows the step is done).
-- The last step ends with telling the user the result.
+- The last step ends with answering the user's whole request.
 - constraints: limits the user stated or implied, e.g. "do not delete anything".
 - clarify: a question for the user ONLY when the request cannot be understood at all; \
 otherwise null. Never ask what a tool can find out.
