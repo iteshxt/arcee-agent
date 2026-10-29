@@ -34,6 +34,7 @@ from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest, PlannerOutput
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
+from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
@@ -310,6 +311,42 @@ async def evaluate(
     return 0
 
 
+async def evaluate_tasks(
+    tasks_path: Path, *, host: str, only: str, plan: str, no_examples: bool
+) -> int:
+    """Run whole tasks end to end in throwaway homes and check their outcomes."""
+    tasks = [task for task in load_tasks(tasks_path) if only in task.id]
+    ladder = local_core_ladder(host)
+    planner_model = local_planner(host)
+    style = Style(sys.stdout)
+    terminal = Terminal(verbose=False)
+    library = None if no_examples else ExampleLibrary.load()
+    results: list[TaskResult] = []
+    try:
+        usable = await _usable(ladder, terminal)
+        if not usable:
+            print(f"{ladder[0].profile.model} is not available")
+            return 2
+        print(f"{len(tasks)} tasks, plan={plan}, examples={'off' if no_examples else 'on'}\n")
+        for task in tasks:
+            result = await run_task(
+                task, usable, planner_model=planner_model, plan=plan, examples=library
+            )
+            results.append(result)
+            mark = style.green("PASS") if result.passed else style.red("FAIL")
+            line = (
+                f"{mark} {task.id:<28} {result.steps:>2} steps {result.model_calls:>2} calls "
+                f"{result.seconds:5.1f}s" + (" planned" if result.planned else "")
+            )
+            if not result.passed:
+                line += "  " + style.dim("; ".join(result.problems)[:140])
+            print(line, flush=True)
+    finally:
+        await asyncio.gather(*(m.aclose() for m in [*ladder, planner_model]))
+    print("\n" + task_summary(results))
+    return 0
+
+
 def _row(result: CaseResult) -> dict[str, object]:
     d = result.decision
     return {
@@ -354,6 +391,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
     history_cmd.add_argument("-n", type=int, default=15, help="how many tasks to list")
 
+    tasks_cmd = sub.add_parser("eval-tasks", help="run whole tasks and check their outcomes")
+    tasks_cmd.add_argument("--tasks", type=Path, default=Path("tests/eval/tasks.toml"))
+    tasks_cmd.add_argument("--only", default="", help="task id substring")
+    tasks_cmd.add_argument("--plan", choices=("auto", "always", "never"), default="auto")
+    tasks_cmd.add_argument("--no-examples", action="store_true")
+    tasks_cmd.add_argument("--host", default=host)
+
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
     eval_cmd.add_argument("--cases", type=Path, default=Path("tests/eval/cases.toml"))
     eval_cmd.add_argument("--tier", type=int, choices=(1, 2, 3), default=1)
@@ -372,6 +416,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "history":
             return asyncio.run(history(args.task_id, args.n))
+        if args.command == "eval-tasks":
+            return asyncio.run(
+                evaluate_tasks(
+                    args.tasks,
+                    host=_host(args.host),
+                    only=args.only,
+                    plan=args.plan,
+                    no_examples=args.no_examples,
+                )
+            )
         if args.command == "eval":
             return asyncio.run(
                 evaluate(
