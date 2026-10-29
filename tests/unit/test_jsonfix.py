@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from arcee.core.protocol import CoreAction
+from arcee.core.protocol import CoreAction, PlannerOutput
 from arcee.models.jsonfix import (
     ReplyError,
     extract_object,
@@ -102,3 +102,14 @@ def test_retry_prompt_matches_spec_wording() -> None:
     assert retry_prompt(ReplyError("action: Field required")) == (
         "VALIDATION ERROR: action: Field required. Return a corrected JSON object."
     )
+
+
+def test_a_reply_echoing_the_schema_shape_is_unwrapped() -> None:
+    echoed = (
+        '{"description": "The Planner\'s task", "properties": {"goal": "g", '
+        '"interpretation": "", "steps": [{"id": 1, "do": "d", "success": "s"}]}}'
+    )
+
+    plan = parse_reply(echoed, PlannerOutput)
+
+    assert plan.goal == "g"

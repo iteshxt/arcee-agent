@@ -198,3 +198,30 @@ async def test_string_error_codes_use_the_http_status() -> None:
     completion = await adapter(server).respond(ToolRequest("s", [Message("user", "hi")], []))
 
     assert completion.text == "ok"
+
+
+async def test_groq_json_validation_failures_become_replies_to_repair() -> None:
+    rejected = httpx.Response(
+        400,
+        json={
+            "error": {
+                "code": "json_validate_failed",
+                "message": "Failed to validate JSON.",
+                "failed_generation": '{"action": {"tool": "fs.list", "args": {"path": "~"}}}',
+            }
+        },
+    )
+    server = Server(rejected)
+
+    response = await adapter(server, cloud_profile("m", schema=True)).complete(
+        ModelRequest(system="s", messages=[Message("user", "go")], schema=CoreAction)
+    )
+
+    assert response.parsed.action.tool == "fs.list"
+
+
+def test_schemas_sent_to_models_carry_no_top_level_description() -> None:
+    from arcee.core.protocol import PlannerOutput
+    from arcee.models.base import provider_schema
+
+    assert "description" not in provider_schema(PlannerOutput)

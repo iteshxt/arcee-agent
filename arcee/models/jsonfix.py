@@ -92,6 +92,14 @@ def parse_reply[M: BaseModel](raw: str, schema: type[M]) -> M:
     try:
         return schema.model_validate(data)
     except ValidationError as exc:
+        # Models sometimes answer in the schema's own shape, the real object nested under
+        # "properties"; the inner object is the answer when it validates.
+        inner = data.get("properties")
+        if isinstance(inner, dict):
+            try:
+                return schema.model_validate(inner)
+            except ValidationError:
+                pass
         raise ReplyError(format_validation_error(exc)) from exc
 
 
