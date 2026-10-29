@@ -19,6 +19,7 @@ from pydantic import Field
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 
 MAX_LISTED: Final = 25
+LAUNCH_CHECK_S: Final = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,8 +159,8 @@ class AppOpen(Tool[OpenAppArgs]):
             start_new_session=True,
         )
         try:
-            # gio launch returns once the app has started; a long-running launcher is fine.
-            _, err = await asyncio.wait_for(proc.communicate(), timeout=5)
+            # Some launchers stay attached to the app; a second is enough to see a failure.
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=LAUNCH_CHECK_S)
         except TimeoutError:
             err = b""
         if proc.returncode not in (0, None):
