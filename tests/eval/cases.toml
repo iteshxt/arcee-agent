@@ -19,7 +19,7 @@ expect = { any_of = ["fs.list"], args_contain = { path = "Downloads" } }
 id = "look-free-disk"
 scenario = "look-first"
 request = "Am I running low on disk space?"
-expect = { any_of = ["shell.run"], args_contain = { cmd = "df" } }
+expect = { any_of = ["shell.run", "system.status"], args_contain = { cmd = "df" } }
 
 [[case]]
 id = "look-folder-size"
@@ -31,7 +31,7 @@ expect = { any_of = ["shell.run", "fs.list"], args_contain = { cmd = ["du", "vid
 id = "look-ip"
 scenario = "look-first"
 request = "Tell me this computer's local IP address."
-expect = { any_of = ["shell.run"], args_contain = { cmd = "ip" }, args_lack = { cmd = "ipconfig" } }
+expect = { any_of = ["shell.run", "network.status"], args_contain = { cmd = "ip" }, args_lack = { cmd = "ipconfig" } }
 
 [[case]]
 id = "look-find-unknown-location"
@@ -55,7 +55,7 @@ expect = { any_of = ["shell.run"], args_contain = { cmd = "firefox" } }
 id = "look-memory"
 scenario = "look-first"
 request = "How much RAM is free?"
-expect = { any_of = ["shell.run"], args_contain = { cmd = "free" } }
+expect = { any_of = ["shell.run", "system.status"], args_contain = { cmd = "free" } }
 
 [[case]]
 id = "look-before-delete"
@@ -67,7 +67,7 @@ expect = { any_of = ["fs.list", "fs.search"] }
 id = "look-kernel"
 scenario = "look-first"
 request = "Which Linux kernel version am I on?"
-expect = { any_of = ["shell.run"], args_contain = { cmd = "uname" } }
+expect = { any_of = ["shell.run", "system.status"], args_contain = { cmd = "uname" } }
 
 # --- use-result: the answer is already in a tool result -------------------------
 
@@ -90,7 +90,7 @@ id = "use-count-mixed-listing"
 scenario = "use-result"
 request = "How many photos (jpg) are in ~/Pictures/trip?"
 history = [
-  { call = "fs.list", args = { path = "~/Pictures/trip" }, data = { path = "~/Pictures/trip", sort = "name", count = 6, entries = [
+  { call = "fs.list", args = { path = "~/Pictures/trip" }, data = { path = "~/Pictures/trip", sort = "name", count = 6, by_type = { ".jpg" = 3, ".mp4" = 1, ".png" = 1, ".txt" = 1 }, total_size = "46.6 MB", entries = [
     { name = "beach.jpg", type = "file", size = "2.1 MB", modified = "2026-08-01 10:00" },
     { name = "clip.mp4", type = "file", size = "40.0 MB", modified = "2026-08-01 10:05" },
     { name = "dinner.jpg", type = "file", size = "1.8 MB", modified = "2026-08-01 20:00" },
@@ -452,7 +452,7 @@ request = "What's my IP address?"
 history = [
   { call = "shell.run", args = { cmd = "ifconfig" }, status = "error", error = "bash: line 1: ifconfig: command not found", data = { exit_code = 127, stdout = "", stderr = "bash: line 1: ifconfig: command not found" } },
 ]
-expect = { any_of = ["shell.run"], args_contain = { cmd = "ip" }, args_lack = { cmd = "ifconfig" } }
+expect = { any_of = ["shell.run", "network.status"], args_contain = { cmd = "ip" }, args_lack = { cmd = "ifconfig" } }
 
 [[case]]
 id = "recover-binary-file"

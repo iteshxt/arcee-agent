@@ -280,6 +280,8 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "fs.read",
         "fs.search",
         "fs.trash",
+        "system.status",
+        "network.status",
         "shell.run",
         "control.done",
         "control.ask_user",
