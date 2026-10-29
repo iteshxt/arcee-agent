@@ -49,6 +49,7 @@ class ShellRun(Tool[RunArgs]):
     )
     args_model = RunArgs
     observation_kind = "shell_output"
+    untrusted = True
     timeout_s = 120
 
     def __init__(self, *, limits: bool = True) -> None:

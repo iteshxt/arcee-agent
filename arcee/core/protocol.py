@@ -255,6 +255,10 @@ class ExecutorResult(_Versioned, _HarnessModel):
     error: str | None = None
     duration_ms: int = Field(ge=0)
     screen_changed: bool | None = None
+    # Content from outside sources (pages, files, command output), and any
+    # instruction-like text found in it (spec section 12).
+    untrusted: bool = False
+    suspicious: tuple[str, ...] = ()
 
 
 # --- 7.6 Confirmation request -----------------------------------------------------

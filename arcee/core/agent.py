@@ -168,6 +168,9 @@ class _State:
     empty_lookups: list[str] = field(default_factory=list[str])
     seen: dict[str, str] = field(default_factory=dict[str, str])
     grounding_nudges: int = 0
+    # Set when the last result held instruction-like outside text: the next action is
+    # confirmed by the user whatever its tier (spec section 12).
+    confirm_next: bool = False
 
 
 class Agent:
@@ -317,9 +320,21 @@ class Agent:
                 self._emit(Guarded(state.steps, f"blocked a repeat of {valid.tool.name}"))
                 await self._strike(state, "repeated an earlier call")
                 continue
-            changes_things = self._executor.gate.tier(valid) is not Tier.AUTO
-            result = await self._executor.execute(valid, state.steps, ctx)
+            changes_things = (
+                self._executor.gate.tier(valid, model_asked=state.confirm_next) is not Tier.AUTO
+            )
+            result = await self._executor.execute(
+                valid, state.steps, ctx, model_asked=state.confirm_next
+            )
+            state.confirm_next = bool(result.suspicious)
             self._emit(ToolRan(state.steps, result))
+            if result.suspicious:
+                self._emit(
+                    Guarded(
+                        state.steps,
+                        "outside content had instruction-like text; next action needs confirmation",
+                    )
+                )
             state.tried.append(result.summary)
             message = tool_message(result)
             # After anything that can change the system, looking again is verification.

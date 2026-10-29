@@ -193,6 +193,7 @@ class FsRead(Tool[ReadArgs]):
     )
     args_model = ReadArgs
     observation_kind = "file_content"
+    untrusted = True
     timeout_s = 10
 
     async def run(self, args: ReadArgs, ctx: ToolContext) -> ToolResult:

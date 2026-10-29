@@ -127,6 +127,9 @@ class Tool[A: ToolArgs](ABC):
     risk: ClassVar[Risk] = "low"
     timeout_s: ClassVar[float] = 30.0
     observation_kind: ClassVar[ObservationKind] = "text"
+    # Results carry outside content (web pages, file text, command output): they are
+    # marked for the model and scanned for injected instructions.
+    untrusted: ClassVar[bool] = False
 
     def tier_for(self, args: A, policy: Policy) -> Tier:
         """This call's tier. Tools whose risk depends on the arguments override it."""

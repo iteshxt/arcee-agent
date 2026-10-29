@@ -302,6 +302,8 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "app.open",
         "system.status",
         "network.status",
+        "web.search",
+        "web.fetch",
         "shell.run",
         "shell.script",
         "control.wait",
