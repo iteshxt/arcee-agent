@@ -2,26 +2,66 @@
 
 A tool can fail, time out or crash; none of that reaches the loop as an
 exception. The loop always gets an `ExecutorResult` it can show the model.
+Every call that reaches the executor, refused ones included, is also handed to
+the optional `record` hook with its arguments, tier and approver: that is what
+the action log and the store are built from.
 """
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, Literal
 
-from arcee.core.gate import Gate
+from arcee.core.gate import Gate, Verdict
+from arcee.core.policy import Tier
 from arcee.core.protocol import ExecutorResult
 from arcee.tools.base import ToolContext
 from arcee.tools.registry import ToolCall
 
 
+@dataclass(frozen=True, slots=True)
+class ActionRecord:
+    """One call as the action log stores it (spec section 12, "Action log")."""
+
+    ts: float
+    task_id: str
+    args: dict[str, Any]
+    tier: Tier
+    approved_by: Literal["policy", "user"] | None
+    result: ExecutorResult
+
+
+type Recorder = Callable[[ActionRecord], Awaitable[None]]
+
+
 class Executor:
-    def __init__(self, gate: Gate) -> None:
+    def __init__(self, gate: Gate, *, record: Recorder | None = None) -> None:
         self.gate = gate
+        self._record = record
 
     async def execute(
         self, call: ToolCall, n: int, ctx: ToolContext, *, model_asked: bool = False
     ) -> ExecutorResult:
-        tool = call.tool
+        started = time.time()
         verdict = await self.gate.check(call, ctx.task_id, model_asked=model_asked)
+        result = await self._run(call, n, ctx, verdict)
+        if self._record is not None:
+            record = ActionRecord(
+                ts=started,
+                task_id=ctx.task_id,
+                args=call.args.model_dump(mode="json"),
+                tier=verdict.tier,
+                approved_by=verdict.approved_by,
+                result=result,
+            )
+            await self._record(record)
+        return result
+
+    async def _run(
+        self, call: ToolCall, n: int, ctx: ToolContext, verdict: Verdict
+    ) -> ExecutorResult:
+        tool = call.tool
         if not verdict.allowed:
             return ExecutorResult(
                 n=n,

@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
+from arcee.context.store import Store, data_dir
 from arcee.core.agent import (
     Agent,
     Escalated,
@@ -29,7 +30,7 @@ from arcee.core.executor import Executor
 from arcee.core.gate import Gate
 from arcee.core.planner import Planner
 from arcee.core.policy import Policy
-from arcee.core.protocol import ConfirmRequest
+from arcee.core.protocol import ConfirmRequest, PlannerOutput
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
 from arcee.models.base import ModelAdapter
@@ -140,6 +141,7 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool, plan: b
     terminal = Terminal(verbose=verbose)
     ladder = local_core_ladder(host)
     planner_model = local_planner(host)
+    store = Store(data_dir())
     try:
         usable = await _usable(ladder, terminal)
         if not usable:
@@ -150,34 +152,99 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool, plan: b
             return 2
         registry = builtin_registry()
         planner = Planner(planner_model, registry, home=Path.home()) if plan else None
+        plans: list[PlannerOutput] = []
+
+        def on_event(event: Event) -> None:
+            if isinstance(event, Planned):
+                plans.append(event.plan)
+            terminal.on_event(event)
+
         agent = Agent(
             usable,
             registry,
-            Executor(Gate(Policy(), terminal)),
+            Executor(Gate(Policy(), terminal), record=store.record_action),
             terminal,
             home=Path.home(),
             limits=limits,
             planner=planner,
-            on_event=terminal.on_event,
+            on_event=on_event,
         )
+        task_id = await store.start_task(request)
         started = time.monotonic()
         try:
-            outcome = await agent.run(request)
+            outcome = await agent.run(request, task_id=task_id)
         except ModelUnavailableError as exc:
+            await _finish(store, task_id, "failed", f"model unavailable: {exc}", plans)
             terminal.print(f"model unavailable: {exc}")
             return 2
+        except asyncio.CancelledError:
+            await asyncio.shield(_finish(store, task_id, "cancelled", "", plans))
+            raise
+        await store.finish_task(
+            task_id,
+            status=outcome.status,
+            reply=outcome.reply,
+            steps=outcome.steps,
+            model_calls=outcome.model_calls,
+            plan=plans[-1] if plans else None,
+        )
         style = Style(sys.stdout)
         terminal.print()
         terminal.print(style.bold("Arcee: ") + outcome.reply)
         terminal.print(
             style.dim(
                 f"({outcome.status}: {outcome.steps} steps, {outcome.model_calls} model calls, "
-                f"{time.monotonic() - started:.1f}s)"
+                f"{time.monotonic() - started:.1f}s, {task_id})"
             )
         )
         return 0 if outcome.status == "done" else 1
     finally:
         await asyncio.gather(*(model.aclose() for model in [*ladder, planner_model]))
+        store.close()
+
+
+async def _finish(
+    store: Store, task_id: str, status: str, reply: str, plans: list[PlannerOutput]
+) -> None:
+    await store.finish_task(
+        task_id,
+        status=status,
+        reply=reply,
+        steps=0,
+        model_calls=0,
+        plan=plans[-1] if plans else None,
+    )
+
+
+async def history(task_id: str | None, limit: int) -> int:
+    """List recent tasks, or show one task's steps."""
+    style = Style(sys.stdout)
+    store = Store(data_dir())
+    try:
+        if task_id is None:
+            for task in await store.recent(limit):
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(task.started))
+                mark = style.green("done") if task.status == "done" else style.red(task.status)
+                print(f"{task.id}  {when}  {mark:<6}  {task.request[:70]}")
+            return 0
+        found = await store.task(task_id)
+        if found is None:
+            print(f"no task {task_id}")
+            return 1
+        task, steps = found
+        print(style.bold(task.request))
+        for step in steps:
+            approval = f", approved by {step.approved_by}" if step.approved_by else ""
+            print(
+                f"  {step.n}. {step.tool} {json.dumps(step.args)}  "
+                + style.dim(f"[{step.tier}{approval}] {step.status} {step.duration_ms} ms")
+            )
+            print(f"     {step.summary}")
+        print(style.bold("Arcee: ") + (task.reply or ""))
+        print(style.dim(f"({task.status}: {task.steps} steps, {task.model_calls} model calls)"))
+        return 0
+    finally:
+        store.close()
 
 
 async def evaluate(
@@ -243,6 +310,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
     run_cmd.add_argument("--no-plan", action="store_true", help="skip the Planner: one step")
 
+    history_cmd = sub.add_parser("history", help="list recent tasks, or show one")
+    history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
+    history_cmd.add_argument("-n", type=int, default=15, help="how many tasks to list")
+
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
     eval_cmd.add_argument("--cases", type=Path, default=Path("tests/eval/cases.toml"))
     eval_cmd.add_argument("--tier", type=int, choices=(1, 2, 3), default=1)
@@ -253,6 +324,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.command == "history":
+            return asyncio.run(history(args.task_id, args.n))
         if args.command == "eval":
             return asyncio.run(
                 evaluate(
