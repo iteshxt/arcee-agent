@@ -1,8 +1,11 @@
 """Model presets (spec section 4): the local Core ladder (decisions 0003 and 0005)."""
 
+from functools import cache
 from typing import Final
 
+from arcee.context.store import data_dir
 from arcee.models.base import ModelAdapter, ModelProfile
+from arcee.models.budget import HeaderBudget
 from arcee.models.ollama import ALL_LAYERS, DEFAULT_HOST, OllamaAdapter
 from arcee.models.openai_compat import OpenAICompatAdapter
 
@@ -78,11 +81,18 @@ GROQ_LARGE: Final = "openai/gpt-oss-120b"
 DEFAULT_CORE: Final = "groq"
 
 
+@cache
+def rate_budget() -> HeaderBudget:
+    """Groq's own counts, kept per model and saved between runs; one per process."""
+    return HeaderBudget(data_dir() / "rate-limits.json")
+
+
 def groq_ladder() -> list[ModelAdapter]:
-    """Tier 1: gpt-oss-20b. Tier 2: gpt-oss-120b."""
+    """Tier 1: gpt-oss-20b. Tier 2: gpt-oss-120b. Paced by Groq's own rate headers."""
+    budget = rate_budget()
     return [
-        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_SMALL, tpm=TPM["groq"])),
-        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_LARGE, tpm=TPM["groq"])),
+        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_SMALL), budget=budget),
+        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_LARGE), budget=budget),
     ]
 
 
@@ -101,7 +111,7 @@ def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
 def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     if choice == "groq":
         return OpenAICompatAdapter.provider(
-            "groq", cloud_profile(GROQ_LARGE, schema=True, tpm=TPM["groq"])
+            "groq", cloud_profile(GROQ_LARGE, schema=True), budget=rate_budget()
         )
     if choice == "local":
         return local_planner(host)

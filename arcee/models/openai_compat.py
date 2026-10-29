@@ -21,7 +21,9 @@ from arcee.models.base import (
     RawRequest,
     TokenUsage,
     WireCall,
+    estimate_tokens,
 )
+from arcee.models.budget import HeaderBudget
 from arcee.models.errors import (
     ModelUnavailableError,
     QuotaExhaustedError,
@@ -49,8 +51,10 @@ class OpenAICompatAdapter(ModelAdapter):
         base_url: str = OPENROUTER_URL,
         client: httpx.AsyncClient | None = None,
         clock: Clock = SYSTEM_CLOCK,
+        budget: HeaderBudget | None = None,
     ) -> None:
         super().__init__(profile, clock=clock)
+        self.budget = budget
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
@@ -63,7 +67,9 @@ class OpenAICompatAdapter(ModelAdapter):
         return cls.provider("openrouter", profile)
 
     @classmethod
-    def provider(cls, name: str, profile: ModelProfile) -> OpenAICompatAdapter:
+    def provider(
+        cls, name: str, profile: ModelProfile, *, budget: HeaderBudget | None = None
+    ) -> OpenAICompatAdapter:
         """An adapter for a known provider, with its key from the environment (or .env)."""
         if name not in PROVIDERS:
             raise ValueError(f"unknown provider {name!r}; known: {', '.join(PROVIDERS)}")
@@ -71,7 +77,7 @@ class OpenAICompatAdapter(ModelAdapter):
         key = os.environ.get(env)
         if not key:
             raise ModelUnavailableError(f"set {env} (in .env) to use {name}")
-        return cls(profile, key, base_url=url)
+        return cls(profile, key, base_url=url, budget=budget)
 
     async def _send(self, request: RawRequest) -> Completion:
         body: dict[str, Any] = {
@@ -99,6 +105,13 @@ class OpenAICompatAdapter(ModelAdapter):
                 "type": "json_schema",
                 "json_schema": {"name": "reply", "strict": False, "schema": request.schema},
             }
+        if self.budget is not None:
+            # Hold back only if the provider's last count says this will not fit now.
+            tokens = estimate_tokens(request)
+            if (wait := self.budget.wait_s(self.profile.model, tokens)) > 0:
+                await self._clock.sleep(wait)
+                self.last_wait_s += wait
+            self.budget.spend(self.profile.model, tokens)
         return _completion(await self._post("/chat/completions", body))
 
     async def health(self) -> bool:
@@ -125,6 +138,8 @@ class OpenAICompatAdapter(ModelAdapter):
             raise ModelUnavailableError(f"{self.profile.model}: timed out") from exc
         except httpx.TransportError as exc:
             raise ServerBusyError(f"connection failed: {exc}") from exc
+        if self.budget is not None:
+            self.budget.observe(self.profile.model, response.headers)
         data = _json(response)
         # OpenRouter can answer 200 with an error object when the upstream fails.
         error = cast(dict[str, Any], data.get("error") or {})

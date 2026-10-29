@@ -177,8 +177,11 @@ def test_planner_shares_the_large_models_budget(monkeypatch: pytest.MonkeyPatch)
     share_budget(ladder, planner)
 
     assert planner.profile.model == "openai/gpt-oss-120b"
-    assert planner.limiter is ladder[1].limiter
-    assert planner.limiter is not ladder[0].limiter
+    assert isinstance(planner, OpenAICompatAdapter)
+    assert all(isinstance(m, OpenAICompatAdapter) for m in ladder)
+    # One budget object tracks every Groq model, each by its own name.
+    assert planner.budget is not None
+    assert all(m.budget is planner.budget for m in ladder if isinstance(m, OpenAICompatAdapter))
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     [model] = core_ladder("openrouter:google/gemma-4-31b-it")
     assert (model.profile.model, model.profile.rpm) == ("google/gemma-4-31b-it", 20)

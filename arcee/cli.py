@@ -42,7 +42,13 @@ from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
-from arcee.models.presets import DEFAULT_CORE, core_ladder, planner_for, share_budget
+from arcee.models.presets import (
+    DEFAULT_CORE,
+    core_ladder,
+    planner_for,
+    rate_budget,
+    share_budget,
+)
 from arcee.tools.builtin import builtin_registry
 
 
@@ -378,6 +384,20 @@ def browser_setup() -> int:
     return 0
 
 
+def show_limits() -> int:
+    """What Groq last reported for each model, with what has refilled since."""
+    snapshot = rate_budget().snapshot()
+    if not snapshot:
+        print("no rate limits recorded yet; they appear after the first Groq request")
+        return 0
+    for model, s in snapshot.items():
+        print(
+            f"{model:<24} tokens {s['tokens_left']:>5}/{s['tokens_limit']} this minute   "
+            f"requests {s['requests_left']:>4}/{s['requests_limit']} today"
+        )
+    return 0
+
+
 async def browser_check() -> int:
     client = BrowserClient()
     try:
@@ -438,6 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
     history_cmd.add_argument("-n", type=int, default=15, help="how many tasks to list")
 
+    sub.add_parser("limits", help="show the cloud models' remaining rate limits")
     sub.add_parser("browser-setup", help="register the Chrome extension's native host")
     sub.add_parser("browser-check", help="check that the Chrome extension is connected")
 
@@ -466,6 +487,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "history":
             return asyncio.run(history(args.task_id, args.n))
+        if args.command == "limits":
+            return show_limits()
         if args.command == "browser-setup":
             return browser_setup()
         if args.command == "browser-check":
