@@ -268,6 +268,39 @@ async def test_same_model_tiers_are_not_unloaded(home: Path) -> None:
     assert (fast.unloads, thinking.unloads) == (0, 0)
 
 
+async def test_answers_with_unseen_facts_are_sent_back(home: Path) -> None:
+    agent, [model], events, _ = make(
+        home,
+        [
+            call("fs_list", path="~/Downloads"),
+            say("The installer is ~/Downloads/c.deb."),
+            call("control_done", reply="The installer is z.deb."),
+            say("The installers are a.deb and b.deb."),
+        ],
+    )
+
+    outcome = await agent.run("which installers are in Downloads?")
+
+    assert outcome.reply == "The installers are a.deb and b.deb."
+    guards = [e.what for e in events if isinstance(e, Guarded)]
+    assert guards == [
+        "reply stated ~/Downloads/c.deb, c.deb unseen; nudged",
+        "reply stated z.deb unseen; nudged",
+    ]
+    assert "c.deb" in model.requests[2].messages[-1].text
+
+
+async def test_grounding_gives_up_after_two_nudges(home: Path) -> None:
+    agent, _, _, _ = make(
+        home,
+        [call("fs_list", path="~/Downloads"), say("x.iso"), say("y.iso"), say("z.iso")],
+    )
+
+    outcome = await agent.run("which isos?")
+
+    assert outcome.reply == "z.iso"
+
+
 async def test_top_tier_keeps_going_until_the_step_limit(home: Path) -> None:
     agent, _, _, _ = make(home, [say("")] * 3, limits=Limits(max_steps=3))
 

@@ -21,7 +21,6 @@ Without a Planner the whole request is one step with every tool.
 
 import asyncio
 import json
-import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -30,6 +29,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, Protocol
 
 from arcee.core.executor import Executor
+from arcee.core.guards import review_reply
 from arcee.core.planner import Planner
 from arcee.core.policy import Tier
 from arcee.core.prompts import core_system, tool_message
@@ -55,10 +55,9 @@ MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
 MAX_REPLANS: Final = 2
-NARRATION_NUDGE: Final = (
-    "That was a note to yourself, not an answer. Either call one tool now, "
-    "or reply to the user with the answer only."
-)
+# After this many, an answer is accepted even if a fact in it was not seen: the user
+# gets a reply rather than a loop.
+MAX_GROUNDING_NUDGES: Final = 2
 BROKEN_CALL_NUDGE: Final = (
     "Your last reply was a broken tool call. Reply again with one valid tool call, "
     "or answer in plain text."
@@ -164,6 +163,7 @@ class _State:
     model_calls: int = 0
     empty_lookups: list[str] = field(default_factory=list[str])
     seen: dict[str, str] = field(default_factory=dict[str, str])
+    grounding_nudges: int = 0
 
 
 class Agent:
@@ -286,14 +286,10 @@ class Agent:
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
                 if reply := completion.text.strip():
-                    if (named := self._narrates(reply)) is None:
+                    if (nudge := self._check_reply(state, reply)) is None:
                         return _StepDone(reply)
-                    self._emit(Guarded(state.steps, f"reply was narration naming {named}; nudged"))
-                    state.messages += (
-                        Message("assistant", reply),
-                        Message("user", NARRATION_NUDGE),
-                    )
-                    await self._strike(state, "narrated instead of acting or answering")
+                    state.messages += (Message("assistant", reply), Message("user", nudge))
+                    await self._strike(state, "the reply failed a check")
                     continue
                 await self._strike(state, "the model returned nothing")
                 continue
@@ -376,7 +372,11 @@ class Agent:
         """Act on a control tool; return how it ends the step, if it does."""
         args: dict[str, Any] = valid.args.model_dump()
         if valid.tool.name == DONE:
-            return Outcome("done", args["reply"], state.steps, state.model_calls)
+            if (nudge := self._check_reply(state, args["reply"])) is None:
+                return Outcome("done", args["reply"], state.steps, state.model_calls)
+            self._answer(state, call, json.dumps({"status": "error", "error": nudge}))
+            await self._strike(state, "the reply failed a check")
+            return None
         if valid.tool.name == REPLAN:
             return _Stuck(args["reason"])
         answer = await self._asker.ask(args["question"], args["options"])
@@ -408,12 +408,20 @@ class Agent:
             Message("tool", content, tool_name=call.name),
         )
 
-    def _narrates(self, reply: str) -> str | None:
-        """The tool a would-be answer names, if any: answers never mention tool names."""
-        for tool in self._registry:
-            if re.search(rf"\b{re.escape(wire_name(tool.name))}\b", reply):
-                return wire_name(tool.name)
-        return None
+    def _check_reply(self, state: _State, reply: str) -> str | None:
+        """The nudge for a would-be answer that fails a guard; None when it passes."""
+        review = review_reply(
+            reply,
+            state.messages,
+            (wire_name(tool.name) for tool in self._registry),
+            grounding=state.grounding_nudges < MAX_GROUNDING_NUDGES,
+        )
+        if review is None:
+            return None
+        if review.kind == "grounding":
+            state.grounding_nudges += 1
+        self._emit(Guarded(state.steps, f"{review.detail}; nudged"))
+        return review.nudge
 
     async def _strike(self, state: _State, reason: str) -> None:
         state.strikes += 1
