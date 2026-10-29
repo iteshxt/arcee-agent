@@ -16,7 +16,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Next: tool registry (1.7), then the Ollama adapter (1.6).
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry merged (1.7). Next: the Ollama adapter (1.6) with both call modes.
 **Last updated:** 2026-10-29
 
 ## Target machine
@@ -74,7 +74,7 @@ Protocol and models
 
 Tools and safety
 
-- [ ] 1.7 `arcee/tools/base.py`, `registry.py`: `Tool` with usage card, `ToolContext`, `ToolResult` with structured `data`, registration, wire names, per-tool argument validation with hints, per-step selection, native and schema rendering
+- [x] 1.7 `arcee/tools/base.py`, `registry.py`: `Tool` with usage card, `ToolContext`, `ToolResult` with structured `data`, registration, wire names, per-tool argument validation with hints, per-step selection, native and schema rendering
 - [ ] 1.8 `arcee/core/gate.py` and `config/policy.toml` defaults: tiers, shell allowlist, `never` list, path rules, stdin confirmer
 - [ ] 1.9 Control tools: `control.done`, `ask_user`, `confirm`, `replan`, `wait`, `speak` (prints in CLI), `note`
 - [ ] 1.10 File tools: `fs.list`, `read`, `write`, `search`, `move`, `copy`, `trash`, `open_with_default`
@@ -184,3 +184,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-23** — Spec reviewed. Ambiguities fixed: D-Bus-only UI events, kill-switch last resort, AppArmor sandbox helper, wake-word models, Core sees the full plan, roadmap table with gates. Retargeted v1 to the reference machine (Ubuntu 26.04, GNOME 50, Python 3.14); added D-Bus caller checks, `pressed.json` for input release, minimal store and eval tasks in phase 1, dev deb in phase 4. This roadmap added.
 - **2026-10-23** — Phase 0: uv project on system Python 3.14 (decision 0001), Ruff, Pyright strict, pytest, pre-commit, GitHub Actions CI, contributing guide. Phase 1: `protocol.py`, `jsonfix.py`, adapter base with shared retry loop and `FakeAdapter`, sliding-window limiter with 429 backoff. 85 unit tests. Spec updated: no `task_id` in Planner output, `text` observation kind, adapter template method, limiter details.
 - **2026-10-29** — Model selection. Gemini adapter built (5xx retry, thinking levels, live tests), then parked: the free tier's daily cap is too low for an agent. NVIDIA free endpoints (MiniMax, GLM) queued or never answered. Local benchmarks on 8 agent-decision cases: Qwen3.5 0.8B 2/8, Qwen3.5 2B 4/8 (5/8 with rules and examples), LFM3 1.7B 3/8 plain, 7/8 with rules and examples, 5/8 with native tool calling at 1.55 s. Decision 0003: local-first, LFM3 1.7B Core with an escalation ladder to thinking mode and LFM2.5 8B, native and schema call modes, code guards, usage cards and retrieved examples. Generic retry and thinking changes merged from the Gemini work.
+- **2026-10-29** — 1.7 tool registry: `Tool` with usage card and typed args model, `ToolResult` with structured `data` (also added to the protocol's `ExecutorResult`), registration with wire names (`fs.list` ↔ `fs_list`) and collision checks, per-step selection with Planner filters, argument validation whose errors suggest the closest name and list the accepted arguments, rendering for native tool calls and for the schema-mode prompt. 120 unit tests.
