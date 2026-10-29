@@ -173,6 +173,8 @@ class _State:
     empty_lookups: list[str] = field(default_factory=list[str])
     seen: dict[str, str] = field(default_factory=dict[str, str])
     grounding_nudges: int = 0
+    # Questions already put to the user in this task, with their answers.
+    asked: dict[str, str] = field(default_factory=dict[str, str])
     # Set when the last result held instruction-like outside text: the next action is
     # confirmed by the user whatever its tier (spec section 12).
     confirm_next: bool = False
@@ -422,7 +424,19 @@ class Agent:
             return None
         if valid.tool.name == REPLAN:
             return _Stuck(args["reason"])
+        question = " ".join(str(args["question"]).lower().split())
+        if question in state.asked:
+            # Asking again gets the same answer; it is a loop, not progress.
+            note = (
+                f"You already asked this; the user answered {state.asked[question]!r}. "
+                "Do not ask again: act on the request."
+            )
+            self._answer(state, call, json.dumps({"status": "error", "error": note}))
+            self._emit(Guarded(state.steps, "blocked a repeated question to the user"))
+            await self._strike(state, "asked the user the same question again")
+            return None
         answer = await self._asker.ask(args["question"], args["options"])
+        state.asked[question] = answer
         self._answer(state, call, json.dumps({"status": "ok", "data": {"answer": answer}}))
         await self._settle(state)
         return None

@@ -367,6 +367,21 @@ async def test_model_can_ask_the_user(home: Path) -> None:
     assert tool_results(model)[0] == {"status": "ok", "data": {"answer": "the newest one"}}
 
 
+async def test_a_repeated_question_is_not_asked_again(home: Path) -> None:
+    user = User("")
+    question = call("control_ask_user", question="Do you want me to rename it?")
+    agent, [_, strong], events, _ = make(
+        home, [question, question, question], [say("Renamed.")], user=user
+    )
+
+    outcome = await agent.run("rename a.txt to b.txt")
+
+    assert user.questions == ["Do you want me to rename it?"]
+    assert Guarded(2, "blocked a repeated question to the user") in events
+    assert outcome.reply == "Renamed."  # two blocked repeats were two strikes: escalated
+    assert len(strong.requests) == 1
+
+
 async def test_done_tool_and_replan_end_the_task(home: Path) -> None:
     done, _, _, _ = make(home, [call("control_done", reply="All set.")])
     stuck, _, _, _ = make(home, [call("control_replan", reason="no network")])
