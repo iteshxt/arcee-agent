@@ -107,10 +107,13 @@ class PlannerOutput(_Versioned, _ReplyModel):
     """The Planner's structured task. The orchestrator attaches the task id."""
 
     goal: Text = Field(description="The user's goal restated precisely.")
-    interpretation: str = Field(description="Assumptions made to resolve ambiguity.")
+    interpretation: str = Field(
+        description="Assumptions made to resolve ambiguity, so the user need not be asked."
+    )
     clarify: str | None = Field(
         default=None,
-        description="A question for the user when the request cannot be planned; else null.",
+        description="Almost always null. A question only when the request cannot be "
+        "understood at all.",
     )
     steps: tuple[PlanStep, ...] = ()
     constraints: tuple[str, ...] = ()

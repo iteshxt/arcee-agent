@@ -129,12 +129,9 @@ class TestPlannedTasks:
 
         assert (outcome.status, outcome.reply) == ("done", "There are 0.")
         first, _, third = core.requests
-        assert [t["function"]["name"] for t in first.tools] == [
-            "fs_list",
-            "control_done",
-            "control_ask_user",
-            "control_replan",
-        ]
+        names = [t["function"]["name"] for t in first.tools]
+        assert names[0] == "fs_list"  # the step's own tools come first
+        assert {"control_done", "control_ask_user", "control_replan"} <= set(names)
         assert "1. [current] List the folder" in first.system
         assert "2. [next] Report the count" in first.system
         assert "2. [current] Report the count" in third.system
@@ -233,13 +230,14 @@ class TestPlannedTasks:
         assert planner.requests == []
         assert outcome.model_calls == 1
 
-    async def test_unknown_tool_filters_fall_back_to_everything(self) -> None:
+    async def test_unknown_step_tools_fall_back_to_the_requests_tools(self) -> None:
         agent, _, core, events, _ = make([plan(("Do it", ["calendar.*"]))], [Completion("ok")])
 
-        await agent.run("task")
+        await agent.run("list the files in my home folder")
 
-        assert len(core.requests[0].tools) == len(TOOLS)
-        assert Guarded(0, "plan step named no known tools; offering all") in events
+        names = {t["function"]["name"] for t in core.requests[0].tools}
+        assert "fs_list" in names
+        assert not [e for e in events if isinstance(e, Guarded)]
 
 
 @pytest.mark.parametrize(

@@ -287,10 +287,14 @@ class Agent:
             state.messages.append(Message("user", f"New plan. Step 1: {first.do}"))
 
     def _offered(self, state: _State, step: PlanStep | None) -> list[AnyTool]:
-        """The step's tools plus the control tools; everything when the filter matches nothing."""
+        """The step's tools, the request's tool groups and the control tools."""
+        request_tools = self._registry.select(filters_for(state.messages))
         if step is None:
-            return self._registry.select(filters_for(state.messages))
+            return request_tools
+        # A step's tools are the Planner's hint, not a limit: the groups the request
+        # itself needs come too, so a narrow plan cannot leave the Core unable to act.
         chosen = self._registry.select(step.tools)
+        chosen += [tool for tool in request_tools if tool not in chosen]
         if not chosen:
             self._emit(Guarded(state.steps, "plan step named no known tools; offering all"))
             return self._registry.select()
