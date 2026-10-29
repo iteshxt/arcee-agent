@@ -110,6 +110,8 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 | `cost_tier` | free / paid / local | Shown in the UI; `paid` models require an explicit opt-in per task. |
 | `max_image_px` | int | Longest side the harness downscales screenshots to before sending (default 1280). |
 
+**Rate budgets from the provider.** Groq reports tokens and requests left in `x-ratelimit-*` headers on every reply; both refill continuously (tokens over a minute, requests over a day). Arcee keeps the last count per model, adds the refill since, and holds a request back only when it would not fit, for only the time the refill takes. Counts persist in `rate-limits.json` in the data directory, `arcee-cli limits` prints them, and the app's Models page will show them. Providers without these headers fall back to the profile's `tpm` budget.
+
 **Default since decision 0008:** the Core is Groq `gpt-oss-20b` for easy requests and `gpt-oss-120b` for hard ones (long, multi-phase, browser or web), routed in code, with 120b as the escalation tier and the Planner; the local ladder below is `--core local`.
 
 **Escalation ladder.** A role can list several models in order. The orchestrator starts every step on the first and climbs only on failures it can detect: output still invalid after retries, tool arguments rejected by the registry, a loop, the same step failing twice, or `confidence` below 0.5. The next step starts at the bottom again. Moving between tiers that use different models unloads the old one first (`keep_alive: 0` on Ollama), so the new model gets the whole GPU instead of being split across CPU and GPU next to it. A confidently wrong action looks like success and does not escalate; the permission gate and confirmations are the protection there.

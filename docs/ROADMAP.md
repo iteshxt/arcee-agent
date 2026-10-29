@@ -139,7 +139,7 @@ Prerequisites on the machine:
 - [ ] D-Bus caller checks on state-changing methods
 - [ ] GNOME extension: indicator, dropdown, confirmation bubble, keybindings, `org.arcee.Shell`
 - [ ] Real `window.*` and `app.close` tools over the extension
-- [ ] GTK4 app: Models, Tools, History, Diagnostics pages
+- [ ] GTK4 app: Models, Tools, History, Diagnostics pages; the Models page shows each cloud model's tokens and requests left (from `rate-limits.json`) and lets the user choose local or API inference
 - [ ] First-run wizard
 - [ ] Local dev deb (`dpkg-buildpackage`)
 
@@ -196,3 +196,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-29** — Phase 2 started: `web.search` and `web.fetch` (25 tools), untrusted-content marking with an injection detector that forces confirmation of the next action (verified end to end in a test: a file saying "ignore previous instructions" made the following `fs.list` need approval). DuckDuckGo started answering 202 bot challenges after a few requests from this machine, so search also takes a SearXNG instance. 389 unit tests.
 - **2026-10-30** — Chrome in the user's own profile: Chrome 156's accessibility tree is unusable here and automation is blocked on the default profile, so an extension plus native messaging host drives it (decision 0007). LFM3-Omni could not answer from real Gmail rows (6/6 correct on made-up rows, 0 on real ones). Cloud Core option through an OpenAI-compatible adapter (Groq, OpenRouter); `openai/gpt-oss-120b` on Groq answered the Gmail task in 6 steps. Per-minute token budgets (Groq: 7,000 of 8,000), waits shown in the CLI, intent-based tool groups and a compact tool list for capable models cut a Gmail request from 3,942 to 1,045 tokens. 422 unit tests.
 - **2026-10-30** — Default Core switched to Groq (decision 0008): gpt-oss-20b for easy requests, gpt-oss-120b for long, multi-phase, browser and web requests and as the escalation tier, with the Planner on 120b. Routing is decided in code before any model call. "How much free disk space" ran end to end in 1.4 s. Local models stay as `--core local`. 429 unit tests.
+- **2026-10-30** — Rate limits from Groq's own counts: every reply's `x-ratelimit-*` headers (free with the reply, no extra calls) give tokens and requests left per model; both refill continuously, so Arcee sends at once when a request fits and otherwise waits only for the shortfall (seconds, not a minute). Counts persist in `~/.local/share/arcee/rate-limits.json`; `arcee-cli limits` shows them; a spent day stops with a clear message. 440 unit tests.
