@@ -250,7 +250,9 @@ class TestShell:
     def test_refusal_names_the_rule(self) -> None:
         reason = ShellRun().refusal(RunArgs(cmd="rm -rf ~"), Policy())
 
-        assert reason == "recursive delete; use fs.trash instead; this command will never run"
+        assert reason == (
+            "recursive delete; use fs.trash with paths ['~'] instead; this command will never run"
+        )
 
 
 async def test_control_tools_are_not_run(ctx: ToolContext) -> None:

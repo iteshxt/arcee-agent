@@ -38,7 +38,6 @@ def test_read_only_commands_run_without_asking(command: str) -> None:
         ("ls `pwd`", "uses redirection, chaining or substitution"),
         ("mv a b", "'mv' is not on the read-only allowlist"),
         ("ip link set eth0 down", "'ip' is not on the read-only allowlist"),
-        ("rm notes.txt", "'rm' is not on the read-only allowlist"),
         ("grep 'unclosed", "the command line could not be parsed"),
         ("ls |", "empty pipeline segment"),
     ],
@@ -54,9 +53,15 @@ def test_anything_else_needs_confirmation(command: str, reason: str) -> None:
     [
         ("sudo apt update", "'sudo' is never run by Arcee"),
         ("/usr/bin/sudo ls", "'sudo' is never run by Arcee"),
-        ("rm -rf ~/code", "recursive delete; use fs.trash instead"),
-        ("rm -r build", "recursive delete; use fs.trash instead"),
-        ("rm --recursive build", "recursive delete; use fs.trash instead"),
+        ("rm -rf ~/code", "recursive delete; use fs.trash with paths ['~/code'] instead"),
+        ("rm -r build", "recursive delete; use fs.trash with paths ['build'] instead"),
+        ("rm --recursive build", "recursive delete; use fs.trash with paths ['build'] instead"),
+        ("rm notes.txt", "permanent delete; use fs.trash with paths ['notes.txt'] instead"),
+        (
+            "rm -f a.log b.log",
+            "permanent delete; use fs.trash with paths ['a.log', 'b.log'] instead",
+        ),
+        ("unlink x", "permanent delete; use fs.trash with paths ['x'] instead"),
         ("chmod -R 777 ~", "recursive chmod"),
         ("mkfs.ext4 /dev/sda1", "'mkfs.ext4' is never run by Arcee"),
         ("dd if=/dev/zero of=/dev/sda", "'dd' is never run by Arcee"),
@@ -83,7 +88,13 @@ def test_allowlist_is_configurable() -> None:
 
 @pytest.mark.parametrize(
     "command",
-    ["ls && sudo reboot", "echo $(sudo cat /etc/shadow)", "ls `sudo id`", "true || rm -rf ~"],
+    [
+        "ls && sudo reboot",
+        "echo $(sudo cat /etc/shadow)",
+        "ls `sudo id`",
+        "true || rm -rf ~",
+        "ls; rm x",
+    ],
 )
 def test_never_commands_cannot_hide_behind_chaining(command: str) -> None:
     assert POLICY.classify_shell(command).tier is Tier.NEVER
