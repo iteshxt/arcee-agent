@@ -157,6 +157,9 @@ class ModelAdapter(ABC):
     async def health(self) -> bool:
         """Cheap reachability check for the Models page and fallback decisions."""
 
+    async def unload(self) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Free the model's memory now; the next request loads it again. Best effort."""
+
     async def aclose(self) -> None:  # noqa: B027 - optional hook, no-op by default
         """Release connections. Adapters without any keep the default."""
 

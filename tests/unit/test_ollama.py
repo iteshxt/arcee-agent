@@ -209,6 +209,17 @@ class TestHealth:
     async def test_unreachable_is_unhealthy(self) -> None:
         assert not await adapter(Server(httpx.ConnectError("refused"))).health()
 
+    async def test_unload_sets_keep_alive_to_zero(self) -> None:
+        server = Server(httpx.Response(200, json={"done": True}))
+
+        await adapter(server).unload()
+
+        assert server.requests[0].url.path == "/api/generate"
+        assert server.body() == {"model": "lfm3", "keep_alive": 0}
+
+    async def test_unload_failures_are_ignored(self) -> None:
+        await adapter(Server(httpx.ConnectError("refused"))).unload()
+
     async def test_closes_only_its_own_client(self) -> None:
         shared = httpx.AsyncClient(transport=httpx.MockTransport(Server()))
 

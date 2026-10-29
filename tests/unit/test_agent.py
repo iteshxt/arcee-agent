@@ -244,6 +244,30 @@ async def test_narration_naming_tools_is_not_an_answer(home: Path) -> None:
     assert model.requests[1].messages[-1].text.startswith("That was a note to yourself")
 
 
+async def test_switching_models_unloads_the_previous_one(home: Path) -> None:
+    agent, [cheap, strong], _, _ = make(
+        home,
+        [call("fs_nope"), call("fs_nope"), say("done")],
+        [call("fs_list", path="~/Downloads")],
+    )
+
+    await agent.run("list downloads")
+
+    # Escalation unloaded the cheap model; success unloaded the strong one again.
+    assert (cheap.unloads, strong.unloads) == (1, 1)
+
+
+async def test_same_model_tiers_are_not_unloaded(home: Path) -> None:
+    agent, [fast, thinking], _, _ = make(
+        home, [call("fs_nope"), call("fs_nope"), say("ok")], [call("fs_list", path="~")]
+    )
+    thinking.profile = fast.profile.model_copy(update={"thinking": True})
+
+    await agent.run("list home")
+
+    assert (fast.unloads, thinking.unloads) == (0, 0)
+
+
 async def test_top_tier_keeps_going_until_the_step_limit(home: Path) -> None:
     agent, _, _, _ = make(home, [say("")] * 3, limits=Limits(max_steps=3))
 

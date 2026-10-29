@@ -281,7 +281,7 @@ class Agent:
             except MalformedReplyError as error:
                 self._emit(Guarded(state.steps, "the model wrote a broken tool call; asking again"))
                 state.messages.append(Message("user", BROKEN_CALL_NUDGE))
-                self._strike(state, str(error))
+                await self._strike(state, str(error))
                 continue
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
@@ -293,15 +293,15 @@ class Agent:
                         Message("assistant", reply),
                         Message("user", NARRATION_NUDGE),
                     )
-                    self._strike(state, "narrated instead of acting or answering")
+                    await self._strike(state, "narrated instead of acting or answering")
                     continue
-                self._strike(state, "the model returned nothing")
+                await self._strike(state, "the model returned nothing")
                 continue
             try:
                 valid = self._registry.validate(call.name, call.args, offered)
             except ToolCallError as error:
                 self._answer(state, call, json.dumps({"status": "error", "error": str(error)}))
-                self._strike(state, f"invalid call: {error}")
+                await self._strike(state, f"invalid call: {error}")
                 continue
             if valid.tool.name in CONTROL:
                 if (end := await self._control(state, call, valid)) is not None:
@@ -311,7 +311,7 @@ class Agent:
             if (previous := state.seen.get(key)) is not None:
                 self._answer(state, call, _repeat_note(previous))
                 self._emit(Guarded(state.steps, f"blocked a repeat of {valid.tool.name}"))
-                self._strike(state, "repeated an earlier call")
+                await self._strike(state, "repeated an earlier call")
                 continue
             changes_things = self._executor.gate.tier(valid) is not Tier.AUTO
             result = await self._executor.execute(valid, state.steps, ctx)
@@ -325,9 +325,9 @@ class Agent:
                 state.seen[key] = message
             self._answer(state, call, message)
             if result.status == "ok":
-                self._settle(state)
+                await self._settle(state)
             else:
-                self._strike(state, f"{valid.tool.name} {result.status}")
+                await self._strike(state, f"{valid.tool.name} {result.status}")
             await self._empty_lookup_guard(state, valid, result)
         return self._fail(
             state, f"I stopped after {self._limits.max_steps} steps without finishing."
@@ -381,7 +381,7 @@ class Agent:
             return _Stuck(args["reason"])
         answer = await self._asker.ask(args["question"], args["options"])
         self._answer(state, call, json.dumps({"status": "ok", "data": {"answer": answer}}))
-        self._settle(state)
+        await self._settle(state)
         return None
 
     async def _empty_lookup_guard(
@@ -415,20 +415,31 @@ class Agent:
                 return wire_name(tool.name)
         return None
 
-    def _strike(self, state: _State, reason: str) -> None:
+    async def _strike(self, state: _State, reason: str) -> None:
         state.strikes += 1
         if state.strikes < STRIKES_TO_ESCALATE or state.tier + 1 >= len(self._ladder):
             return
-        state.tier += 1
+        await self._switch(state, state.tier + 1)
         state.strikes = 0
         self._emit(
             Escalated(state.steps, state.tier, self._ladder[state.tier].profile.model, reason)
         )
 
-    def _settle(self, state: _State) -> None:
+    async def _settle(self, state: _State) -> None:
         """A step went well: the next one starts on the cheapest tier again."""
         state.strikes = 0
-        state.tier = 0
+        await self._switch(state, 0)
+
+    async def _switch(self, state: _State, tier: int) -> None:
+        """Move to `tier`, unloading the current model when the new tier is another model.
+
+        On 4 GB of VRAM two models rarely fit next to the desktop, so the old one
+        is unloaded at once instead of waiting for Ollama to evict it.
+        """
+        current = self._ladder[state.tier]
+        if tier != state.tier and current.profile.model != self._ladder[tier].profile.model:
+            await current.unload()
+        state.tier = tier
 
     def _fail(self, state: _State, reply: str) -> Outcome:
         return Outcome("failed", reply, state.steps, state.model_calls)

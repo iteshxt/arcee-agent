@@ -97,6 +97,13 @@ class OllamaAdapter(ModelAdapter):
         models = cast(list[dict[str, Any]], response.json().get("models", []))
         return any(_same_model(m.get("name", ""), self.profile.model) for m in models)
 
+    async def unload(self) -> None:
+        """Ask Ollama to drop the model from memory now (`keep_alive: 0`)."""
+        with contextlib.suppress(httpx.HTTPError):
+            await self._client.post(
+                "/api/generate", json={"model": self.profile.model, "keep_alive": 0}
+            )
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
