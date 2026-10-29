@@ -158,6 +158,20 @@ class TestSearch:
         assert result.data is not None
         assert result.data["matches"] == ["~/Documents/notes.txt"]
 
+    @pytest.mark.parametrize(
+        ("query", "root"),
+        [("notes.txt", "~/Documents/notes.txt"), ("~/Documents/notes.txt", "~")],
+    )
+    async def test_a_known_path_is_its_own_match(
+        self, ctx: ToolContext, query: str, root: str
+    ) -> None:
+        result = await FsSearch().run(SearchArgs(query=query, root=root), ctx)
+
+        assert result.status == "ok"
+        assert result.data is not None
+        assert result.data["matches"] == ["~/Documents/notes.txt"]
+        assert result.data["note"] == "This exact path exists; no search was needed."
+
     async def test_no_matches_is_still_ok(self, ctx: ToolContext) -> None:
         result = await FsSearch().run(SearchArgs(query="tax"), ctx)
 

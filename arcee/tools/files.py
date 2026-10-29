@@ -241,6 +241,11 @@ class FsSearch(Tool[SearchArgs]):
 
     async def run(self, args: SearchArgs, ctx: ToolContext) -> ToolResult:
         root = resolve(args.root, ctx)
+        # Asked to search for a path that already exists: that file is the answer.
+        if (known := _existing_file(args, root, ctx)) is not None:
+            data = {"query": args.query, "count": 1, "matches": [display(known, ctx)]}
+            data["note"] = "This exact path exists; no search was needed."
+            return ToolResult.ok(f"{display(known, ctx)} exists", data=data)
         if not root.is_dir():
             return ToolResult.fail(f"{display(root, ctx)} is not a folder")
         found = await asyncio.to_thread(_search, root, args.query, args.by)
@@ -257,6 +262,14 @@ class FsSearch(Tool[SearchArgs]):
             data["truncated"] = True
         summary = f"Found {len(found.matches)} for {args.query!r} in {display(root, ctx)}"
         return ToolResult.ok(summary, data=data)
+
+
+def _existing_file(args: SearchArgs, root: Path, ctx: ToolContext) -> Path | None:
+    if root.is_file():
+        return root
+    if "/" in args.query and (candidate := resolve(args.query, ctx)).is_file():
+        return candidate
+    return None
 
 
 def _by_folder(matches: list[Path], ctx: ToolContext) -> dict[str, int]:
