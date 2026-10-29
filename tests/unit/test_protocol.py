@@ -204,6 +204,14 @@ class TestHarnessModels:
                 }
             )
 
+    def test_executor_result_carries_structured_data(self) -> None:
+        data = {"entries": [{"name": "a.deb"}], "count": 1}
+        result = ExecutorResult(
+            n=1, tool="fs.list", status="ok", summary="1 entry", data=data, duration_ms=3
+        )
+
+        assert ExecutorResult.model_validate_json(result.model_dump_json()).data == data
+
     def test_confirm_request_round_trips_through_json(self) -> None:
         request = ConfirmRequest(
             request_id="c_552",

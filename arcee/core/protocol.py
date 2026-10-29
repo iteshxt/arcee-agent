@@ -248,6 +248,9 @@ class ExecutorResult(_Versioned, _HarnessModel):
     tool: str
     status: ResultStatus
     summary: str
+    data: dict[str, Any] | None = Field(
+        default=None, description="Structured facts from the tool; what the model reads first."
+    )
     output: str | None = None
     error: str | None = None
     duration_ms: int = Field(ge=0)
