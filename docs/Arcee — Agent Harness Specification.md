@@ -186,7 +186,7 @@ OUTPUT RULES
 
 1. Strip code fences and any text before the first `{` or after the last matching `}` (models add them anyway).
 2. `json.loads`; on failure try `json_repair` (fixes trailing commas, single quotes).
-3. Validate against the schema with Pydantic, then the arguments against the tool's own args model through the registry (section 11); unknown tools, unknown arguments and bad types are errors, with a "did you mean" hint when a close name exists. In native mode steps 1-2 are skipped (the provider returns parsed calls), and step 3 applies the same way.
+3. Validate against the schema with Pydantic, then the arguments against the tool's own args model through the registry (section 11); unknown tools, unknown arguments and bad types are errors, with a "did you mean" hint when a close name exists. In native mode steps 1-2 are skipped (the provider returns parsed calls), and step 3 applies the same way: an invalid call is answered with the registry's error as the `tool` result. When the provider itself cannot parse the model's output (Ollama answers HTTP 500 "XML syntax error" for a truncated LFM3 `<tool_call>`), the adapter raises a malformed-reply error instead of retrying the identical request as a server fault; the loop adds a short nudge and counts a strike, so a repeat escalates.
 4. On any failure, append an assistant message with the raw output and a user message `VALIDATION ERROR: <pydantic error>. Return a corrected JSON object.` and retry. Maximum 2 retries, then the step fails with `status: "model_error"`.
 5. Log `attempts` per call; the app's diagnostics page shows the first-try success rate per model, which is the metric for choosing models.
 
@@ -196,7 +196,7 @@ OUTPUT RULES
 
 ## 6. Agent loop
 
-A task is one Planner call followed by a Core step loop. The Planner is not called per step; it is called again only when the Core reports it is stuck, which keeps a 20-step task at about 22 model calls instead of 60.
+A task is at most one Planner call followed by a Core step loop. The Planner is not called per step; it is called again only when the Core reports it is stuck, which keeps a 20-step task at about 22 model calls instead of 60. Short and two-part requests skip the Planner entirely and run as one step: with a 1.7B Planner, planning them made them 5-6x slower without making them more correct (decision 0004).
 
 &#91;embedded content: agent loop: one plan, then a step loop with four exits\]
 
@@ -224,7 +224,7 @@ The Core's `control.*` actions are the only way out of the loop: `done` ends the
 - 3 lookups in a row (`fs.search`, `web.search` and similar) that return nothing → the orchestrator asks the user itself instead of offering a fourth search.
 - Kill switch (global shortcut, default `Super+Escape`) or `Cancel` from the UI: current tool is cancelled, held keys and mouse buttons are released, state goes to `cancelled`.
 
-**Code guards.** Small models fail in predictable ways: they repeat a lookup whose answer they already have, keep searching after repeated misses, miscount, and pick a near-miss tool. Each of these is caught in code rather than left to the prompt: tools return computed facts (counts, matched paths) in structured `data`; the registry rejects bad arguments with a precise message; the orchestrator blocks an exact repeat of a read-only call whose result is already in history, returning that result instead; and the stop conditions above end loops. The guards apply to every model, and they are what makes the 1.7B Core usable (decision 0003).
+**Code guards.** Small models fail in predictable ways: they repeat a lookup whose answer they already have, keep searching after repeated misses, miscount, group badly, pick a near-miss tool, and think aloud in plain text, which in native mode would end the task. Each of these is caught in code rather than left to the prompt: tools return computed facts (counts, matched paths) in structured `data`; the registry rejects bad arguments with a precise message; the orchestrator blocks an exact repeat of a read-only call whose result is already in history, returning that result instead; a plain-text "answer" that names a tool (`fs_search`) is treated as narration and answered with a nudge instead of ending the task; every tool result is capped at 4,000 characters before the model sees it by shortening its longest lists, with a note saying how many items are shown; and the stop conditions above end loops. The guards apply to every model, and they are what makes the 1.7B Core usable (decision 0003).
 
 **Confirmation requests** carry the tool, the arguments rendered as a sentence ("Delete 3 files in \~/Downloads?"), and a risk tag. The user approves by clicking, pressing `Super+Enter`, or saying "yes, Arcee" / "no, Arcee" when voice is active.
 
@@ -356,6 +356,8 @@ All stage boundaries are Pydantic models; the JSON Schema each generates is what
 ## 8. Context manager
 
 Nothing is deleted. Every request, plan, action, result and reply is a record in SQLite with an embedding in LanceDB; the Core sees only the records relevant to the current step, inside a token budget computed from the model's profile. A small local model compresses finished tasks into summaries in the background.
+
+**Phase 1 subset (built).** `history.db` with `tasks` (request, status, reply, plan JSON, counts, times), `steps` (tool, args, tier, approver, status, summary, duration) and `observations` (the full tool data, before the 4,000-character cap applied to the model's copy), plus `logs/actions.jsonl`. Everything is redacted before it is written. The executor reports each call, refused ones included, through a record hook, so the agent loop itself does not depend on storage. The root is `$ARCEE_DATA_DIR`, else `$XDG_DATA_HOME/arcee`. Embeddings, retrieval and summaries come in phase 5.
 
 **Storage (all under `~/.local/share/arcee/`)**
 
@@ -818,7 +820,7 @@ arcee/
 | Packaging | `uv` lockfile, `dpkg-buildpackage`, GitHub Actions | Reproducible, one artifact |
 | Tests | pytest, pytest-asyncio, a `FakePlatform`, Playwright test pages | Agent logic testable without a desktop |
 
-**Eval suite.** `tests/eval/` holds 40 scripted tasks (open an app, rename files, search the web and summarize, fill a local test form, adjust volume, read a PDF) with machine-checkable success criteria. `arcee eval --model <preset>` runs them and reports pass rate, steps, model calls and grounding levels; this is how model choices and prompt changes are judged.
+**Eval suite.** `tests/eval/` holds 40 scripted tasks (open an app, rename files, search the web and summarize, fill a local test form, adjust volume, read a PDF) with machine-checkable success criteria. `arcee eval --model <preset>` runs them and reports pass rate, steps, model calls and grounding levels; this is how model choices and prompt changes are judged. Phase 1 starts with single-decision cases (`tests/eval/cases.toml`, run with `arcee-cli eval --tier N`): a request with prior tool turns and a declarative check on the next decision, replayed through the same request builder the live loop uses. They measure the Core one choice at a time; they cannot measure the Planner, which needs whole-task cases.
 
 ## 17. Build phases and milestones
 
