@@ -86,15 +86,18 @@ def check(expect: Expect, decision: Decision) -> list[str]:
         label = "ask"
     if label not in expect.any_of:
         return [f"expected {' or '.join(expect.any_of)}, got {_describe(decision)}"]
+    # Argument checks describe a tool call, and only the arguments the chosen tool takes:
+    # a case accepting shell.run or fs.list checks `cmd` only when it is shell.run.
+    args: Mapping[str, Any] = decision.args if decision.kind == "tool" else {}
     problems: list[str] = []
-    # Argument checks describe the tool call; a reply or question has none to check.
-    arg_checks = decision.kind == "tool"
-    for name, wanted in expect.args_contain.items() if arg_checks else ():
-        value = str(decision.args.get(name, "")).lower()
-        problems += [f"{name} lacks {w!r}" for w in _many(wanted) if w.lower() not in value]
-    for name, unwanted in expect.args_lack.items() if arg_checks else ():
-        value = str(decision.args.get(name, "")).lower()
-        problems += [f"{name} has {u!r}" for u in _many(unwanted) if u.lower() in value]
+    for name, wanted in expect.args_contain.items():
+        if name in args:
+            value = str(args[name]).lower()
+            problems += [f"{name} lacks {w!r}" for w in _many(wanted) if w.lower() not in value]
+    for name, unwanted in expect.args_lack.items():
+        if name in args:
+            value = str(args[name]).lower()
+            problems += [f"{name} has {u!r}" for u in _many(unwanted) if u.lower() in value]
     text = decision.text.lower()
     problems += [f"reply lacks {w!r}" for w in expect.reply_has if w.lower() not in text]
     problems += [f"reply has {u!r}" for u in expect.reply_lacks if u.lower() in text]

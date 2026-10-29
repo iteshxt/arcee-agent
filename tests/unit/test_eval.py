@@ -49,6 +49,14 @@ class TestCheck:
         assert check(Expect(("ask",)), Decision("reply", text="Which report do you mean?")) == []
         assert check(Expect(("ask",)), Decision("reply", text="Done.")) != []
 
+    def test_argument_checks_apply_to_the_chosen_tools_arguments(self) -> None:
+        expect = Expect(("shell.run", "fs.list"), args_contain={"cmd": "du", "path": "videos"})
+
+        assert check(expect, Decision("tool", "fs.list", {"path": "~/Videos"})) == []
+        assert check(expect, Decision("tool", "shell.run", {"cmd": "ls ~/Videos"})) == [
+            "cmd lacks 'du'"
+        ]
+
     def test_argument_checks_skip_replies(self) -> None:
         expect = Expect(("fs.trash", "reply"), args_contain={"paths": "x"})
 
@@ -71,6 +79,14 @@ class TestLoad:
             for prior in case.history:
                 if isinstance(prior, PriorCall):
                     assert prior.tool in names, case.id
+
+    def test_repo_case_arguments_exist_on_some_expected_tool(self) -> None:
+        fields = {tool.name: set(tool.args_model.model_fields) for tool in TOOLS}
+
+        for case in load(REPO_CASES):
+            known = set().union(*(fields.get(name, set()) for name in case.expect.any_of))
+            named = set(case.expect.args_contain) | set(case.expect.args_lack)
+            assert named <= known, f"{case.id}: {named - known}"
 
     def test_rejects_duplicates_and_missing_fields(self, tmp_path: Path) -> None:
         dupes = tmp_path / "d.toml"

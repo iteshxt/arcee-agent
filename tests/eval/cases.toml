@@ -25,7 +25,7 @@ expect = { any_of = ["shell.run"], args_contain = { cmd = "df" } }
 id = "look-folder-size"
 scenario = "look-first"
 request = "How much space is my Videos folder taking up?"
-expect = { any_of = ["shell.run"], args_contain = { cmd = ["du", "videos"] } }
+expect = { any_of = ["shell.run", "fs.list"], args_contain = { cmd = ["du", "videos"], path = "videos" } }
 
 [[case]]
 id = "look-ip"
@@ -372,7 +372,7 @@ expect = { any_of = ["reply"], reply_has = ["friday", "15:00"] }
 id = "tool-size-not-listing"
 scenario = "right-tool"
 request = "How much space does ~/Downloads use in total?"
-expect = { any_of = ["shell.run"], args_contain = { cmd = "du" } }
+expect = { any_of = ["shell.run", "fs.list"], args_contain = { cmd = "du", path = "downloads" } }
 
 [[case]]
 id = "tool-count-with-glob"

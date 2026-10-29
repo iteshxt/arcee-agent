@@ -6,6 +6,7 @@ work runs in a worker thread to keep the event loop free (spec section 12).
 """
 
 import asyncio
+import contextlib
 import fnmatch
 import os
 from collections import Counter
@@ -61,30 +62,35 @@ class ListArgs(ToolArgs):
 
 class FsList(Tool[ListArgs]):
     name = "fs.list"
-    description = "List a folder: each entry's name, type, size and modified date, plus a count."
+    description = (
+        "List a folder: each entry's name, type, size and modified date, the count, how many "
+        "files of each type (by_type), and the folder's total size including subfolders."
+    )
     usage = Usage(
-        when="You need what is in one folder, how many files of a kind it holds, "
-        "or its biggest, newest or oldest files.",
-        avoid="You already listed this folder in this task (use that result), or you need "
-        "a folder's total size (use shell.run with du -sh).",
-        mistakes="Counting or comparing sizes by hand: pass glob and read `count`; "
+        when="You need what is in one folder, how many files of a kind it holds, its total "
+        "size, or its biggest, newest or oldest files.",
+        avoid="You already listed this folder in this task: use that result.",
+        mistakes="Counting or comparing by hand: read `count`, `by_type` and `total_size`; "
         "for the biggest or newest pass sort and limit and take the first entry.",
         example='fs.list(path="~/Downloads", sort="largest", limit=1)',
     )
     args_model = ListArgs
-    timeout_s = 10
+    timeout_s = 15
 
     async def run(self, args: ListArgs, ctx: ToolContext) -> ToolResult:
         folder = resolve(args.path, ctx)
         if not folder.is_dir():
             return ToolResult.fail(f"{display(folder, ctx)} is not a folder")
         entries = await asyncio.to_thread(_list, folder, args.glob, args.hidden, args.sort)
+        total = await asyncio.to_thread(_tree_size, folder)
         shown = [_public(entry) for entry in entries[: args.limit]]
         data: dict[str, Any] = {
             "path": display(folder, ctx),
             "sort": args.sort,
-            "entries": shown,
             "count": len(entries),
+            "by_type": _by_type(entries),
+            "total_size": _size(total.bytes) + ("" if total.complete else " (at least)"),
+            "entries": shown,
         }
         if len(entries) > len(shown):
             data["shown"] = len(shown)
@@ -110,6 +116,35 @@ def _list(folder: Path, glob: str | None, hidden: bool, sort: str) -> list[dict[
     elif sort in ("newest", "oldest"):
         entries.sort(key=lambda e: e.get("_mtime", 0.0), reverse=sort == "newest")
     return entries
+
+
+@dataclass(frozen=True, slots=True)
+class _Tree:
+    bytes: int
+    complete: bool
+
+
+def _tree_size(folder: Path) -> _Tree:
+    """Total size of everything under `folder`, like `du`, bounded by `MAX_VISITED` files."""
+    total = visited = 0
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if not Path(root, d).is_symlink()]
+        for name in files:
+            visited += 1
+            if visited > MAX_VISITED:
+                return _Tree(total, complete=False)
+            with contextlib.suppress(OSError):
+                total += Path(root, name).lstat().st_size
+    return _Tree(total, complete=True)
+
+
+def _by_type(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """How many entries of each kind: folders, and files by extension, most first."""
+    kinds = Counter(
+        "folders" if e["type"] == "folder" else Path(e["name"]).suffix.lower() or "no extension"
+        for e in entries
+    )
+    return dict(kinds.most_common(12))
 
 
 def _public(entry: dict[str, Any]) -> dict[str, Any]:

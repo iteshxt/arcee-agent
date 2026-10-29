@@ -52,6 +52,18 @@ class TestList:
         assert result.data["entries"][0]["type"] == "folder"
         assert result.data["entries"][1]["size"].endswith(" B")
 
+    async def test_reports_counts_by_type_and_total_size(self, ctx: ToolContext) -> None:
+        result = await FsList().run(ListArgs(path="~/Documents"), ctx)
+
+        assert result.data is not None
+        assert result.data["by_type"] == {".pdf": 3, "folders": 1, ".jpg": 1, ".txt": 1}
+        assert next(iter(result.data["by_type"])) == ".pdf"
+        # Every file under the folder, hidden and nested ones included, like du.
+        expected = sum(
+            p.stat().st_size for p in ctx.home.joinpath("Documents").rglob("*") if p.is_file()
+        )
+        assert result.data["total_size"] == f"{expected} B"
+
     async def test_glob_counts_matches_case_insensitively(self, ctx: ToolContext) -> None:
         result = await FsList().run(ListArgs(path="Documents", glob="*.pdf"), ctx)
 
