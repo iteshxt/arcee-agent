@@ -3,6 +3,7 @@
 from arcee.tools.apps import AppList, AppOpen
 from arcee.tools.browser import BrowserSession, browser_tools
 from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
+from arcee.tools.desktop import desktop_tools
 from arcee.tools.files import (
     FsCopy,
     FsList,
@@ -40,6 +41,7 @@ def builtin_registry(
             WebSearch(),
             WebFetch(),
             *browser_tools(browser),
+            *desktop_tools(),
             ShellRun(limits=shell_limits),
             ShellScript(limits=shell_limits),
             *(tool() for tool in UTILITY_CONTROL_TOOLS),
