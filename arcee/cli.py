@@ -256,7 +256,14 @@ async def history(task_id: str | None, limit: int) -> int:
 
 
 async def evaluate(
-    cases_path: Path, *, host: str, tier: int, repeat: int, only: str, report: Path | None
+    cases_path: Path,
+    *,
+    host: str,
+    tier: int,
+    repeat: int,
+    only: str,
+    report: Path | None,
+    raw: bool,
 ) -> int:
     """Run the eval suite on one tier of the local ladder and print the results."""
     cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
@@ -273,11 +280,15 @@ async def evaluate(
         def show(result: CaseResult) -> None:
             mark = style.green("PASS") if result.passed else style.red("FAIL")
             line = f"{mark} {result.case.id:<34} {result.seconds:5.1f}s"
+            if result.guarded:
+                line += "  " + style.yellow(f"[guard: {result.guarded}]")
             if not result.passed:
                 line += "  " + style.dim("; ".join(result.problems)[:150])
             print(line, flush=True)
 
-        results = await run_cases(model, builtin_registry(), cases, repeat=repeat, on_result=show)
+        results = await run_cases(
+            model, builtin_registry(), cases, repeat=repeat, guards=not raw, on_result=show
+        )
     finally:
         await asyncio.gather(*(m.aclose() for m in ladder))
     print("\n" + summary(results))
@@ -300,6 +311,7 @@ def _row(result: CaseResult) -> dict[str, object]:
         "text": d.text,
         "error": d.error,
         "seconds": round(result.seconds, 2),
+        "guarded": result.guarded,
     }
 
 
@@ -333,6 +345,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     eval_cmd.add_argument("--repeat", type=int, default=1)
     eval_cmd.add_argument("--only", default="", help="case id or scenario substring")
     eval_cmd.add_argument("--report", type=Path, help="write per-case results as JSON")
+    eval_cmd.add_argument(
+        "--raw", action="store_true", help="judge the raw model, without the reply guards"
+    )
     eval_cmd.add_argument("--host", default=host)
 
     args = parser.parse_args(argv)
@@ -348,6 +363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repeat=args.repeat,
                     only=args.only,
                     report=args.report,
+                    raw=args.raw,
                 )
             )
         limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)

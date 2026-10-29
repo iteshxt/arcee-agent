@@ -5,6 +5,7 @@ as an assistant tool call with its result as a `tool` message, rendered by the
 same code the live loop uses. One model turn is taken and judged.
 """
 
+import json
 import statistics
 import time
 from collections import defaultdict
@@ -17,6 +18,7 @@ from typing import Final
 from arcee.core.agent import Agent
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
+from arcee.core.guards import review_reply
 from arcee.core.policy import Policy
 from arcee.core.prompts import tool_message
 from arcee.core.protocol import ConfirmRequest, ExecutorResult
@@ -37,6 +39,8 @@ class CaseResult:
     decision: Decision
     problems: tuple[str, ...]
     seconds: float
+    # Set when the reply guards sent the first answer back, as the live loop would.
+    guarded: str = ""
 
     @property
     def passed(self) -> bool:
@@ -99,8 +103,15 @@ async def run_cases(
     cases: Sequence[Case],
     *,
     repeat: int = 1,
+    guards: bool = True,
     on_result: Callable[[CaseResult], None] = lambda result: None,
 ) -> list[CaseResult]:
+    """Judge one decision per case.
+
+    With `guards`, a final answer that fails the live loop's reply review gets
+    the same nudge and one more turn, and the second decision is judged: the
+    suite then measures the harness. Without, it measures the raw model.
+    """
     user = _NoUser()
     agent = Agent(
         [model],
@@ -114,17 +125,46 @@ async def run_cases(
     for _ in range(repeat):
         for case in cases:
             started = time.monotonic()
-            try:
-                completion = await model.respond(agent.core_request(conversation(case)))
-                decision = decide(completion, registry)
-            except MalformedReplyError as error:
-                decision = Decision("invalid", error=f"malformed reply: {error}")
+            messages = conversation(case)
+            decision, completion = await _decide(model, agent, registry, messages)
+            guarded = ""
+            if guards and decision.kind == "reply" and completion is not None:
+                names = [wire_name(tool.name) for tool in registry]
+                if (review := review_reply(decision.text, messages, names)) is not None:
+                    guarded = review.detail
+                    messages += _sent_back(completion, review.nudge)
+                    decision, _ = await _decide(model, agent, registry, messages)
             result = CaseResult(
-                case, decision, tuple(check(case.expect, decision)), time.monotonic() - started
+                case,
+                decision,
+                tuple(check(case.expect, decision)),
+                time.monotonic() - started,
+                guarded,
             )
             results.append(result)
             on_result(result)
     return results
+
+
+async def _decide(
+    model: ModelAdapter, agent: Agent, registry: Registry, messages: list[Message]
+) -> tuple[Decision, Completion | None]:
+    try:
+        completion = await model.respond(agent.core_request(messages))
+    except MalformedReplyError as error:
+        return Decision("invalid", error=f"malformed reply: {error}"), None
+    return decide(completion, registry), completion
+
+
+def _sent_back(completion: Completion, nudge: str) -> list[Message]:
+    """How the live loop returns a rejected answer: as text, or as control_done's result."""
+    if completion.tool_calls:
+        call = completion.tool_calls[0]
+        return [
+            Message("assistant", "", tool_calls=(call,)),
+            Message("tool", json.dumps({"status": "error", "error": nudge}), tool_name=call.name),
+        ]
+    return [Message("assistant", completion.text), Message("user", nudge)]
 
 
 def summary(results: Sequence[CaseResult]) -> str:
@@ -137,11 +177,13 @@ def summary(results: Sequence[CaseResult]) -> str:
     width = max(len(name) for name in by_scenario)
     lines = [f"{name:<{width}}  {_rate(group)}" for name, group in sorted(by_scenario.items())]
     valid = sum(r.decision.kind != "invalid" for r in results)
+    guarded = sum(bool(r.guarded) for r in results)
     times = sorted(r.seconds for r in results)
     lines += [
         "",
         f"{'overall':<{width}}  {_rate(results)}",
-        f"valid first reply: {valid}/{len(results)} ({valid / len(results):.0%})",
+        f"valid reply: {valid}/{len(results)} ({valid / len(results):.0%})",
+        f"answers sent back by the reply guards: {guarded}",
         f"latency: median {statistics.median(times):.2f}s, "
         f"p90 {times[int(0.9 * (len(times) - 1))]:.2f}s, max {times[-1]:.2f}s",
     ]
