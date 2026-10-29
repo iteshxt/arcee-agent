@@ -41,7 +41,7 @@ from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
-from arcee.models.presets import local_core_ladder, local_planner
+from arcee.models.presets import core_ladder, planner_for, share_budget
 from arcee.tools.builtin import builtin_registry
 
 
@@ -82,7 +82,11 @@ class Terminal:
     def on_event(self, event: Event) -> None:
         s = self._style
         match event:
-            case ModelTurn(call=call, thinking=thinking, model=model, seconds=seconds):
+            case ModelTurn(
+                call=call, thinking=thinking, model=model, seconds=seconds, waited=waited
+            ):
+                if waited >= 1:
+                    self.print(s.dim(f"  \u23f3 waited {waited:.0f}s for the rate budget"))
                 if thinking and self._verbose:
                     self.print(s.dim(f"  thinking: {' '.join(thinking.split())[:300]}"))
                 if call is not None:
@@ -150,10 +154,12 @@ async def run(
     verbose: bool,
     plan: Literal["auto", "always", "never"],
     examples: bool = False,
+    core: str = "local",
 ) -> int:
     terminal = Terminal(verbose=verbose)
-    ladder = local_core_ladder(host)
-    planner_model = local_planner(host)
+    ladder = core_ladder(core, host)
+    planner_model = planner_for(core, host)
+    share_budget(ladder, planner_model)
     store = Store(data_dir())
     try:
         usable = await _usable(ladder, terminal)
@@ -273,10 +279,14 @@ async def evaluate(
     report: Path | None,
     raw: bool,
     examples: bool,
+    core: str = "local",
 ) -> int:
     """Run the eval suite on one tier of the local ladder and print the results."""
     cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
-    ladder = local_core_ladder(host)
+    ladder = core_ladder(core, host)
+    if tier > len(ladder):
+        print(f"core {core!r} has {len(ladder)} tier(s)")
+        return 2
     model = ladder[tier - 1]
     style = Style(sys.stdout)
     try:
@@ -315,12 +325,13 @@ async def evaluate(
 
 
 async def evaluate_tasks(
-    tasks_path: Path, *, host: str, only: str, plan: str, examples: bool
+    tasks_path: Path, *, host: str, only: str, plan: str, examples: bool, core: str = "local"
 ) -> int:
     """Run whole tasks end to end in throwaway homes and check their outcomes."""
     tasks = [task for task in load_tasks(tasks_path) if only in task.id]
-    ladder = local_core_ladder(host)
-    planner_model = local_planner(host)
+    ladder = core_ladder(core, host)
+    planner_model = planner_for(core, host)
+    share_budget(ladder, planner_model)
     style = Style(sys.stdout)
     terminal = Terminal(verbose=False)
     library = ExampleLibrary.load() if examples else None
@@ -397,6 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="arcee-cli", description="Run Arcee tasks and evals from the terminal."
     )
+    _load_dotenv(Path(".env"))
     host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -407,6 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
     run_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
+    run_cmd.add_argument("--core", default="local", help=CORE_HELP)
     run_cmd.add_argument(
         "--plan",
         choices=("auto", "always", "never"),
@@ -426,6 +439,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tasks_cmd.add_argument("--only", default="", help="task id substring")
     tasks_cmd.add_argument("--plan", choices=("auto", "always", "never"), default="auto")
     tasks_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
+    tasks_cmd.add_argument("--core", default="local", help=CORE_HELP)
     tasks_cmd.add_argument("--host", default=host)
 
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
@@ -438,6 +452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--raw", action="store_true", help="judge the raw model, without the reply guards"
     )
     eval_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
+    eval_cmd.add_argument("--core", default="local", help=CORE_HELP)
     eval_cmd.add_argument("--host", default=host)
 
     args = parser.parse_args(argv)
@@ -456,6 +471,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     only=args.only,
                     plan=args.plan,
                     examples=args.examples,
+                    core=args.core,
                 )
             )
         if args.command == "eval":
@@ -469,6 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     report=args.report,
                     raw=args.raw,
                     examples=args.examples,
+                    core=args.core,
                 )
             )
         limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
@@ -481,16 +498,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 verbose=args.verbose,
                 plan=args.plan,
                 examples=args.examples,
+                core=args.core,
             )
         )
     except KeyboardInterrupt:
         print("\ncancelled", file=sys.stderr)
         return 130
+    except (ModelUnavailableError, ValueError) as exc:
+        print(f"arcee-cli: {exc}", file=sys.stderr)
+        return 2
 
 
 # Off by default: on LFM3-Omni they lowered the eval from 91% to 89% and whole
 # tasks from 15/15 to 13/15, and made runs slower (decision 0006).
+CORE_HELP = "the Core model: local (the Ollama ladder), groq:<model id> or openrouter:<model id>"
 EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
+
+
+def _load_dotenv(path: Path) -> None:
+    """Read KEY=VALUE lines from a local .env (git-ignored) without overriding the environment."""
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        name, sep, value = line.strip().partition("=")
+        if sep and name and not name.startswith("#"):
+            os.environ.setdefault(name.strip(), value.strip().strip("'\""))
 
 
 def _host(value: str) -> str:

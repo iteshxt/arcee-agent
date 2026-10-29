@@ -1,10 +1,13 @@
-"""Which tool namespaces a request needs (spec section 6, step 2: offer only what fits).
+"""Which tools a request is offered (spec section 6, step 2: offer only what fits).
 
-Every tool offered costs prompt space and a chance to pick the wrong one. The
-browser tools act in the user's own, signed-in Chrome; the web tools fetch and
-search anonymously. Offered together, a 1.7B model fetched Gmail anonymously
-instead of reading the open, signed-in tab. So each group comes only with
-requests about it, or once the task has used it.
+Every tool definition is sent with every request: prompt tokens (the binding
+limit on free cloud tiers) and one more way to pick wrong. Groups are chosen
+in code from the request before the model sees anything:
+
+- a request only about the web (mail, a site, open tabs) gets the browser or web
+  tools and the control tools, nothing local;
+- a request only about this computer gets the local tools;
+- a request that mixes both gets both, and a group the task has used stays.
 """
 
 import re
@@ -13,7 +16,9 @@ from typing import Final
 
 from arcee.models.base import Message
 
-ALWAYS: Final = ("fs.*", "app.*", "system.*", "network.*", "shell.*", "control.*")
+CONTROL: Final = ("control.*",)
+LOCAL: Final = ("fs.*", "app.*", "system.*", "network.*", "shell.*")
+ALWAYS: Final = LOCAL + CONTROL
 BROWSER: Final = ("browser.*",)
 WEB: Final = ("web.*",)
 _BROWSER_REQUEST: Final = re.compile(
@@ -26,15 +31,29 @@ _WEB_REQUEST: Final = re.compile(
     r"wikipedia|links?|urls?|articles?)\b|https?://|www\.|\.(com|org|net|io|in)\b",
     re.IGNORECASE,
 )
+# Words that bring this computer into a web request ("save the email to a file").
+_LOCAL_REQUEST: Final = re.compile(
+    r"\b(files?|folders?|director(y|ies)|disk|drive|downloads?|documents|desktop|"
+    r"save|write|trash|ram|memory|cpu|ip address|wifi|apps?|application|command|"
+    r"terminal|script|install|~/|home folder)\b|~/",
+    re.IGNORECASE,
+)
 
 
 def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
-    """Tool filters for a task: each optional group when the request or earlier calls need it."""
+    """Tool filters for a task, decided from the request and the tools used so far."""
     request = messages[0].text if messages else ""
     called = {call.name.split("_", 1)[0] for m in messages for call in m.tool_calls}
-    filters = ALWAYS
-    if "browser" in called or _BROWSER_REQUEST.search(request):
+    browser = "browser" in called or bool(_BROWSER_REQUEST.search(request))
+    web = "web" in called or bool(_WEB_REQUEST.search(request))
+    local = (
+        not (browser or web)
+        or bool(_LOCAL_REQUEST.search(request))
+        or bool(called & {"fs", "app", "system", "network", "shell"})
+    )
+    filters: tuple[str, ...] = (LOCAL if local else ()) + CONTROL
+    if browser:
         filters += BROWSER
-    if "web" in called or _WEB_REQUEST.search(request):
+    if web:
         filters += WEB
     return filters

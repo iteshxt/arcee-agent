@@ -97,6 +97,8 @@ class ModelTurn:
     call: WireCall | None
     text: str
     seconds: float
+    # Of `seconds`, the time spent waiting on rate limits before the model was asked.
+    waited: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,7 +371,7 @@ class Agent:
         return ToolRequest(
             core_system(home=self._home, now=self._clock(), plan=guidance),
             tuple(messages),
-            native_tools(tools),
+            native_tools(tools, compact=self._ladder[0].profile.tool_detail == "compact"),
             max_tokens=MAX_TOKENS,
         )
 
@@ -397,6 +399,7 @@ class Agent:
                 completion.tool_calls[0] if completion.tool_calls else None,
                 completion.text,
                 time.monotonic() - started,
+                model.last_wait_s,
             )
         )
         return completion

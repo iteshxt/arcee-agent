@@ -7,6 +7,7 @@ labelled send, delete, pay and the like, or typing into a password or card
 field, needs the user's confirmation. Everything read from pages is untrusted.
 """
 
+import html
 import re
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Literal
@@ -62,6 +63,12 @@ class _BrowserTool[A: ToolArgs](Tool[A]):
             params["tab"] = self.session.tab
         return await self._call(method, **params)
 
+    async def _tab_on_site(self, url: str) -> int | None:
+        host = urlparse(url).netloc
+        tabs: list[dict[str, Any]] = await self._call("tabs")
+        same = next((t for t in tabs if urlparse(str(t.get("url", ""))).netloc == host), None)
+        return None if same is None else int(same["id"])
+
     async def _tab_for(self, request: str) -> int | None:
         """The open tab the request names by its title or site, if exactly one fits best."""
         words = {w for w in re.findall(r"[a-z0-9]{3,}", request.lower()) if w not in _COMMON}
@@ -109,6 +116,12 @@ class BrowserTabs(_BrowserTool[TabsArgs]):
                 tabs = await self._call("tabs")
                 return ToolResult.ok(f"{len(tabs)} tabs open", data={"tabs": tabs})
             if args.action == "new":
+                if args.url and (same := await self._tab_on_site(args.url)) is not None:
+                    # One tab per site: switch to the open one instead of adding another.
+                    await self._call("switch_tab", tab=same)
+                    self.session.tab = same
+                    page = await self._call("navigate", url=args.url, tab=same)
+                    return ToolResult.ok(f"Switched to the open tab for {args.url}", data=page)
                 opened = await self._call("new_tab", url=args.url)
                 self.session.tab = opened["id"]
                 return ToolResult.ok(f"Opened a new tab at {args.url}", data=opened)
@@ -214,6 +227,10 @@ class BrowserElements(_BrowserTool[ElementsArgs]):
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         elements: list[dict[str, Any]] = page.get("elements", [])
+        for element in elements:
+            # Some sites double-escape their labels (Gmail shows "&amp;").
+            element["name"] = html.unescape(str(element.get("name", "")))
+        page["text_excerpt"] = html.unescape(str(page.get("text_excerpt", "")))
         self.session.elements = {e["id"]: e for e in elements}
         summary = f"{page.get('title', 'Page')}: {len(elements)} elements"
         return ToolResult.ok(summary, data=page)
@@ -246,6 +263,7 @@ class BrowserReadText(_BrowserTool[ReadArgs]):
             )
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
+        page["text"] = html.unescape(str(page.get("text", "")))
         return ToolResult.ok(f"Read {page.get('title', 'the page')}", data=page)
 
 

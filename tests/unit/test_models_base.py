@@ -128,6 +128,24 @@ class TestRateLimiting:
             await adapter.complete(request())
         assert clock.sleeps == list(BACKOFF_S)
 
+    async def test_timed_rate_limits_are_waited_out_past_the_schedule(self) -> None:
+        clock = FakeClock()
+        limited = [RateLimitedError(retry_after_s=10) for _ in range(len(BACKOFF_S) + 3)]
+        adapter = FakeAdapter([*limited, GOOD], clock=clock)
+
+        response = await adapter.complete(request())
+
+        assert response.attempts == 1
+        assert sum(clock.sleeps) == 10 * len(limited)
+
+    async def test_timed_rate_limits_give_up_after_the_total_budget(self) -> None:
+        clock = FakeClock()
+        adapter = FakeAdapter([RateLimitedError(retry_after_s=50)] * 5, clock=clock)
+
+        with pytest.raises(ModelUnavailableError):
+            await adapter.complete(request())
+        assert sum(clock.sleeps) <= 120
+
     async def test_retry_after_beyond_limit_is_unavailable_at_once(self) -> None:
         clock = FakeClock()
         adapter = FakeAdapter([RateLimitedError(retry_after_s=600), GOOD], clock=clock)
