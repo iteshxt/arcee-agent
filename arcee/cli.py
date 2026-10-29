@@ -174,6 +174,7 @@ async def run(
             home=Path.home(),
             limits=limits,
             planner=planner,
+            notes=store,
             plan_if=needs_plan if plan == "auto" else lambda request: True,
             on_event=on_event,
         )

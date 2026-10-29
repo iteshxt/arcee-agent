@@ -7,12 +7,13 @@ substitution, redirection, chaining) needs confirmation, and the commands that
 can destroy data or escalate privileges are refused outright.
 """
 
+import os
 import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 
@@ -90,6 +91,18 @@ class Policy:
     )
     # "Ask me for everything": every `auto` becomes `confirm`.
     confirm_all: bool = False
+    # Path rules: Arcee works inside `home` and writes without asking in `workspace`.
+    home: Path = field(default_factory=Path.home)
+    workspace_name: str = "Arcee"
+
+    @property
+    def workspace(self) -> Path:
+        return self.home / self.workspace_name
+
+    def in_workspace(self, path: str) -> bool:
+        """Whether `path` (with ~ or relative to home) lies inside the workspace."""
+        expanded = self.home / path[2:] if path.startswith("~/") else self.home / path
+        return self.workspace in Path(os.path.normpath(expanded)).parents
 
     def classify_shell(self, command: str) -> ShellVerdict:
         """Decide the tier of one `shell.run` command line."""

@@ -36,7 +36,7 @@ from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
 from arcee.models.errors import MalformedReplyError
-from arcee.tools.base import ToolContext
+from arcee.tools.base import Notes, ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
 from arcee.tools.registry import (
     AnyTool,
@@ -177,6 +177,7 @@ class Agent:
         home: Path,
         limits: Limits = DEFAULT_LIMITS,
         planner: Planner | None = None,
+        notes: Notes | None = None,
         plan_if: Callable[[str], bool] = lambda request: True,
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
@@ -185,6 +186,7 @@ class Agent:
             raise ValueError("the escalation ladder needs at least one model")
         self._ladder = list(ladder)
         self._planner = planner
+        self._notes = notes
         self._plan_if = plan_if
         self._registry = registry
         self._executor = executor
@@ -196,7 +198,7 @@ class Agent:
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
-        ctx = ToolContext(task_id=task_id, home=self._home)
+        ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
                 planned = self._planner is not None and self._plan_if(request)

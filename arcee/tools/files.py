@@ -9,15 +9,16 @@ import asyncio
 import contextlib
 import fnmatch
 import os
+import shutil
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, ClassVar, Final, Literal
 
 from pydantic import Field
 
-from arcee.core.policy import Tier
+from arcee.core.policy import Policy, Tier
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 
 MAX_ENTRIES: Final = 200
@@ -384,3 +385,192 @@ def _untrashable(path: Path, ctx: ToolContext) -> str | None:
     if path == ctx.home or ctx.home not in path.parents:
         return "only files inside your home folder can be trashed"
     return None
+
+
+# --- Changing files: write, move, copy, open ------------------------------------
+#
+# Nothing here works outside the home folder, nothing overwrites by accident, and
+# everything but writing inside the workspace asks first (spec section 11).
+
+MAX_WRITE_CHARS: Final = 1_000_000
+
+
+def _inside_home(path: Path, ctx: ToolContext) -> bool:
+    normal = Path(os.path.normpath(path))
+    return normal == ctx.home or ctx.home in normal.parents
+
+
+class WriteArgs(ToolArgs):
+    path: str = Field(description="File to write, e.g. ~/Arcee/notes.md")
+    content: str = Field(max_length=MAX_WRITE_CHARS)
+    mode: Literal["create", "overwrite", "append"] = Field(
+        default="create", description="create fails if the file exists"
+    )
+
+
+class FsWrite(Tool[WriteArgs]):
+    name = "fs.write"
+    description = (
+        "Write text to a file in the home folder: create a new file, overwrite one, or append. "
+        "Inside ~/Arcee/ it runs at once; anywhere else the user confirms."
+    )
+    usage = Usage(
+        when="The user asked you to save, create or update a text file.",
+        avoid="Changing a file the user did not mention; prefer ~/Arcee/ for new files.",
+        mistakes="Using overwrite when the user asked to add to a file (use append).",
+        example='fs.write(path="~/Arcee/summary.md", content="# Summary\\n...")',
+    )
+    args_model = WriteArgs
+    tier = Tier.CONFIRM
+    risk = "medium"
+    timeout_s = 10
+
+    def tier_for(self, args: WriteArgs, policy: Policy) -> Tier:
+        return Tier.AUTO if policy.in_workspace(args.path) else Tier.CONFIRM
+
+    def sentence(self, args: WriteArgs) -> str:
+        verb = {"create": "Create", "overwrite": "Overwrite", "append": "Append to"}[args.mode]
+        return f"{verb} {args.path} ({len(args.content)} characters)?"
+
+    def preview(self, args: WriteArgs) -> tuple[str, ...]:
+        first = args.content.strip().splitlines()[:1]
+        return (args.path, *(f"starts: {line[:80]}" for line in first))
+
+    async def run(self, args: WriteArgs, ctx: ToolContext) -> ToolResult:
+        path = resolve(args.path, ctx)
+        if not _inside_home(path, ctx) or path == ctx.home:
+            return ToolResult.fail("only files inside your home folder can be written")
+        if path.is_dir():
+            return ToolResult.fail(f"{display(path, ctx)} is a folder")
+        if args.mode == "create" and path.exists():
+            return ToolResult.fail(f"{display(path, ctx)} already exists; use overwrite or append")
+        await asyncio.to_thread(_write, path, args.content, append=args.mode == "append")
+        data = {"path": display(path, ctx), "mode": args.mode, "chars": len(args.content)}
+        return ToolResult.ok(f"Wrote {display(path, ctx)} ({args.mode})", data=data)
+
+
+def _write(path: Path, content: str, *, append: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a" if append else "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+class MoveArgs(ToolArgs):
+    src: str = Field(description="File or folder to move or rename")
+    dst: str = Field(description="New path, or an existing folder to move it into")
+
+
+class _Transfer(Tool[MoveArgs]):
+    """Shared checks for move and copy: both ends in home, never overwrite."""
+
+    args_model = MoveArgs
+    tier = Tier.CONFIRM
+    risk = "medium"
+    timeout_s = 120
+    verb: ClassVar[str]
+
+    def sentence(self, args: MoveArgs) -> str:
+        return f"{self.verb} {args.src} to {args.dst}?"
+
+    def preview(self, args: MoveArgs) -> tuple[str, ...]:
+        return (f"from {args.src}", f"to {args.dst}")
+
+    def _plan(self, args: MoveArgs, ctx: ToolContext) -> tuple[Path, Path] | str:
+        src, dst = resolve(args.src, ctx), resolve(args.dst, ctx)
+        if not src.exists():
+            return f"{display(src, ctx)} does not exist"
+        if not (_inside_home(src, ctx) and _inside_home(dst, ctx)) or src == ctx.home:
+            return "both paths must be inside your home folder"
+        if dst.is_dir():
+            dst = dst / src.name
+        if dst.exists():
+            return f"{display(dst, ctx)} already exists; choose another name"
+        if src.is_dir() and (dst == src or src in dst.parents):
+            return "cannot put a folder inside itself"
+        return src, dst
+
+
+class FsMove(_Transfer):
+    name = "fs.move"
+    verb = "Move"
+    description = "Move or rename a file or folder inside the home folder. Never overwrites."
+    usage = Usage(
+        when="The user asked to move, rename or organise files.",
+        avoid="Deleting: use fs.trash. Copying: use fs.copy.",
+        mistakes="Giving a folder as dst when you meant a new name: dst folders receive the "
+        "item under its own name.",
+        example='fs.move(src="~/Downloads/cv.pdf", dst="~/Documents/jobs")',
+    )
+
+    async def run(self, args: MoveArgs, ctx: ToolContext) -> ToolResult:
+        plan = self._plan(args, ctx)
+        if isinstance(plan, str):
+            return ToolResult.fail(plan)
+        src, dst = plan
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(shutil.move, src, dst)
+        data = {"from": display(src, ctx), "to": display(dst, ctx)}
+        return ToolResult.ok(f"Moved {data['from']} to {data['to']}", data=data)
+
+
+class FsCopy(_Transfer):
+    name = "fs.copy"
+    verb = "Copy"
+    description = "Copy a file or folder inside the home folder. Never overwrites."
+    usage = Usage(
+        when="The user asked for a copy or a backup of a file or folder.",
+        avoid="Moving or renaming: use fs.move.",
+        example='fs.copy(src="~/notes.md", dst="~/Arcee/notes-backup.md")',
+    )
+
+    async def run(self, args: MoveArgs, ctx: ToolContext) -> ToolResult:
+        plan = self._plan(args, ctx)
+        if isinstance(plan, str):
+            return ToolResult.fail(plan)
+        src, dst = plan
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(_copy, src, dst)
+        data = {"from": display(src, ctx), "to": display(dst, ctx)}
+        return ToolResult.ok(f"Copied {data['from']} to {data['to']}", data=data)
+
+
+def _copy(src: Path, dst: Path) -> None:
+    if src.is_dir():
+        shutil.copytree(src, dst, symlinks=True)
+    else:
+        shutil.copy2(src, dst, follow_symlinks=False)
+
+
+class OpenArgs(ToolArgs):
+    path: str = Field(description="File or folder to open")
+
+
+class FsOpen(Tool[OpenArgs]):
+    name = "fs.open_with_default"
+    description = "Open a file or folder in its default app, as double-clicking it would."
+    usage = Usage(
+        when="The user asked to open, show or view a file or folder.",
+        avoid="You need the file's text: use fs.read.",
+        example='fs.open_with_default(path="~/Documents/report.pdf")',
+    )
+    args_model = OpenArgs
+    observation_kind = "screenshot_auto"
+    timeout_s = 15
+
+    def __init__(self, *, command: tuple[str, ...] = ("gio", "open")) -> None:
+        self._command = command
+
+    async def run(self, args: OpenArgs, ctx: ToolContext) -> ToolResult:
+        path = resolve(args.path, ctx)
+        if not path.exists():
+            return ToolResult.fail(f"{display(path, ctx)} does not exist")
+        proc = await asyncio.create_subprocess_exec(
+            *self._command,
+            str(path),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            return ToolResult.fail(err.decode(errors="replace").strip() or "could not open it")
+        return ToolResult.ok(f"Opened {display(path, ctx)}", data={"opened": display(path, ctx)})
