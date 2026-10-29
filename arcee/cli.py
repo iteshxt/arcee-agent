@@ -41,7 +41,7 @@ from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
-from arcee.models.presets import core_ladder, planner_for
+from arcee.models.presets import core_ladder, planner_for, share_budget
 from arcee.tools.builtin import builtin_registry
 
 
@@ -155,6 +155,7 @@ async def run(
     terminal = Terminal(verbose=verbose)
     ladder = core_ladder(core, host)
     planner_model = planner_for(core, host)
+    share_budget(ladder, planner_model)
     store = Store(data_dir())
     try:
         usable = await _usable(ladder, terminal)
@@ -326,6 +327,7 @@ async def evaluate_tasks(
     tasks = [task for task in load_tasks(tasks_path) if only in task.id]
     ladder = core_ladder(core, host)
     planner_model = planner_for(core, host)
+    share_budget(ladder, planner_model)
     style = Style(sys.stdout)
     terminal = Terminal(verbose=False)
     library = ExampleLibrary.load() if examples else None

@@ -116,3 +116,24 @@ class TestRequestsPerDay:
             await waiter
 
         assert limiter.remaining_today == 4
+
+
+async def test_token_budget_waits_for_room_and_settles_to_actuals() -> None:
+    clock = FakeClock()
+    limiter = RateLimiter(None, None, tpm=1000, clock=clock)
+
+    first = await limiter.acquire(600)
+    limiter.settle(first, 300)  # the provider counted fewer than estimated
+    await limiter.acquire(600)  # 300 + 600 fits
+    await limiter.acquire(600)  # 1500 would not: waits out the first minute
+
+    assert clock.sleeps == [60.0]
+
+
+async def test_a_request_bigger_than_the_budget_goes_when_the_window_is_clear() -> None:
+    clock = FakeClock()
+    limiter = RateLimiter(None, None, tpm=1000, clock=clock)
+
+    await limiter.acquire(5000)
+
+    assert clock.sleeps == []

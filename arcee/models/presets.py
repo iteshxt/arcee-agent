@@ -26,6 +26,9 @@ LFM25_8B: Final = ModelProfile(
 # The Planner's reply is a JSON object, so it runs in schema mode with Ollama's grammar.
 OMNI_PLANNER: Final = LFM3_OMNI.model_copy(update={"call_mode": "schema", "json_mode": "schema"})
 
+# Groq's free tier allows 8,000 tokens a minute for gpt-oss; stay under it with margin
+# for estimation error instead of hitting it and waiting on 429s.
+TPM: Final = {"groq": 7000}
 # Free cloud tiers (OpenRouter, Groq) allow roughly 20-30 requests a minute.
 FREE_RPM: Final = 20
 
@@ -53,8 +56,8 @@ def local_planner(host: str = DEFAULT_HOST) -> OllamaAdapter:
     return OllamaAdapter(OMNI_PLANNER, host=host, options=ON_GPU)
 
 
-def cloud_profile(model: str, *, schema: bool = False) -> ModelProfile:
-    """An OpenRouter model as the Core (native) or Planner (schema); free-tier rate."""
+def cloud_profile(model: str, *, schema: bool = False, tpm: int | None = None) -> ModelProfile:
+    """A cloud model as the Core (native) or Planner (schema), within free-tier rates."""
     return ModelProfile(
         model=model,
         context_tokens=65_536,
@@ -62,6 +65,7 @@ def cloud_profile(model: str, *, schema: bool = False) -> ModelProfile:
         call_mode="schema" if schema else "native",
         json_mode="schema" if schema else "none",
         rpm=FREE_RPM,
+        tpm=tpm,
     )
 
 
@@ -72,11 +76,19 @@ def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
     provider, _, model = choice.partition(":")
     if not model:
         raise ValueError(f"unknown core {choice!r}; use 'local' or '<provider>:<model id>'")
-    return [OpenAICompatAdapter.provider(provider, cloud_profile(model))]
+    return [OpenAICompatAdapter.provider(provider, cloud_profile(model, tpm=TPM.get(provider)))]
 
 
 def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     if choice == "local":
         return local_planner(host)
     provider, _, model = choice.partition(":")
-    return OpenAICompatAdapter.provider(provider, cloud_profile(model, schema=True))
+    return OpenAICompatAdapter.provider(
+        provider, cloud_profile(model, schema=True, tpm=TPM.get(provider))
+    )
+
+
+def share_budget(ladder: list[ModelAdapter], planner: ModelAdapter) -> None:
+    """Planner and Core on the same cloud model draw from one rate budget, as the key does."""
+    if planner.profile.tpm is not None and ladder and ladder[0].profile.tpm is not None:
+        planner.limiter = ladder[0].limiter

@@ -7,6 +7,7 @@ behaving identically, and keeps the first-try success rate
 (`ModelResponse.attempts == 1`) comparable across them.
 """
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -17,7 +18,12 @@ from typing import Any, ClassVar, Final, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from arcee.models.errors import ModelOutputError, ModelUnavailableError, RetryableError
+from arcee.models.errors import (
+    ModelOutputError,
+    ModelUnavailableError,
+    RateLimitedError,
+    RetryableError,
+)
 from arcee.models.jsonfix import ReplyError, parse_reply, retry_prompt
 from arcee.models.limiter import SYSTEM_CLOCK, Clock, RateLimiter
 
@@ -26,6 +32,8 @@ MAX_RETRIES: Final = 2
 BACKOFF_S: Final = (1.0, 2.0, 4.0, 8.0)
 # A provider asking for a longer wait than this is treated as unavailable.
 MAX_RETRY_AFTER_S: Final = 60.0
+# Total time spent waiting on rate limits the provider timed, before giving up.
+MAX_RATE_LIMIT_WAIT_S: Final = 120.0
 
 
 class ModelProfile(BaseModel):
@@ -44,6 +52,7 @@ class ModelProfile(BaseModel):
     context_tokens: int = Field(ge=2048)
     rpm: int | None = Field(default=None, ge=1)
     rpd: int | None = Field(default=None, ge=1)
+    tpm: int | None = Field(default=None, ge=100, description="Tokens per minute to stay under.")
     cost_tier: Literal["free", "paid", "local"]
     thinking: bool | None = Field(
         default=None, description="Reasoning before answering; None keeps the provider default."
@@ -143,7 +152,9 @@ class ModelAdapter(ABC):
     def __init__(self, profile: ModelProfile, *, clock: Clock = SYSTEM_CLOCK) -> None:
         self.profile = profile
         self._clock = clock
-        self.limiter = RateLimiter(profile.rpm, profile.rpd, quota_tz=self.quota_tz, clock=clock)
+        self.limiter = RateLimiter(
+            profile.rpm, profile.rpd, tpm=profile.tpm, quota_tz=self.quota_tz, clock=clock
+        )
 
     @abstractmethod
     async def _send(self, request: RawRequest) -> Completion:
@@ -223,16 +234,42 @@ class ModelAdapter(ABC):
 
     async def _send_with_backoff(self, request: RawRequest) -> Completion:
         backoff = iter(BACKOFF_S)
+        waited = 0.0
+        estimate = estimate_tokens(request)
         while True:
-            await self.limiter.acquire()
+            entry = await self.limiter.acquire(estimate)
             try:
-                return await self._send(request)
+                completion = await self._send(request)
+                used = completion.usage.input_tokens + completion.usage.output_tokens
+                self.limiter.settle(entry, used)
+                return completion
             except RetryableError as exc:
                 delay = next(backoff, None)
                 wait = max(delay or 0.0, exc.retry_after_s or 0.0)
-                if delay is None or wait > MAX_RETRY_AFTER_S:
+                # A provider that says how long to wait (per-minute token limits do) is
+                # waited for up to MAX_RATE_LIMIT_WAIT_S in total, past the usual schedule.
+                told = isinstance(exc, RateLimitedError) and exc.retry_after_s is not None
+                within = waited + wait <= MAX_RATE_LIMIT_WAIT_S
+                gave_up = not within if told else delay is None
+                if wait > MAX_RETRY_AFTER_S or gave_up:
                     raise ModelUnavailableError(f"{self.profile.model}: {exc}") from exc
+                waited += wait
                 await self._clock.sleep(wait)
+
+
+# Measured on gpt-oss: about 5 characters per token for these prompts; 4.5 errs high.
+CHARS_PER_TOKEN: Final = 4.5
+# Replies are usually short; a full max_tokens reservation would starve the budget.
+EXPECTED_OUTPUT_TOKENS: Final = 400
+
+
+def estimate_tokens(request: RawRequest) -> int:
+    """A cautious size for `request`, for token-per-minute budgets."""
+    chars = len(request.system) + sum(len(m.text) + 20 for m in request.messages)
+    chars += sum(len(json.dumps(dict(c.args))) for m in request.messages for c in m.tool_calls)
+    chars += len(json.dumps(list(request.tools))) if request.tools else 0
+    chars += len(json.dumps(dict(request.schema))) if request.schema else 0
+    return int(chars / CHARS_PER_TOKEN) + min(request.max_tokens, EXPECTED_OUTPUT_TOKENS)
 
 
 # Keywords whose values are data rather than subschemas; copied without rewriting.
