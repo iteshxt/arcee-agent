@@ -134,7 +134,8 @@ function snapshot(limit, textChars) {
       (by && by.split(" ").map((id) => document.getElementById(id)?.innerText || "").join(" ")) ||
       el.innerText || el.getAttribute("placeholder") || el.getAttribute("title") ||
       el.getAttribute("alt") || el.value || "";
-    return text.replace(/\s+/g, " ").trim().slice(0, 160);
+    const max = el.getAttribute("role") === "row" || el.tagName === "TR" ? 240 : 160;
+    return text.replace(/\s+/g, " ").trim().slice(0, max);
   };
   const visible = (el) => {
     const r = el.getBoundingClientRect();
@@ -150,7 +151,14 @@ function snapshot(limit, textChars) {
   // on screen, then what is off screen: a short limit should still show what matters.
   const main = (el) => !!el.closest("main, [role=main]");
   const rank = (el) => (inView(el) ? 0 : 2) + (main(el) ? 0 : 1);
-  const all = [...document.querySelectorAll(SELECTOR)].filter(visible);
+  // A row (an email in a list, a table line) is one element: its text already says
+  // what it is, and the checkboxes and buttons inside it only crowd the list. Fields
+  // inside rows stay, since typing needs them.
+  const insideRow = (el) => {
+    const row = el.parentElement && el.parentElement.closest("[role=row], tr");
+    return !!row && row !== el && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+  };
+  const all = [...document.querySelectorAll(SELECTOR)].filter((el) => visible(el) && !insideRow(el));
   all.sort((a, b) => rank(a) - rank(b));
   const elements = [];
   for (const el of all.slice(0, limit)) {

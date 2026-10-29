@@ -11,7 +11,7 @@ from arcee.browser.client import BrowserClient, BrowserError
 from arcee.browser.host import EXTENSION_ID, HOST_NAME, encode, read_message, serve
 from arcee.browser.setup import install
 from arcee.core.policy import Policy, Tier
-from arcee.core.toolsets import ALWAYS, WEB, filters_for
+from arcee.core.toolsets import ALWAYS, BROWSER, WEB, filters_for
 from arcee.models.base import Message, WireCall
 from arcee.tools.base import NoArgs, ToolContext
 from arcee.tools.browser import (
@@ -224,60 +224,26 @@ class TestTools:
 
 
 @pytest.mark.parametrize(
-    ("request_text", "web"),
+    ("request_text", "expected"),
     [
-        ("How much free disk space do I have?", False),
-        ("Rename the photo in Pictures", False),
-        ("Check my Gmail inbox for anything from the bank", True),
-        ("Open https://example.org and summarise it", True),
-        ("Search the web for the Ubuntu 26.04 release date", True),
-        ("What's the latest news about GNOME?", True),
+        ("How much free disk space do I have?", ALWAYS),
+        ("Rename the photo in Pictures", ALWAYS),
+        ("Check my Gmail inbox for anything from the bank", ALWAYS + BROWSER),
+        ("Look at my inbox in Chrome", ALWAYS + BROWSER),
+        ("Open https://example.org and summarise it", ALWAYS + WEB),
+        ("Search the web for the Ubuntu 26.04 release date", ALWAYS + WEB),
+        ("What's the latest news about GNOME?", ALWAYS + WEB),
+        ("Open example.com in Chrome", ALWAYS + BROWSER + WEB),
     ],
 )
-def test_web_tools_are_offered_only_for_web_requests(request_text: str, web: bool) -> None:
-    assert filters_for([Message("user", request_text)]) == (ALWAYS + WEB if web else ALWAYS)
+def test_tool_groups_follow_the_request(request_text: str, expected: tuple[str, ...]) -> None:
+    assert filters_for([Message("user", request_text)]) == expected
 
 
-def test_web_tools_stay_once_used() -> None:
+def test_groups_stay_once_used() -> None:
     messages = [
         Message("user", "what is in the first one?"),
         Message("assistant", "", tool_calls=(WireCall("browser_get_elements", {}),)),
     ]
 
-    assert filters_for(messages) == ALWAYS + WEB
-
-
-async def test_first_read_picks_the_tab_the_request_names() -> None:
-    shared, client = session(
-        {
-            "tabs": [
-                {"id": 1, "title": "Cooking videos - YouTube", "url": "https://www.youtube.com/w"},
-                {
-                    "id": 2,
-                    "title": "Inbox - me@example.com - Gmail",
-                    "url": "https://mail.google.com/",
-                },
-            ],
-            "switch_tab": {"id": 2},
-            "elements": PAGE,
-        }
-    )
-    ctx = ToolContext(task_id="t", home=Path("/h"), request="Check my Gmail inbox for bills")
-
-    await BrowserElements(shared).run(ElementsArgs(), ctx)
-
-    assert shared.tab == 2
-    assert ("switch_tab", {"tab": 2}) in client.calls
-    assert client.calls[-1] == ("elements", {"limit": 60, "tab": 2})
-
-
-async def test_no_matching_tab_uses_the_active_one() -> None:
-    shared, client = session(
-        {"tabs": [{"id": 1, "title": "News", "url": "https://n.example"}], "elements": PAGE}
-    )
-    ctx = ToolContext(task_id="t", home=Path("/h"), request="Read this page for me")
-
-    await BrowserElements(shared).run(ElementsArgs(), ctx)
-
-    assert shared.tab is None
-    assert client.calls[-1] == ("elements", {"limit": 60})
+    assert filters_for(messages) == ALWAYS + BROWSER

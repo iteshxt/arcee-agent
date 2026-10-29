@@ -1,8 +1,10 @@
 """Which tool namespaces a request needs (spec section 6, step 2: offer only what fits).
 
-Every tool offered costs prompt space and a chance to pick the wrong one, and
-the browser and web tools add ten. They are offered only when the request is
-about the web, or once the task has used them; the rest are always offered.
+Every tool offered costs prompt space and a chance to pick the wrong one. The
+browser tools act in the user's own, signed-in Chrome; the web tools fetch and
+search anonymously. Offered together, a 1.7B model fetched Gmail anonymously
+instead of reading the open, signed-in tab. So each group comes only with
+requests about it, or once the task has used it.
 """
 
 import re
@@ -12,19 +14,27 @@ from typing import Final
 from arcee.models.base import Message
 
 ALWAYS: Final = ("fs.*", "app.*", "system.*", "network.*", "shell.*", "control.*")
-WEB: Final = ("web.*", "browser.*")
+BROWSER: Final = ("browser.*",)
+WEB: Final = ("web.*",)
+_BROWSER_REQUEST: Final = re.compile(
+    r"\b(browser|chrome|tabs?|gmail|e-?mails?|mail|inbox|youtube|my account|"
+    r"log ?in|sign ?in|click|this page|the page|open page|site i)\b",
+    re.IGNORECASE,
+)
 _WEB_REQUEST: Final = re.compile(
-    r"\b(browser|chrome|tabs?|web|websites?|sites?|pages?|links?|urls?|online|internet|"
-    r"google|search the|look up|news|gmail|e-?mails?|mail|inbox|youtube|wikipedia|"
-    r"download from|log ?in|sign ?in)\b|https?://|www\.|\.(com|org|net|io|in)\b",
+    r"\b(web|websites?|online|internet|google|search (the|for|online)|look up|news|"
+    r"wikipedia|links?|urls?|articles?)\b|https?://|www\.|\.(com|org|net|io|in)\b",
     re.IGNORECASE,
 )
 
 
 def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
-    """Tool filters for a task: web tools when the request or earlier calls involve the web."""
+    """Tool filters for a task: each optional group when the request or earlier calls need it."""
     request = messages[0].text if messages else ""
-    used_web = any(
-        call.name.startswith(("web_", "browser_")) for m in messages for call in m.tool_calls
-    )
-    return ALWAYS + WEB if used_web or _WEB_REQUEST.search(request) else ALWAYS
+    called = {call.name.split("_", 1)[0] for m in messages for call in m.tool_calls}
+    filters = ALWAYS
+    if "browser" in called or _BROWSER_REQUEST.search(request):
+        filters += BROWSER
+    if "web" in called or _WEB_REQUEST.search(request):
+        filters += WEB
+    return filters
