@@ -215,6 +215,9 @@ class TestPlannedTasks:
         await agent.run("hi")
 
         assert [t["function"]["name"] for t in core.requests[0].tools] == [
+            "control_wait",
+            "control_speak",
+            "control_note",
             "control_done",
             "control_ask_user",
             "control_replan",

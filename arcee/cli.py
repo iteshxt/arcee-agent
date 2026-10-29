@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, TextIO
 
+from arcee.context.examples import ExampleLibrary
 from arcee.context.store import Store, data_dir
 from arcee.core.agent import (
     Agent,
@@ -33,6 +34,7 @@ from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest, PlannerOutput
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
+from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
@@ -144,6 +146,7 @@ async def run(
     limits: Limits,
     verbose: bool,
     plan: Literal["auto", "always", "never"],
+    examples: bool = False,
 ) -> int:
     terminal = Terminal(verbose=verbose)
     ladder = local_core_ladder(host)
@@ -174,6 +177,8 @@ async def run(
             home=Path.home(),
             limits=limits,
             planner=planner,
+            notes=store,
+            examples=ExampleLibrary.load() if examples else None,
             plan_if=needs_plan if plan == "auto" else lambda request: True,
             on_event=on_event,
         )
@@ -264,6 +269,7 @@ async def evaluate(
     only: str,
     report: Path | None,
     raw: bool,
+    examples: bool,
 ) -> int:
     """Run the eval suite on one tier of the local ladder and print the results."""
     cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
@@ -286,8 +292,15 @@ async def evaluate(
                 line += "  " + style.dim("; ".join(result.problems)[:150])
             print(line, flush=True)
 
+        library = ExampleLibrary.load() if examples else None
         results = await run_cases(
-            model, builtin_registry(), cases, repeat=repeat, guards=not raw, on_result=show
+            model,
+            builtin_registry(),
+            cases,
+            repeat=repeat,
+            guards=not raw,
+            examples=library,
+            on_result=show,
         )
     finally:
         await asyncio.gather(*(m.aclose() for m in ladder))
@@ -295,6 +308,42 @@ async def evaluate(
     if report is not None:
         text = json.dumps([_row(r) for r in results], indent=1)
         await asyncio.to_thread(report.write_text, text)
+    return 0
+
+
+async def evaluate_tasks(
+    tasks_path: Path, *, host: str, only: str, plan: str, examples: bool
+) -> int:
+    """Run whole tasks end to end in throwaway homes and check their outcomes."""
+    tasks = [task for task in load_tasks(tasks_path) if only in task.id]
+    ladder = local_core_ladder(host)
+    planner_model = local_planner(host)
+    style = Style(sys.stdout)
+    terminal = Terminal(verbose=False)
+    library = ExampleLibrary.load() if examples else None
+    results: list[TaskResult] = []
+    try:
+        usable = await _usable(ladder, terminal)
+        if not usable:
+            print(f"{ladder[0].profile.model} is not available")
+            return 2
+        print(f"{len(tasks)} tasks, plan={plan}, examples={'on' if examples else 'off'}\n")
+        for task in tasks:
+            result = await run_task(
+                task, usable, planner_model=planner_model, plan=plan, examples=library
+            )
+            results.append(result)
+            mark = style.green("PASS") if result.passed else style.red("FAIL")
+            line = (
+                f"{mark} {task.id:<28} {result.steps:>2} steps {result.model_calls:>2} calls "
+                f"{result.seconds:5.1f}s" + (" planned" if result.planned else "")
+            )
+            if not result.passed:
+                line += "  " + style.dim("; ".join(result.problems)[:140])
+            print(line, flush=True)
+    finally:
+        await asyncio.gather(*(m.aclose() for m in [*ladder, planner_model]))
+    print("\n" + task_summary(results))
     return 0
 
 
@@ -328,6 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--max-seconds", type=float, default=600.0)
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
+    run_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
     run_cmd.add_argument(
         "--plan",
         choices=("auto", "always", "never"),
@@ -339,6 +389,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
     history_cmd.add_argument("-n", type=int, default=15, help="how many tasks to list")
 
+    tasks_cmd = sub.add_parser("eval-tasks", help="run whole tasks and check their outcomes")
+    tasks_cmd.add_argument("--tasks", type=Path, default=Path("tests/eval/tasks.toml"))
+    tasks_cmd.add_argument("--only", default="", help="task id substring")
+    tasks_cmd.add_argument("--plan", choices=("auto", "always", "never"), default="auto")
+    tasks_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
+    tasks_cmd.add_argument("--host", default=host)
+
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
     eval_cmd.add_argument("--cases", type=Path, default=Path("tests/eval/cases.toml"))
     eval_cmd.add_argument("--tier", type=int, choices=(1, 2, 3), default=1)
@@ -348,12 +405,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     eval_cmd.add_argument(
         "--raw", action="store_true", help="judge the raw model, without the reply guards"
     )
+    eval_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
     eval_cmd.add_argument("--host", default=host)
 
     args = parser.parse_args(argv)
     try:
         if args.command == "history":
             return asyncio.run(history(args.task_id, args.n))
+        if args.command == "eval-tasks":
+            return asyncio.run(
+                evaluate_tasks(
+                    args.tasks,
+                    host=_host(args.host),
+                    only=args.only,
+                    plan=args.plan,
+                    examples=args.examples,
+                )
+            )
         if args.command == "eval":
             return asyncio.run(
                 evaluate(
@@ -364,6 +432,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     only=args.only,
                     report=args.report,
                     raw=args.raw,
+                    examples=args.examples,
                 )
             )
         limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
@@ -375,11 +444,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 limits=limits,
                 verbose=args.verbose,
                 plan=args.plan,
+                examples=args.examples,
             )
         )
     except KeyboardInterrupt:
         print("\ncancelled", file=sys.stderr)
         return 130
+
+
+# Off by default: on LFM3-Omni they lowered the eval from 91% to 89% and whole
+# tasks from 15/15 to 13/15, and made runs slower (decision 0006).
+EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
 
 
 def _host(value: str) -> str:

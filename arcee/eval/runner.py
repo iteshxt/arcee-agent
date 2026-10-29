@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from arcee.context.examples import ExampleLibrary
 from arcee.core.agent import Agent
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
@@ -104,6 +105,7 @@ async def run_cases(
     *,
     repeat: int = 1,
     guards: bool = True,
+    examples: ExampleLibrary | None = None,
     on_result: Callable[[CaseResult], None] = lambda result: None,
 ) -> list[CaseResult]:
     """Judge one decision per case.
@@ -119,6 +121,7 @@ async def run_cases(
         Executor(Gate(Policy(), user)),
         user,
         home=EVAL_HOME,
+        examples=examples,
         clock=lambda: EVAL_NOW,
     )
     results: list[CaseResult] = []

@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS observations (
     PRIMARY KEY (task_id, n),
     FOREIGN KEY (task_id, n) REFERENCES steps(task_id, n)
 );
+CREATE TABLE IF NOT EXISTS memories (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT,
+    text       TEXT NOT NULL,
+    importance REAL NOT NULL,
+    created    REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS tasks_started ON tasks(started);
 """
 
@@ -192,6 +199,29 @@ class Store:
                 )
 
         await self._run(write)
+
+    async def save_note(self, task_id: str, text: str, importance: float) -> str:
+        """`control.note`: a durable memory the user can see and delete (spec section 8)."""
+        note_id = f"m_{secrets.token_hex(4)}"
+
+        def write() -> None:
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO memories VALUES (?, ?, ?, ?, ?)",
+                    (note_id, task_id, redact(text), importance, time.time()),
+                )
+
+        await self._run(write)
+        return note_id
+
+    async def memories(self, limit: int = 50) -> list[tuple[str, str, float]]:
+        def read() -> list[tuple[str, str, float]]:
+            return self._db.execute(
+                "SELECT id, text, importance FROM memories ORDER BY created DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+        return await self._run(read)
 
     async def recent(self, limit: int = 10) -> list[TaskRow]:
         def read() -> list[TaskRow]:

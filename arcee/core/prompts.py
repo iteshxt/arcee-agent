@@ -16,7 +16,7 @@ MAX_TOOL_CHARS: Final = 4000
 
 
 def core_system(*, home: Path, now: datetime, plan: str = "", name: str = "Arcee") -> str:
-    """The Core's system prompt; `plan` is the plan brief for multi-step tasks."""
+    """The Core's system prompt; `plan` adds the plan brief and worked examples."""
     return _CORE.format(name=name, now=now, home=home) + (f"\n\n{plan}" if plan else "")
 
 

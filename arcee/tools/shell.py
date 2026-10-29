@@ -10,8 +10,10 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
 from collections.abc import Mapping
-from typing import Final
+from pathlib import Path
+from typing import Final, Literal
 
 from pydantic import Field
 
@@ -110,3 +112,126 @@ def _trim(raw: bytes) -> str:
     if len(text) <= MAX_OUTPUT_CHARS:
         return text
     return text[:MAX_OUTPUT_CHARS] + f"\n[truncated {len(text) - MAX_OUTPUT_CHARS} chars]"
+
+
+# --- shell.script ---------------------------------------------------------------
+
+
+class ScriptArgs(ToolArgs):
+    language: Literal["bash", "python"]
+    code: str = Field(min_length=1, max_length=20_000)
+    network: bool = Field(default=False, description="Allow internet access")
+
+
+class ShellScript(Tool[ScriptArgs]):
+    name = "shell.script"
+    description = (
+        "Run a short bash or Python script in a sandbox: the home folder is read-only, "
+        "files can only be written in a temporary folder, and there is no internet unless "
+        "network is true. The user always confirms."
+    )
+    usage = Usage(
+        when="A calculation or text processing needs a few lines of code that no single "
+        "command or tool does.",
+        avoid="One command does it (shell.run), or the task changes files in the home "
+        "folder (the sandbox cannot; use the file tools).",
+        mistakes="Writing results into the home folder: print them instead.",
+        example='shell.script(language="python", code="print(sum(range(101)))")',
+    )
+    args_model = ScriptArgs
+    tier = Tier.CONFIRM
+    risk = "medium"
+    observation_kind = "shell_output"
+    timeout_s = 120
+
+    def __init__(self, *, limits: bool = True, sandbox: bool | None = None) -> None:
+        self._limits = limits and shutil.which("systemd-run") is not None
+        # None: probe once on first use.
+        self._sandbox = sandbox
+
+    def sentence(self, args: ScriptArgs) -> str:
+        net = " with internet access" if args.network else ""
+        warning = (
+            "" if self._sandbox is not False else " Isolation is off: it can change your files."
+        )
+        return f"Run this {args.language} script{net}?{warning}"
+
+    def preview(self, args: ScriptArgs) -> tuple[str, ...]:
+        lines = args.code.strip().splitlines()
+        return (*lines[:8], *(["..."] if len(lines) > 8 else []))
+
+    async def run(self, args: ScriptArgs, ctx: ToolContext) -> ToolResult:
+        if self._sandbox is None:
+            self._sandbox = await bwrap_works()
+        interpreter = (
+            ["bash", "-c", args.code]
+            if args.language == "bash"
+            else ["python3", "-I", "-c", args.code]
+        )
+        with tempfile.TemporaryDirectory(prefix="arcee-script-") as scratch:
+            argv = interpreter
+            if self._sandbox:
+                argv = [*_bwrap(ctx.home, Path(scratch), network=args.network), *argv]
+            if self._limits:
+                argv = ["systemd-run", "--user", "--scope", "--quiet", *LIMITS, *argv]
+            env = _clean_env(os.environ, ctx) | {"HOME": scratch}
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=scratch,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                out, err = await proc.communicate()
+            except asyncio.CancelledError:
+                proc.kill()
+                await proc.wait()
+                raise
+        code = proc.returncode or 0
+        data: dict[str, object] = {
+            "exit_code": code,
+            "stdout": _trim(out),
+            "stderr": _trim(err),
+            "sandboxed": self._sandbox,
+        }
+        summary = f"{args.language} script exited {code}"
+        if code != 0:
+            return ToolResult(
+                "error", summary, data=data, error=_trim(err).strip()[:200] or summary
+            )
+        return ToolResult.ok(summary, data=data)
+
+
+def _bwrap(home: Path, scratch: Path, *, network: bool) -> list[str]:
+    """Read-only system and home, a writable scratch folder, no session bus or portals."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    argv = [
+        "bwrap",
+        "--ro-bind", "/", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+        "--tmpfs", runtime,
+        "--ro-bind", str(home), str(home),
+        "--bind", str(scratch), str(scratch),
+        "--unshare-pid",
+        "--die-with-parent",
+        "--new-session",
+    ]  # fmt: skip
+    if not network:
+        argv.append("--unshare-net")
+    return [*argv, "--"]
+
+
+async def bwrap_works() -> bool:
+    """Whether bubblewrap can create namespaces here (AppArmor may forbid it)."""
+    if shutil.which("bwrap") is None:
+        return False
+    proc = await asyncio.create_subprocess_exec(
+        "bwrap", "--ro-bind", "/", "/", "--unshare-net", "--", "true",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )  # fmt: skip
+    return await proc.wait() == 0

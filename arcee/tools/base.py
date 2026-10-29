@@ -8,7 +8,7 @@ matched paths) instead of re-deriving them from raw text (decision 0003).
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -70,12 +70,19 @@ class NoArgs(ToolArgs):
     pass
 
 
+class Notes(Protocol):
+    """Where `control.note` saves a durable memory (the store, in practice)."""
+
+    async def save_note(self, task_id: str, text: str, importance: float) -> str: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ToolContext:
     """What a running tool may use. Grows with the platform, browser and store layers."""
 
     task_id: str
     home: Path
+    notes: Notes | None = None
 
 
 @dataclass(frozen=True, slots=True)

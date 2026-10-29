@@ -4,6 +4,7 @@ They are registered like any tool so the model sees them and the registry
 validates them, but the orchestrator acts on them itself: it never calls `run`.
 """
 
+import asyncio
 from typing import Final
 
 from pydantic import Field
@@ -70,4 +71,69 @@ class Replan(_Handled[ReplanArgs]):
     args_model = ReplanArgs
 
 
+class WaitArgs(ToolArgs):
+    seconds: float = Field(gt=0, le=30)
+
+
+class Wait(Tool[WaitArgs]):
+    name = "control.wait"
+    description = "Pause for up to 30 seconds, e.g. while an app or page loads."
+    usage = Usage(
+        when="Something you started needs a moment before you can look at it.",
+        avoid="Nothing is loading; waiting does not make a tool result change.",
+        example="control.wait(seconds=3)",
+    )
+    args_model = WaitArgs
+    observation_kind = "screenshot_auto"
+    timeout_s = 35
+
+    async def run(self, args: WaitArgs, ctx: ToolContext) -> ToolResult:
+        await asyncio.sleep(args.seconds)
+        return ToolResult.ok(f"Waited {args.seconds:g}s")
+
+
+class SpeakArgs(ToolArgs):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class Speak(Tool[SpeakArgs]):
+    name = "control.speak"
+    description = "Tell the user something now without ending the task, e.g. progress."
+    usage = Usage(
+        when="A long task has news the user should hear before it finishes.",
+        avoid="Giving the final answer: reply in plain text instead.",
+    )
+    args_model = SpeakArgs
+    observation_kind = "none"
+
+    async def run(self, args: SpeakArgs, ctx: ToolContext) -> ToolResult:
+        # Shown by the CLI through the tool's summary; spoken once voice exists (phase 5).
+        return ToolResult.ok(f"Said: {args.text}")
+
+
+class NoteArgs(ToolArgs):
+    text: str = Field(min_length=1, max_length=500, description="One durable fact")
+    importance: float = Field(default=0.5, ge=0, le=1)
+
+
+class Note(Tool[NoteArgs]):
+    name = "control.note"
+    description = "Save a lasting fact about the user or their setup to memory."
+    usage = Usage(
+        when="The user states a preference or fact worth remembering next time "
+        '("my work folder is ~/code", "I use Firefox").',
+        avoid="Facts only about this task, or anything secret such as passwords.",
+        example='control.note(text="The user\'s work folder is ~/code", importance=0.8)',
+    )
+    args_model = NoteArgs
+    observation_kind = "none"
+
+    async def run(self, args: NoteArgs, ctx: ToolContext) -> ToolResult:
+        if ctx.notes is None:
+            return ToolResult.fail("memory is not available in this session")
+        note_id = await ctx.notes.save_note(ctx.task_id, args.text, args.importance)
+        return ToolResult.ok(f"Remembered: {args.text}", data={"id": note_id})
+
+
 CONTROL_TOOLS: Final = (Done, AskUser, Replan)
+UTILITY_CONTROL_TOOLS: Final = (Wait, Speak, Note)

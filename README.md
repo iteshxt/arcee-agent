@@ -15,7 +15,7 @@ uv sync
 uv run arcee-cli run "How much free disk space do I have?"
 ```
 
-Each step is printed as it happens: the model's tool call, the result, and any guard or escalation. Read-only commands run at once; anything that changes files asks first (`Allow? [y/N]`), and destructive commands such as `rm -rf` or `sudo` are refused. Add `-v` to see the model's reasoning when it uses thinking mode. `ollama pull lfm2.5:8b` adds the slower top tier of the escalation ladder.
+Each step is printed as it happens: the model's tool call, the result, and any guard or escalation. Read-only commands run at once; anything that changes files asks first (`Allow? [y/N]`), and destructive commands such as `rm -rf` or `sudo` are refused. Add `-v` to see the model's reasoning when it uses thinking mode. `uv run arcee-cli history` lists past tasks; `uv run arcee-cli eval` scores single decisions and `uv run arcee-cli eval-tasks` runs whole tasks in a throwaway home folder. `ollama pull lfm2.5:8b` adds the slower top tier of the escalation ladder.
 
 ## Development setup
 

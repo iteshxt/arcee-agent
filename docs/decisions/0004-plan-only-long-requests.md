@@ -25,3 +25,7 @@ The single-decision eval suite cannot measure the Planner, so this decision rest
 - Short and two-part requests answer in seconds instead of minutes.
 - Long requests still get a plan, with its cost and its over-splitting; a stronger Planner tier (LFM2.5 8B or thinking mode) may fix that.
 - The heuristic is a guess. Multi-step eval tasks (whole tasks with checkable end states, not single decisions) are needed to measure when planning helps; until then, revisit when the Planner model changes.
+
+## Update (whole-task evals)
+
+On the 15 whole tasks (`arcee-cli eval-tasks`), LFM3-Omni with all 23 tools: `--plan auto` (which planned none of them) passed 15/15 with a median of 22 s; `--plan always` passed 12/15 with a median of 65 s and up to 8 steps. The Planner lost the per-folder count, the exact calculation and the ask-when-missing task. The heuristic stands.
