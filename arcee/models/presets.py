@@ -13,8 +13,13 @@ LFM25_8B: Final = ModelProfile(
     model="lfm2.5:8b", context_tokens=32_768, cost_tier="local", call_mode="native"
 )
 
+# The Planner's reply is a JSON object, so it runs in schema mode with Ollama's grammar.
+LFM3_PLANNER: Final = LFM3.model_copy(update={"call_mode": "schema", "json_mode": "schema"})
+
 # Enough for a task's history; the 1.7B model's KV cache at this size is small.
 NUM_CTX: Final = 8192
+# Options for models that fit in VRAM next to the desktop.
+ON_GPU: Final = {"num_gpu": ALL_LAYERS, "num_ctx": NUM_CTX}
 
 
 def local_core_ladder(host: str = DEFAULT_HOST) -> list[OllamaAdapter]:
@@ -22,9 +27,13 @@ def local_core_ladder(host: str = DEFAULT_HOST) -> list[OllamaAdapter]:
 
     The 8B model does not fit in 4 GB of VRAM, so Ollama decides its CPU/GPU split.
     """
-    fits = {"num_gpu": ALL_LAYERS, "num_ctx": NUM_CTX}
     return [
-        OllamaAdapter(LFM3, host=host, options=fits),
-        OllamaAdapter(LFM3_THINKING, host=host, options=fits),
+        OllamaAdapter(LFM3, host=host, options=ON_GPU),
+        OllamaAdapter(LFM3_THINKING, host=host, options=ON_GPU),
         OllamaAdapter(LFM25_8B, host=host, options={"num_ctx": NUM_CTX}),
     ]
+
+
+def local_planner(host: str = DEFAULT_HOST) -> OllamaAdapter:
+    """LFM3 in schema mode; the same weights as the Core, so no extra VRAM."""
+    return OllamaAdapter(LFM3_PLANNER, host=host, options=ON_GPU)

@@ -11,8 +11,12 @@ from pathlib import Path
 from arcee.core.protocol import ExecutorResult
 
 
-def core_system(*, home: Path, now: datetime, name: str = "Arcee") -> str:
-    return f"""\
+def core_system(*, home: Path, now: datetime, plan: str = "", name: str = "Arcee") -> str:
+    """The Core's system prompt; `plan` is the plan brief for multi-step tasks."""
+    return _CORE.format(name=name, now=now, home=home) + (f"\n\n{plan}" if plan else "")
+
+
+_CORE = """\
 You are {name}, an agent that carries out the user's request on their Ubuntu Linux desktop \
 using the tools provided.
 Now: {now:%A %Y-%m-%d %H:%M}. Home folder: {home} (written ~).
