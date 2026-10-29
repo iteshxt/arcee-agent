@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, TextIO
 
+from arcee.context.examples import ExampleLibrary
 from arcee.context.store import Store, data_dir
 from arcee.core.agent import (
     Agent,
@@ -144,6 +145,7 @@ async def run(
     limits: Limits,
     verbose: bool,
     plan: Literal["auto", "always", "never"],
+    no_examples: bool = False,
 ) -> int:
     terminal = Terminal(verbose=verbose)
     ladder = local_core_ladder(host)
@@ -175,6 +177,7 @@ async def run(
             limits=limits,
             planner=planner,
             notes=store,
+            examples=None if no_examples else ExampleLibrary.load(),
             plan_if=needs_plan if plan == "auto" else lambda request: True,
             on_event=on_event,
         )
@@ -265,6 +268,7 @@ async def evaluate(
     only: str,
     report: Path | None,
     raw: bool,
+    no_examples: bool,
 ) -> int:
     """Run the eval suite on one tier of the local ladder and print the results."""
     cases = [case for case in load_cases(cases_path) if only in case.id or only in case.scenario]
@@ -287,8 +291,15 @@ async def evaluate(
                 line += "  " + style.dim("; ".join(result.problems)[:150])
             print(line, flush=True)
 
+        library = None if no_examples else ExampleLibrary.load()
         results = await run_cases(
-            model, builtin_registry(), cases, repeat=repeat, guards=not raw, on_result=show
+            model,
+            builtin_registry(),
+            cases,
+            repeat=repeat,
+            guards=not raw,
+            examples=library,
+            on_result=show,
         )
     finally:
         await asyncio.gather(*(m.aclose() for m in ladder))
@@ -330,6 +341,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
     run_cmd.add_argument(
+        "--no-examples", action="store_true", help="leave the worked examples out of prompts"
+    )
+    run_cmd.add_argument(
         "--plan",
         choices=("auto", "always", "never"),
         default="auto",
@@ -349,6 +363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     eval_cmd.add_argument(
         "--raw", action="store_true", help="judge the raw model, without the reply guards"
     )
+    eval_cmd.add_argument(
+        "--no-examples", action="store_true", help="leave the worked examples out of prompts"
+    )
     eval_cmd.add_argument("--host", default=host)
 
     args = parser.parse_args(argv)
@@ -365,6 +382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     only=args.only,
                     report=args.report,
                     raw=args.raw,
+                    no_examples=args.no_examples,
                 )
             )
         limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
@@ -376,6 +394,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 limits=limits,
                 verbose=args.verbose,
                 plan=args.plan,
+                no_examples=args.no_examples,
             )
         )
     except KeyboardInterrupt:

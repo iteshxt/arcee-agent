@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Literal, Protocol
 
+from arcee.context.examples import ExampleLibrary
+from arcee.context.examples import render as render_examples
 from arcee.core.executor import Executor
 from arcee.core.guards import review_reply
 from arcee.core.planner import Planner
@@ -55,6 +57,8 @@ MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
 MAX_REPLANS: Final = 2
+# How much of the latest result joins the request in the example search.
+EXAMPLE_QUERY_CHARS: Final = 300
 # After this many, an answer is accepted even if a fact in it was not seen: the user
 # gets a reply rather than a loop.
 MAX_GROUNDING_NUDGES: Final = 2
@@ -178,6 +182,7 @@ class Agent:
         limits: Limits = DEFAULT_LIMITS,
         planner: Planner | None = None,
         notes: Notes | None = None,
+        examples: ExampleLibrary | None = None,
         plan_if: Callable[[str], bool] = lambda request: True,
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
@@ -187,6 +192,7 @@ class Agent:
         self._ladder = list(ladder)
         self._planner = planner
         self._notes = notes
+        self._examples = examples
         self._plan_if = plan_if
         self._registry = registry
         self._executor = executor
@@ -341,12 +347,23 @@ class Agent:
     ) -> ToolRequest:
         """The exact request the Core gets for `messages`; the eval suite uses it too."""
         tools = self._registry.select() if offered is None else offered
+        guidance = "\n\n".join(
+            block for block in (plan_brief(plan, index), self._examples_for(messages)) if block
+        )
         return ToolRequest(
-            core_system(home=self._home, now=self._clock(), plan=plan_brief(plan, index)),
+            core_system(home=self._home, now=self._clock(), plan=guidance),
             tuple(messages),
             native_tools(tools),
             max_tokens=MAX_TOKENS,
         )
+
+    def _examples_for(self, messages: Sequence[Message]) -> str:
+        """The worked examples closest to the request and the latest result, if any."""
+        if self._examples is None or not messages:
+            return ""
+        latest = [m.text[:EXAMPLE_QUERY_CHARS] for m in messages[1:] if m.role != "assistant"]
+        query = " ".join([messages[0].text, *latest[-1:]])
+        return render_examples(self._examples.search(query))
 
     async def _turn(self, state: _State, offered: Sequence[AnyTool]) -> Completion:
         model = self._ladder[state.tier]
