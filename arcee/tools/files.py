@@ -8,6 +8,7 @@ work runs in a worker thread to keep the event loop free (spec section 12).
 import asyncio
 import fnmatch
 import os
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -55,9 +56,7 @@ class ListArgs(ToolArgs):
     sort: Literal["name", "largest", "newest", "oldest"] = Field(
         default="name", description="Order: largest or newest first answers 'biggest'/'latest'"
     )
-    limit: int = Field(
-        default=MAX_ENTRIES, ge=1, le=MAX_ENTRIES, description="Return at most this many"
-    )
+    limit: int = Field(default=50, ge=1, le=MAX_ENTRIES, description="Return at most this many")
 
 
 class FsList(Tool[ListArgs]):
@@ -192,7 +191,10 @@ class SearchArgs(ToolArgs):
 
 class FsSearch(Tool[SearchArgs]):
     name = "fs.search"
-    description = "Find files under a folder by name (or pattern) or by text inside them."
+    description = (
+        "Find files under a folder (and its subfolders) by name, pattern or text inside them. "
+        "Returns the matches, their count, and how many are in each folder."
+    )
     usage = Usage(
         when="You do not know where a file is.",
         avoid="You know the folder: fs.list it instead. Three empty searches: ask the user.",
@@ -211,13 +213,21 @@ class FsSearch(Tool[SearchArgs]):
             "query": args.query,
             "root": display(root, ctx),
             "by": args.by,
-            "matches": [display(p, ctx) for p in found.matches],
             "count": len(found.matches),
         }
+        if len(found.matches) > 1:
+            data["by_folder"] = _by_folder(found.matches, ctx)
+        data["matches"] = [display(p, ctx) for p in found.matches]
         if found.truncated:
             data["truncated"] = True
         summary = f"Found {len(found.matches)} for {args.query!r} in {display(root, ctx)}"
         return ToolResult.ok(summary, data=data)
+
+
+def _by_folder(matches: list[Path], ctx: ToolContext) -> dict[str, int]:
+    """Match counts per folder, most first: grouping is a fact, not the model's job."""
+    counts = Counter(display(path.parent, ctx) for path in matches)
+    return dict(counts.most_common(10))
 
 
 @dataclass(slots=True)

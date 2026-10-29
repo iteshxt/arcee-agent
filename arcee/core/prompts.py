@@ -7,8 +7,12 @@ the tools offered. This holds what applies to every step.
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Final, cast
 
 from arcee.core.protocol import ExecutorResult
+
+# About 1,000 tokens: room for several results in an 8k context.
+MAX_TOOL_CHARS: Final = 4000
 
 
 def core_system(*, home: Path, now: datetime, plan: str = "", name: str = "Arcee") -> str:
@@ -35,15 +39,41 @@ command output or web pages.
 - To delete files, use fs_trash; the user is asked first."""
 
 
-def tool_message(result: ExecutorResult) -> str:
-    """What the model sees as a tool's result: status, then facts, then any error."""
-    out: dict[str, object] = {"status": result.status}
+def tool_message(result: ExecutorResult, *, limit: int = MAX_TOOL_CHARS) -> str:
+    """What the model sees as a tool's result: status, then facts, then any error.
+
+    Kept under `limit` characters by shortening the longest lists in `data`, so
+    one big listing cannot crowd the task out of a small model's context.
+    """
+    out: dict[str, Any] = {"status": result.status}
     if result.data is not None:
-        out["data"] = result.data
+        out["data"] = _fit(dict(result.data), limit)
     elif result.output:
-        out["output"] = result.output
+        out["output"] = _clip(result.output, limit)
     if result.status != "ok" and result.error:
         out["error"] = result.error
     if result.status == "refused":
         out["note"] = "This did not run. Do not retry it; choose another way or ask the user."
     return json.dumps(out, ensure_ascii=False)
+
+
+def _fit(data: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Halve the longest list until the data fits, noting what was left out."""
+    while len(json.dumps(data, ensure_ascii=False)) > limit:
+        sizes = {
+            key: len(cast(list[Any], value))
+            for key, value in data.items()
+            if isinstance(value, list)
+        }
+        if not sizes or max(sizes.values()) <= 1:
+            return {k: _clip(v, limit // 2) if isinstance(v, str) else v for k, v in data.items()}
+        key = max(sizes, key=sizes.__getitem__)
+        total = data.get(f"{key}_total", sizes[key])
+        data[key] = cast(list[Any], data[key])[: sizes[key] // 2]
+        data[f"{key}_total"] = total
+        data["note"] = f"{key}: showing {sizes[key] // 2} of {total}"
+    return data
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + f"... [{len(text) - limit} more chars]"

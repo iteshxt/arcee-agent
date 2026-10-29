@@ -12,7 +12,7 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 
 from arcee.context.store import Store, data_dir
 from arcee.core.agent import (
@@ -28,7 +28,7 @@ from arcee.core.agent import (
 )
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
-from arcee.core.planner import Planner
+from arcee.core.planner import Planner, needs_plan
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest, PlannerOutput
 from arcee.eval.cases import load as load_cases
@@ -137,7 +137,14 @@ async def _usable(ladder: Sequence[ModelAdapter], terminal: Terminal) -> list[Mo
     return [model for model, ok in zip(ladder, healthy, strict=True) if ok]
 
 
-async def run(request: str, *, host: str, limits: Limits, verbose: bool, plan: bool) -> int:
+async def run(
+    request: str,
+    *,
+    host: str,
+    limits: Limits,
+    verbose: bool,
+    plan: Literal["auto", "always", "never"],
+) -> int:
     terminal = Terminal(verbose=verbose)
     ladder = local_core_ladder(host)
     planner_model = local_planner(host)
@@ -151,7 +158,7 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool, plan: b
             )
             return 2
         registry = builtin_registry()
-        planner = Planner(planner_model, registry, home=Path.home()) if plan else None
+        planner = None if plan == "never" else Planner(planner_model, registry, home=Path.home())
         plans: list[PlannerOutput] = []
 
         def on_event(event: Event) -> None:
@@ -167,6 +174,7 @@ async def run(request: str, *, host: str, limits: Limits, verbose: bool, plan: b
             home=Path.home(),
             limits=limits,
             planner=planner,
+            plan_if=needs_plan if plan == "auto" else lambda request: True,
             on_event=on_event,
         )
         task_id = await store.start_task(request)
@@ -308,7 +316,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--max-seconds", type=float, default=600.0)
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
-    run_cmd.add_argument("--no-plan", action="store_true", help="skip the Planner: one step")
+    run_cmd.add_argument(
+        "--plan",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="plan the task first: auto plans multi-step requests only",
+    )
 
     history_cmd = sub.add_parser("history", help="list recent tasks, or show one")
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
@@ -345,7 +358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 host=_host(args.host),
                 limits=limits,
                 verbose=args.verbose,
-                plan=not args.no_plan,
+                plan=args.plan,
             )
         )
     except KeyboardInterrupt:

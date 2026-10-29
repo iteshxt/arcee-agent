@@ -21,6 +21,7 @@ Without a Planner the whole request is one step with every tool.
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -37,7 +38,14 @@ from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, Wi
 from arcee.models.errors import MalformedReplyError
 from arcee.tools.base import ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
-from arcee.tools.registry import AnyTool, Registry, ToolCall, ToolCallError, native_tools
+from arcee.tools.registry import (
+    AnyTool,
+    Registry,
+    ToolCall,
+    ToolCallError,
+    native_tools,
+    wire_name,
+)
 
 # Failures in a row on one tier before the next tier takes over.
 STRIKES_TO_ESCALATE: Final = 2
@@ -47,6 +55,10 @@ MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
 MAX_REPLANS: Final = 2
+NARRATION_NUDGE: Final = (
+    "That was a note to yourself, not an answer. Either call one tool now, "
+    "or reply to the user with the answer only."
+)
 BROKEN_CALL_NUDGE: Final = (
     "Your last reply was a broken tool call. Reply again with one valid tool call, "
     "or answer in plain text."
@@ -165,6 +177,7 @@ class Agent:
         home: Path,
         limits: Limits = DEFAULT_LIMITS,
         planner: Planner | None = None,
+        plan_if: Callable[[str], bool] = lambda request: True,
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
     ) -> None:
@@ -172,6 +185,7 @@ class Agent:
             raise ValueError("the escalation ladder needs at least one model")
         self._ladder = list(ladder)
         self._planner = planner
+        self._plan_if = plan_if
         self._registry = registry
         self._executor = executor
         self._asker = asker
@@ -185,7 +199,8 @@ class Agent:
         ctx = ToolContext(task_id=task_id, home=self._home)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
-                if self._planner is not None and (failed := await self._plan(state, request)):
+                planned = self._planner is not None and self._plan_if(request)
+                if planned and (failed := await self._plan(state, request)):
                     return failed
                 return await self._run_plan(state, ctx, request)
         except TimeoutError:
@@ -246,11 +261,11 @@ class Agent:
             state.messages.append(Message("user", f"New plan. Step 1: {first.do}"))
 
     def _offered(self, state: _State, step: PlanStep | None) -> list[AnyTool]:
-        """The step's tools plus the control tools; everything when the filter finds nothing."""
+        """The step's tools plus the control tools; everything when the filter matches nothing."""
         if step is None:
             return self._registry.select()
         chosen = self._registry.select(step.tools)
-        if not [tool for tool in chosen if tool.name not in CONTROL]:
+        if not chosen:
             self._emit(Guarded(state.steps, "plan step named no known tools; offering all"))
             return self._registry.select()
         return [*chosen, *(t for t in self._registry.select(sorted(CONTROL)) if t not in chosen)]
@@ -271,7 +286,15 @@ class Agent:
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
                 if reply := completion.text.strip():
-                    return _StepDone(reply)
+                    if (named := self._narrates(reply)) is None:
+                        return _StepDone(reply)
+                    self._emit(Guarded(state.steps, f"reply was narration naming {named}; nudged"))
+                    state.messages += (
+                        Message("assistant", reply),
+                        Message("user", NARRATION_NUDGE),
+                    )
+                    self._strike(state, "narrated instead of acting or answering")
+                    continue
                 self._strike(state, "the model returned nothing")
                 continue
             try:
@@ -385,6 +408,13 @@ class Agent:
             Message("tool", content, tool_name=call.name),
         )
 
+    def _narrates(self, reply: str) -> str | None:
+        """The tool a would-be answer names, if any: answers never mention tool names."""
+        for tool in self._registry:
+            if re.search(rf"\b{re.escape(wire_name(tool.name))}\b", reply):
+                return wire_name(tool.name)
+        return None
+
     def _strike(self, state: _State, reason: str) -> None:
         state.strikes += 1
         if state.strikes < STRIKES_TO_ESCALATE or state.tier + 1 >= len(self._ladder):
@@ -419,7 +449,12 @@ def plan_brief(plan: PlannerOutput | None, index: int) -> str:
     last = index + 1 >= len(plan.steps)
     lines.append(
         "When the current step is done, reply in plain text with what you found or did. "
-        + ("That reply is your answer to the user." if last else "The next step follows.")
+        + (
+            "That reply is your answer to the user: answer their whole request, using "
+            "what the earlier steps found."
+            if last
+            else "The next step follows."
+        )
     )
     return "\n".join(lines)
 
