@@ -19,14 +19,23 @@ class QuotaExhaustedError(ModelUnavailableError):
     """The model's requests-per-day budget is spent until the provider's quota resets."""
 
 
-class RateLimitedError(ModelError):
-    """One request was refused with HTTP 429. Raised by providers, retried by the base class."""
+class RetryableError(ModelError):
+    """One round-trip failed in a way that may succeed if repeated. Retried by the base class."""
+
+    def __init__(self, reason: str, retry_after_s: float | None = None) -> None:
+        super().__init__(reason + (f", retry after {retry_after_s}s" if retry_after_s else ""))
+        self.retry_after_s = retry_after_s
+
+
+class RateLimitedError(RetryableError):
+    """HTTP 429."""
 
     def __init__(self, retry_after_s: float | None = None) -> None:
-        super().__init__(
-            "rate limited" + (f", retry after {retry_after_s}s" if retry_after_s else "")
-        )
-        self.retry_after_s = retry_after_s
+        super().__init__("rate limited", retry_after_s)
+
+
+class ServerBusyError(RetryableError):
+    """HTTP 5xx or a dropped connection: the provider failed, not the request."""
 
 
 class ModelOutputError(ModelError):

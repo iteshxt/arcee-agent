@@ -2,7 +2,7 @@
 
 Providers only implement one raw round-trip, `_send`. The shared `complete` loop
 on top of it owns the protocol: schema passthrough, parsing, validation and the
-retry turn, plus rate limiting and 429 backoff. That keeps every provider
+retry turn, plus rate limiting and backoff on 429 and 5xx. That keeps every provider
 behaving identically, and keeps the first-try success rate
 (`ModelResponse.attempts == 1`) comparable across them.
 """
@@ -12,16 +12,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import tzinfo
 from functools import cache
-from typing import Any, ClassVar, Final, Literal, cast
+from types import TracebackType
+from typing import Any, ClassVar, Final, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from arcee.models.errors import ModelOutputError, ModelUnavailableError, RateLimitedError
+from arcee.models.errors import ModelOutputError, ModelUnavailableError, RetryableError
 from arcee.models.jsonfix import ReplyError, parse_reply, retry_prompt
 from arcee.models.limiter import SYSTEM_CLOCK, Clock, RateLimiter
 
 MAX_RETRIES: Final = 2
-# Waits between attempts after HTTP 429; one more failure gives up.
+# Waits between attempts after HTTP 429 or 5xx; one more failure gives up.
 BACKOFF_S: Final = (1.0, 2.0, 4.0, 8.0)
 # A provider asking for a longer wait than this is treated as unavailable.
 MAX_RETRY_AFTER_S: Final = 60.0
@@ -40,6 +41,9 @@ class ModelProfile(BaseModel):
     rpm: int | None = Field(default=None, ge=1)
     rpd: int | None = Field(default=None, ge=1)
     cost_tier: Literal["free", "paid", "local"]
+    thinking: bool | None = Field(
+        default=None, description="Reasoning before answering; None keeps the provider default."
+    )
     max_image_px: int = Field(default=1280, ge=256)
 
 
@@ -107,13 +111,27 @@ class ModelAdapter(ABC):
     async def _send(self, request: RawRequest) -> Completion:
         """Run one round-trip.
 
-        Raise `RateLimitedError` on HTTP 429 and `ModelUnavailableError` on any other
-        transport or server failure.
+        Raise `RateLimitedError` on HTTP 429, `ServerBusyError` on 5xx or a dropped
+        connection, and `ModelUnavailableError` on failures that repeating cannot fix.
         """
 
     @abstractmethod
     async def health(self) -> bool:
         """Cheap reachability check for the Models page and fallback decisions."""
+
+    async def aclose(self) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Release connections. Adapters without any keep the default."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
     async def complete[M: BaseModel](self, request: ModelRequest[M]) -> ModelResponse[M]:
         """Return one validated `request.schema` object, retrying with feedback on bad output."""
@@ -148,7 +166,7 @@ class ModelAdapter(ABC):
             await self.limiter.acquire()
             try:
                 return await self._send(request)
-            except RateLimitedError as exc:
+            except RetryableError as exc:
                 delay = next(backoff, None)
                 wait = max(delay or 0.0, exc.retry_after_s or 0.0)
                 if delay is None or wait > MAX_RETRY_AFTER_S:
