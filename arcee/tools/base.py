@@ -83,6 +83,8 @@ class ToolContext:
     task_id: str
     home: Path
     notes: Notes | None = None
+    # The user's request, for tools that resolve vague targets ("my Gmail tab").
+    request: str = ""
 
 
 @dataclass(frozen=True, slots=True)

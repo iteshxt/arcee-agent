@@ -234,7 +234,7 @@ class TestPlannedTasks:
         assert outcome.model_calls == 1
 
     async def test_unknown_tool_filters_fall_back_to_everything(self) -> None:
-        agent, _, core, events, _ = make([plan(("Do it", ["browser.*"]))], [Completion("ok")])
+        agent, _, core, events, _ = make([plan(("Do it", ["calendar.*"]))], [Completion("ok")])
 
         await agent.run("task")
 

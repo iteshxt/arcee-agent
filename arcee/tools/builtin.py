@@ -1,6 +1,7 @@
 """The built-in tool set for phase 1 (spec section 11, the text-mode subset)."""
 
 from arcee.tools.apps import AppList, AppOpen
+from arcee.tools.browser import BrowserSession, browser_tools
 from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
 from arcee.tools.files import (
     FsCopy,
@@ -18,7 +19,9 @@ from arcee.tools.system import NetworkStatus, SystemStatus
 from arcee.tools.web import WebFetch, WebSearch
 
 
-def builtin_registry(*, shell_limits: bool = True) -> Registry:
+def builtin_registry(
+    *, shell_limits: bool = True, browser: BrowserSession | None = None
+) -> Registry:
     """Every built-in tool: files, system facts, shell, then the control tools."""
     return Registry(
         [
@@ -36,6 +39,7 @@ def builtin_registry(*, shell_limits: bool = True) -> Registry:
             NetworkStatus(),
             WebSearch(),
             WebFetch(),
+            *browser_tools(browser),
             ShellRun(limits=shell_limits),
             ShellScript(limits=shell_limits),
             *(tool() for tool in UTILITY_CONTROL_TOOLS),
