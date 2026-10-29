@@ -128,7 +128,10 @@ class OpenAICompatAdapter(ModelAdapter):
         data = _json(response)
         # OpenRouter can answer 200 with an error object when the upstream fails.
         error = cast(dict[str, Any], data.get("error") or {})
-        status = int(error.get("code") or response.status_code) if error else response.status_code
+        # OpenRouter puts the HTTP status in error.code (also inside a 200); Groq puts a
+        # string such as "rate_limit_exceeded" there and uses the real HTTP status.
+        code = error.get("code")
+        status = code if isinstance(code, int) else response.status_code
         if status == 200 and data.get("choices"):
             return data
         message = str(error.get("message") or response.text[:200] or f"HTTP {status}")

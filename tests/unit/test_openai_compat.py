@@ -165,3 +165,16 @@ def test_core_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     [model] = core_ladder("openrouter:google/gemma-4-31b-it")
     assert (model.profile.model, model.profile.rpm) == ("google/gemma-4-31b-it", 20)
+
+
+async def test_string_error_codes_use_the_http_status() -> None:
+    limited = httpx.Response(
+        429,
+        headers={"retry-after": "1"},
+        json={"error": {"code": "rate_limit_exceeded", "message": "TPM limit"}},
+    )
+    server = Server(limited, answer("ok"))
+
+    completion = await adapter(server).respond(ToolRequest("s", [Message("user", "hi")], []))
+
+    assert completion.text == "ok"
