@@ -17,6 +17,14 @@ uv run arcee-cli run "How much free disk space do I have?"
 
 Each step is printed as it happens: the model's tool call, the result, and any guard or escalation. Read-only commands run at once; anything that changes files asks first (`Allow? [y/N]`), and destructive commands such as `rm -rf` or `sudo` are refused. Add `-v` to see the model's reasoning when it uses thinking mode. `uv run arcee-cli history` lists past tasks; `uv run arcee-cli eval` scores single decisions and `uv run arcee-cli eval-tasks` runs whole tasks in a throwaway home folder. `ollama pull lfm2.5:8b` adds the slower top tier of the escalation ladder.
 
+### Your own Chrome
+
+Arcee reads and acts in your signed-in Chrome through a small extension. Run `uv run arcee-cli browser-setup`, then load `browser-ext/` as an unpacked extension in `chrome://extensions` (Developer mode), and check with `uv run arcee-cli browser-check`. Clicking anything like Send, Delete or Pay asks you first.
+
+### A cloud model instead of the local one
+
+`--core groq:openai/gpt-oss-120b` (key `GROQ_API_KEY` in `.env`) or `--core openrouter:<model>` (`OPENROUTER_API_KEY`) puts a cloud model in the Core's place. What the task reads is sent to that provider.
+
 ## Development setup
 
 v1 targets Ubuntu 26.04 with GNOME 50. The virtualenv is built on the system Python so the apt-provided GTK and accessibility bindings stay importable.

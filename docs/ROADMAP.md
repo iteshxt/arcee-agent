@@ -16,7 +16,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry, Ollama adapter, gate, file/shell/control tools, the native-mode step loop and `arcee-cli` merged: `uv run arcee-cli run "..."` runs real tasks on LFM3. Eval suite (LFM3 tier 1: 92%), Planner (long requests only) and task history merged. Base model is LFM3-Omni (decision 0005): eval 85% at the switch, 89% after the harness fixes. Phase 1 done and tagged `v0.1.0` (23 tools; single-decision eval 91%, whole tasks 15/15). Phase 2 started: web tools and untrusted-content handling first, then the browser worker and the accessibility tree.
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry, Ollama adapter, gate, file/shell/control tools, the native-mode step loop and `arcee-cli` merged: `uv run arcee-cli run "..."` runs real tasks on LFM3. Eval suite (LFM3 tier 1: 92%), Planner (long requests only) and task history merged. Base model is LFM3-Omni (decision 0005): eval 85% at the switch, 89% after the harness fixes. Phase 1 done and tagged `v0.1.0` (23 tools; single-decision eval 91%, whole tasks 15/15). Phase 2: web tools, untrusted-content handling and the Chrome extension done; reading Gmail works on `--core groq:openai/gpt-oss-120b`, not yet on LFM3-Omni. Next: the AT-SPI desktop tree for GNOME apps (`ui.tree`, `ui.act`) and the phase 2 gate.
 **Last updated:** 2026-10-29
 
 ## Target machine
@@ -106,11 +106,11 @@ Prerequisites on the machine:
 - [ ] `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
 - [ ] Playwright npm package (drives the installed Google Chrome; no browser download)
 
-- [ ] Playwright worker (`browser-worker/`, Node, JSON-RPC over stdio), dedicated profile
-- [ ] DOM tree extraction, grounding level 1, and the `browser.*` tools
+- [x] ~~Playwright worker~~ replaced by a Chrome extension in the user's own profile with a native messaging host (decision 0007); `arcee-cli browser-setup` and `browser-check`
+- [x] DOM extraction (one element per row, main content first), grounding level 1, `browser.tabs`/`navigate`/`get_elements`/`read_text`/`click`/`fill`/`scroll`/`back`, one working tab per task
 - [ ] AT-SPI desktop tree, grounding level 2, `ui.tree`
 - [ ] `ui.act` using AT-SPI actions only (pointer fallback comes in phase 3)
-- [ ] Planner `steps[].tools` filter applied to the Core's tool list
+- [x] Planner `steps[].tools` filter applied to the Core's tool list; tool groups also chosen from the request (web-only requests get no local tools)
 - [ ] Window API stub (until the extension exists in phase 4)
 - [x] `web.search` (SearXNG or DuckDuckGo HTML), `web.fetch` (no local addresses); untrusted marking and injection detector that forces confirmation of the next action
 
@@ -194,3 +194,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-29** — Phase 1 tool set complete (23 tools): `fs.write`/`move`/`copy`/`open_with_default`, `app.list`/`app.open` from `.desktop` files, `shell.script` in bubblewrap (verified: home stays read-only, no network), `control.wait`/`speak`/`note` with a memories table. With all of them, LFM3-Omni reached 91% (98/108) on the single-decision eval at a 2.0 s median, faster than before. Worked-example library built and measured: 89% with it against 91% without, whole tasks 13/15 against 15/15, slower, so it is off by default (decision 0006). Whole-task eval added: 15/15 with `--plan auto` (median 22 s), 12/15 with `--plan always` (median 65 s), which backs decision 0004. 371 unit tests.
 - **2026-10-29** — Phase 1 gate passed on LFM3-Omni: 100% valid first replies (gate: 90%), whole tasks 15/15 (gate: 60%). Tagged `v0.1.0`.
 - **2026-10-29** — Phase 2 started: `web.search` and `web.fetch` (25 tools), untrusted-content marking with an injection detector that forces confirmation of the next action (verified end to end in a test: a file saying "ignore previous instructions" made the following `fs.list` need approval). DuckDuckGo started answering 202 bot challenges after a few requests from this machine, so search also takes a SearXNG instance. 389 unit tests.
+- **2026-10-30** — Chrome in the user's own profile: Chrome 156's accessibility tree is unusable here and automation is blocked on the default profile, so an extension plus native messaging host drives it (decision 0007). LFM3-Omni could not answer from real Gmail rows (6/6 correct on made-up rows, 0 on real ones). Cloud Core option through an OpenAI-compatible adapter (Groq, OpenRouter); `openai/gpt-oss-120b` on Groq answered the Gmail task in 6 steps. Per-minute token budgets (Groq: 7,000 of 8,000), waits shown in the CLI, intent-based tool groups and a compact tool list for capable models cut a Gmail request from 3,942 to 1,045 tokens. 422 unit tests.
