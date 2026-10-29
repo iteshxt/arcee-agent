@@ -30,6 +30,7 @@ class FakeAdapter(ModelAdapter):
         super().__init__(profile, clock=clock)
         self._script = deque(script)
         self.requests: list[RawRequest] = []
+        self.unloads = 0
 
     async def _send(self, request: RawRequest) -> Completion:
         self.requests.append(request)
@@ -42,6 +43,9 @@ class FakeAdapter(ModelAdapter):
             return step
         prompt_chars = len(request.system) + sum(len(m.text) for m in request.messages)
         return Completion(step, TokenUsage(prompt_chars // 4, len(step) // 4))
+
+    async def unload(self) -> None:
+        self.unloads += 1
 
     async def health(self) -> bool:
         return True
