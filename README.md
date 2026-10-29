@@ -23,4 +23,10 @@ uv run pyright
 uv run pytest
 ```
 
+Live tests call the real model API and are skipped by default. Put `GEMINI_API_KEY=...` in a `.env` file at the repository root (it is git-ignored), then run:
+
+```sh
+uv run --env-file .env pytest -m live
+```
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch and commit rules.
