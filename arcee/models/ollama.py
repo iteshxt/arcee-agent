@@ -12,6 +12,7 @@ otherwise splits a model that fits across CPU and GPU and runs 2-3x slower) and
 
 import contextlib
 import json
+import re
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
@@ -26,7 +27,7 @@ from arcee.models.base import (
     TokenUsage,
     WireCall,
 )
-from arcee.models.errors import ModelUnavailableError, ServerBusyError
+from arcee.models.errors import MalformedReplyError, ModelUnavailableError, ServerBusyError
 from arcee.models.limiter import SYSTEM_CLOCK, Clock
 
 DEFAULT_HOST: Final = "http://127.0.0.1:11434"
@@ -35,6 +36,9 @@ TIMEOUT: Final = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
 # Every layer on the GPU. Only for models that fit: an 8B model on 4 GB must leave
 # the split to Ollama.
 ALL_LAYERS: Final = 999
+# Ollama answers 500 when its per-model parser rejects the model's own output
+# (seen: LFM3 writing a truncated <tool_call> XML block).
+_PARSE_FAILURE: Final = re.compile(r"(?i)\b(?:xml|json) syntax error|failed to parse|error parsing")
 
 
 class OllamaAdapter(ModelAdapter):
@@ -113,6 +117,8 @@ class OllamaAdapter(ModelAdapter):
         error = _error_text(response)
         if response.status_code == 404:
             raise ModelUnavailableError(f"{error}; pull it with `ollama pull {self.profile.model}`")
+        if response.status_code >= 500 and _PARSE_FAILURE.search(error):
+            raise MalformedReplyError(f"{self.profile.model} wrote an unparseable reply: {error}")
         if response.status_code >= 500:
             raise ServerBusyError(f"HTTP {response.status_code}: {error}")
         raise ModelUnavailableError(f"HTTP {response.status_code}: {error}")

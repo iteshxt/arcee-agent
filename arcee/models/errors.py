@@ -38,6 +38,14 @@ class ServerBusyError(RetryableError):
     """HTTP 5xx or a dropped connection: the provider failed, not the request."""
 
 
+class MalformedReplyError(ModelError):
+    """The provider could not parse the model's reply, e.g. a broken tool call.
+
+    The model failed, not the server, so repeating the identical request is
+    pointless; the caller asks again with a nudge or escalates.
+    """
+
+
 class ModelOutputError(ModelError):
     """The model did not produce a valid object within the retry budget."""
 

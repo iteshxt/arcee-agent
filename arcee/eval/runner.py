@@ -22,6 +22,7 @@ from arcee.core.prompts import tool_message
 from arcee.core.protocol import ConfirmRequest, ExecutorResult
 from arcee.eval.cases import Case, Decision, PriorUser, check
 from arcee.models.base import Completion, Message, ModelAdapter, WireCall
+from arcee.models.errors import MalformedReplyError
 from arcee.tools.control import ASK_USER, DONE
 from arcee.tools.registry import Registry, ToolCallError, wire_name
 
@@ -113,8 +114,11 @@ async def run_cases(
     for _ in range(repeat):
         for case in cases:
             started = time.monotonic()
-            completion = await model.respond(agent.core_request(conversation(case)))
-            decision = decide(completion, registry)
+            try:
+                completion = await model.respond(agent.core_request(conversation(case)))
+                decision = decide(completion, registry)
+            except MalformedReplyError as error:
+                decision = Decision("invalid", error=f"malformed reply: {error}")
             result = CaseResult(
                 case, decision, tuple(check(case.expect, decision)), time.monotonic() - started
             )
