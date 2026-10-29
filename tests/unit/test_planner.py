@@ -60,7 +60,7 @@ class User:
 
 
 def make(
-    plans: Sequence[str],
+    plans: Sequence[str | Exception],
     core: Sequence[Completion],
     user: User | None = None,
     home: Path = Path("/tmp"),
@@ -256,3 +256,16 @@ class TestPlannedTasks:
 )
 def test_needs_plan(request_text: str, expected: bool) -> None:
     assert needs_plan(request_text) is expected
+
+
+async def test_a_failing_planner_does_not_end_the_task() -> None:
+    from arcee.models.errors import ModelUnavailableError
+
+    agent, _, _, events, _ = make(
+        [ModelUnavailableError("HTTP 400")], [Completion("Done without a plan.")]
+    )
+
+    outcome = await agent.run("a long request that would be planned")
+
+    assert outcome.reply == "Done without a plan."
+    assert any(isinstance(e, Guarded) and "running unplanned" in e.what for e in events)

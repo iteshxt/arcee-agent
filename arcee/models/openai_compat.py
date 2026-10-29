@@ -154,6 +154,10 @@ class OpenAICompatAdapter(ModelAdapter):
         status = code if isinstance(code, int) else response.status_code
         if status == 200 and data.get("choices"):
             return data
+        if failed := error.get("failed_generation"):
+            # Groq rejects JSON that misses the schema but returns it; parsing and the
+            # validation retry turn can still use it, so it is a reply, not an outage.
+            return {"choices": [{"message": {"content": str(failed)}}]}
         message = str(error.get("message") or response.text[:200] or f"HTTP {status}")
         if status == 429:
             raise RateLimitedError(_retry_after(response))

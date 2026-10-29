@@ -49,6 +49,7 @@ from arcee.models.presets import (
     rate_budget,
     share_budget,
 )
+from arcee.platform.shell import ShellBridge
 from arcee.tools.builtin import builtin_registry
 
 
@@ -384,6 +385,36 @@ def browser_setup() -> int:
     return 0
 
 
+def shell_extension() -> int:
+    """Link the Arcee GNOME Shell extension into the user's extensions folder."""
+    source = EXTENSION_DIR.parent / "extension" / SHELL_EXTENSION
+    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    target = Path(data) / "gnome-shell" / "extensions" / SHELL_EXTENSION
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() or target.exists():
+        print(f"already installed: {target}")
+    else:
+        target.symlink_to(source, target_is_directory=True)
+        print(f"linked {target} -> {source}")
+    print("\nOn Wayland GNOME loads new extensions at login. Log out and back in, then run:")
+    print(f"  gnome-extensions enable {SHELL_EXTENSION}")
+    print("  arcee-cli shell-check")
+    return 0
+
+
+async def shell_check() -> int:
+    bridge = ShellBridge()
+    available = await asyncio.to_thread(bridge.available)
+    if not available:
+        print(f"the Arcee shell extension is not running ({SHELL_EXTENSION}); see shell-extension")
+        return 1
+    windows = await asyncio.to_thread(bridge.windows)
+    print(f"connected to the Arcee shell extension; {len(windows)} windows")
+    for window in windows[:10]:
+        print(f"  {'*' if window['focused'] else ' '} {window['title'][:70]}")
+    return 0
+
+
 def show_limits() -> int:
     """What Groq last reported for each model, with what has refilled since."""
     snapshot = rate_budget().snapshot()
@@ -458,6 +489,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
     history_cmd.add_argument("-n", type=int, default=15, help="how many tasks to list")
 
+    sub.add_parser("shell-extension", help="install the GNOME Shell extension (window focus)")
+    sub.add_parser("shell-check", help="check that the GNOME Shell extension is running")
     sub.add_parser("limits", help="show the cloud models' remaining rate limits")
     sub.add_parser("browser-setup", help="register the Chrome extension's native host")
     sub.add_parser("browser-check", help="check that the Chrome extension is connected")
@@ -487,6 +520,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "history":
             return asyncio.run(history(args.task_id, args.n))
+        if args.command == "shell-extension":
+            return shell_extension()
+        if args.command == "shell-check":
+            return asyncio.run(shell_check())
         if args.command == "limits":
             return show_limits()
         if args.command == "browser-setup":
@@ -545,6 +582,7 @@ CORE_HELP = (
     "groq (default: gpt-oss-20b, gpt-oss-120b for hard requests), local (the Ollama ladder), "
     "or <provider>:<model id>"
 )
+SHELL_EXTENSION = "arcee@arcee.dev"
 EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
 
 

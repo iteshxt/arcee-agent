@@ -301,6 +301,9 @@ def provider_schema(model: type[BaseModel]) -> Mapping[str, Any]:
     read-only.
     """
     schema = model.model_json_schema()
+    # The class docstring is for readers of the code; sent as the schema's own
+    # description it invites models to echo the schema instead of filling it in.
+    schema.pop("description", None)
     return _inline(schema, schema.pop("$defs", {}), ())
 
 

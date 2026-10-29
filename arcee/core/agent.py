@@ -38,7 +38,7 @@ from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.core.toolsets import filters_for
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
-from arcee.models.errors import MalformedReplyError
+from arcee.models.errors import MalformedReplyError, ModelError
 from arcee.tools.base import Notes, ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
 from arcee.tools.registry import (
@@ -236,7 +236,12 @@ class Agent:
         answers: list[tuple[str, str]] = []
         while True:
             started = time.monotonic()
-            plan = await self._planner.plan(request, answers=answers, replan=replan)
+            try:
+                plan = await self._planner.plan(request, answers=answers, replan=replan)
+            except ModelError as error:
+                # Planning is an aid: without a plan the whole request is one step.
+                self._emit(Guarded(state.steps, f"planner failed ({error}); running unplanned"))
+                return None
             state.model_calls += 1
             if plan.clarify is None:
                 state.plan, state.index = plan, 0

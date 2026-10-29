@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from arcee.platform.shell import ShellBridge
+
 MAX_DEPTH: Final = 30
 # Roles a person can act on or read as content; labels and plain panels are skipped.
 INTERACTIVE: Final = frozenset(
@@ -46,9 +48,10 @@ class _Refs:
 
 
 class AtspiDesktop:
-    def __init__(self) -> None:
+    def __init__(self, shell: ShellBridge | None = None) -> None:
         self._pool = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="atspi")
         self._refs = _Refs()
+        self._shell = shell or ShellBridge()
 
     async def _run(self, func: Any, *args: Any) -> Any:
         return await asyncio.get_running_loop().run_in_executor(self._pool, func, *args)
@@ -142,6 +145,7 @@ class AtspiDesktop:
         return Snapshot(app_name, frame.name or "", elements, _window_actions(frame), len(found))
 
     def _act(self, target: str, action: str, value: str | None) -> str:
+        self._bring_forward()
         if target == "window":
             return self._window_action(action)
         node = self._refs.elements.get(target)
@@ -158,6 +162,17 @@ class AtspiDesktop:
             _do_action(node, action)
         time.sleep(SETTLE_S)  # let the app redraw before the next reading
         return f"{action} {name}"
+
+    def _bring_forward(self) -> None:
+        """Make the window active first: GTK closes popovers and dialogs in inactive
+        windows at once, and only the shell extension can raise a window on Wayland."""
+        import pyatspi
+
+        frame = self._refs.window
+        if frame is None or frame.getState().contains(pyatspi.STATE_ACTIVE):
+            return
+        if frame.name and self._shell.focus_title(frame.name):
+            time.sleep(SETTLE_S)
 
     def _window_action(self, action: str) -> str:
         frame = self._refs.window
