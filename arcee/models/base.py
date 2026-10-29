@@ -156,6 +156,8 @@ class ModelAdapter(ABC):
     def __init__(self, profile: ModelProfile, *, clock: Clock = SYSTEM_CLOCK) -> None:
         self.profile = profile
         self._clock = clock
+        # Seconds the last call spent waiting on rate budgets and backoff, for the UI.
+        self.last_wait_s = 0.0
         self.limiter = RateLimiter(
             profile.rpm, profile.rpd, tpm=profile.tpm, quota_tz=self.quota_tz, clock=clock
         )
@@ -240,8 +242,11 @@ class ModelAdapter(ABC):
         backoff = iter(BACKOFF_S)
         waited = 0.0
         estimate = estimate_tokens(request)
+        started = self._clock.monotonic()
+        self.last_wait_s = 0.0
         while True:
             entry = await self.limiter.acquire(estimate)
+            self.last_wait_s = self._clock.monotonic() - started
             try:
                 completion = await self._send(request)
                 used = completion.usage.input_tokens + completion.usage.output_tokens

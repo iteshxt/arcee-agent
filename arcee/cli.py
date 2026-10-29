@@ -82,7 +82,11 @@ class Terminal:
     def on_event(self, event: Event) -> None:
         s = self._style
         match event:
-            case ModelTurn(call=call, thinking=thinking, model=model, seconds=seconds):
+            case ModelTurn(
+                call=call, thinking=thinking, model=model, seconds=seconds, waited=waited
+            ):
+                if waited >= 1:
+                    self.print(s.dim(f"  \u23f3 waited {waited:.0f}s for the rate budget"))
                 if thinking and self._verbose:
                     self.print(s.dim(f"  thinking: {' '.join(thinking.split())[:300]}"))
                 if call is not None:

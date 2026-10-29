@@ -97,6 +97,8 @@ class ModelTurn:
     call: WireCall | None
     text: str
     seconds: float
+    # Of `seconds`, the time spent waiting on rate limits before the model was asked.
+    waited: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +399,7 @@ class Agent:
                 completion.tool_calls[0] if completion.tool_calls else None,
                 completion.text,
                 time.monotonic() - started,
+                model.last_wait_s,
             )
         )
         return completion

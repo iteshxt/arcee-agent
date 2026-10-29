@@ -248,3 +248,31 @@ def test_groups_stay_once_used() -> None:
     ]
 
     assert filters_for(messages) == LOCAL + CONTROL + BROWSER
+
+
+async def test_new_tab_for_an_open_site_switches_instead() -> None:
+    shared, client = session(
+        {
+            "tabs": [{"id": 3, "title": "Inbox", "url": "https://mail.example/u/0/"}],
+            "switch_tab": {"id": 3},
+            "navigate": {"id": 3, "url": "https://mail.example/u/0/#inbox"},
+        }
+    )
+
+    result = await BrowserTabs(shared).run(
+        TabsArgs(action="new", url="https://mail.example/u/0/#inbox"), CTX
+    )
+
+    assert result.summary == "Switched to the open tab for https://mail.example/u/0/#inbox"
+    assert "new_tab" not in [c[0] for c in client.calls]
+    assert shared.tab == 3
+
+
+async def test_html_entities_are_decoded() -> None:
+    page = {**PAGE, "elements": [{"id": "el_1", "role": "row", "name": "A &amp; B"}]}
+    shared, _ = session({"elements": page})
+
+    result = await BrowserElements(shared).run(ElementsArgs(), CTX)
+
+    assert result.data is not None
+    assert result.data["elements"][0]["name"] == "A & B"
