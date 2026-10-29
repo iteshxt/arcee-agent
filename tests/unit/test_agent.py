@@ -116,7 +116,7 @@ async def test_looks_then_answers_in_plain_text(home: Path) -> None:
 async def test_sends_system_prompt_and_native_tools(home: Path) -> None:
     agent, [model], _, _ = make(home, [say("hi")])
 
-    await agent.run("hello")
+    await agent.run("list the files in my home folder")
 
     sent = model.requests[0]
     assert str(home) in sent.system

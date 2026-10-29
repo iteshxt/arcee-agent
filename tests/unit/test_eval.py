@@ -189,3 +189,17 @@ async def test_guards_send_back_unseen_facts_like_the_live_loop() -> None:
     assert (with_guards.passed, with_guards.guarded) == (True, "reply stated 10.0.0.6 unseen")
     assert guarded.requests[1].messages[-1].text.startswith("Your answer mentions '10.0.0.6'")
     assert (without.passed, without.guarded) == (False, "")
+
+
+def test_tool_groups_offer_what_every_case_expects() -> None:
+    """Narrow tool groups must never hide the tool a case's right answer needs."""
+    from arcee.core.toolsets import filters_for
+
+    for case in load(REPO_CASES):
+        offered = {tool.name for tool in TOOLS.select(filters_for(conversation(case)))}
+        wanted = [t for t in case.expect.any_of if t not in ("reply", "ask")]
+        # Replies need no tool and control.ask_user is always offered.
+        answerable = {"reply", "ask"} & set(case.expect.any_of)
+        if wanted and not answerable:
+            assert offered & set(wanted), f"{case.id}: none of {wanted} offered"
+        assert "control.ask_user" in offered, case.id

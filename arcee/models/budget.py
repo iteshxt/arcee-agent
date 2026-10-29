@@ -20,6 +20,13 @@ from typing import Any, Final
 from arcee.models.errors import QuotaExhaustedError
 
 TOKEN_WINDOW_S: Final = 60.0
+# Share of the token limit kept unused, so a reply longer than expected (gpt-oss reasons
+# before answering, and Groq counts that as output) cannot push a minute over the limit.
+HEADROOM: Final = 0.10
+# Output tokens assumed before a model's real replies have been seen.
+DEFAULT_OUTPUT: Final = 400
+# Weight of the newest reply in the running average of output size.
+OUTPUT_SMOOTHING: Final = 0.3
 REQUEST_WINDOW_S: Final = 86_400.0
 _DURATION: Final = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
 _UNIT_S: Final = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
@@ -49,8 +56,9 @@ class Allowance:
         return min(float(self.requests_limit), self.requests_left + refill)
 
     def wait_for(self, tokens: int, now: float) -> float:
-        """Seconds until `tokens` fit (a request bigger than the whole limit waits for full)."""
-        need = min(float(tokens), float(self.tokens_limit)) - self.tokens_now(now)
+        """Seconds until `tokens` fit with the headroom left unused."""
+        reserve = HEADROOM * self.tokens_limit
+        need = min(float(tokens) + reserve, float(self.tokens_limit)) - self.tokens_now(now)
         return max(0.0, need * TOKEN_WINDOW_S / self.tokens_limit)
 
 
@@ -61,6 +69,7 @@ class HeaderBudget:
         self._path = path
         self._now = now
         self._models: dict[str, Allowance] = self._load()
+        self._output: dict[str, float] = {}
 
     def snapshot(self) -> dict[str, dict[str, float]]:
         """Current tokens and requests left per model, refill included."""
@@ -96,6 +105,16 @@ class HeaderBudget:
                 f"the next frees up in about {hours:.1f} h"
             )
         return allowance.wait_for(tokens, now)
+
+    def expected_output(self, model: str) -> int:
+        """Typical output tokens for `model`, learned from its replies."""
+        return round(self._output.get(model, DEFAULT_OUTPUT))
+
+    def note_output(self, model: str, tokens: int) -> None:
+        """Fold a reply's output tokens (reasoning included) into the running average."""
+        if tokens > 0:
+            previous = self._output.get(model, float(tokens))
+            self._output[model] = (1 - OUTPUT_SMOOTHING) * previous + OUTPUT_SMOOTHING * tokens
 
     def spend(self, model: str, tokens: int) -> None:
         """Count a request as sent before its reply, so back-to-back calls see it."""

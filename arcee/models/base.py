@@ -272,13 +272,18 @@ CHARS_PER_TOKEN: Final = 4.5
 EXPECTED_OUTPUT_TOKENS: Final = 400
 
 
-def estimate_tokens(request: RawRequest) -> int:
-    """A cautious size for `request`, for token-per-minute budgets."""
+def estimate_input_tokens(request: RawRequest) -> int:
+    """A cautious size for what `request` sends."""
     chars = len(request.system) + sum(len(m.text) + 20 for m in request.messages)
     chars += sum(len(json.dumps(dict(c.args))) for m in request.messages for c in m.tool_calls)
     chars += len(json.dumps(list(request.tools))) if request.tools else 0
     chars += len(json.dumps(dict(request.schema))) if request.schema else 0
-    return int(chars / CHARS_PER_TOKEN) + min(request.max_tokens, EXPECTED_OUTPUT_TOKENS)
+    return int(chars / CHARS_PER_TOKEN)
+
+
+def estimate_tokens(request: RawRequest) -> int:
+    """Input plus a typical reply, for budgets that know nothing better."""
+    return estimate_input_tokens(request) + min(request.max_tokens, EXPECTED_OUTPUT_TOKENS)
 
 
 # Keywords whose values are data rather than subschemas; copied without rewriting.

@@ -40,10 +40,10 @@ def test_requests_that_fit_go_at_once_and_refill_counts() -> None:
     budget = HeaderBudget(None, now=now)
     budget.observe("m", GROQ)
 
-    assert budget.wait_s("m", 900) == 0  # 1,000 left: fits now
-    assert budget.wait_s("m", 1400) == pytest.approx(3.0)  # 400 short at 133/s
+    assert budget.wait_s("m", 200) == 0  # 1,000 left: fits with 800 headroom
+    assert budget.wait_s("m", 600) == pytest.approx(3.0)  # 400 short at 133/s
     now.t += 3
-    assert budget.wait_s("m", 1400) == pytest.approx(0.0)
+    assert budget.wait_s("m", 600) == pytest.approx(0.0)
 
 
 def test_spending_counts_before_the_reply() -> None:
@@ -54,7 +54,7 @@ def test_spending_counts_before_the_reply() -> None:
 
     assert budget.snapshot()["m"]["tokens_left"] == 0
     assert budget.snapshot()["m"]["requests_left"] == 499
-    assert budget.wait_s("m", 600) == pytest.approx(4.5)
+    assert budget.wait_s("m", 600) == pytest.approx(10.5)  # 1,400 short, headroom included
 
 
 def test_unknown_models_and_other_providers_never_wait() -> None:
@@ -103,6 +103,17 @@ async def test_adapter_waits_only_for_the_shortfall_and_records_headers() -> Non
     await adapter.respond(ToolRequest("s", [Message("user", "hi")], []))
 
     assert len(clock.sleeps) == 1
-    assert 0 < clock.sleeps[0] < 5  # a small request needs only seconds of refill
+    assert 0 < clock.sleeps[0] < 12  # seconds of refill, headroom included
     assert adapter.last_wait_s == clock.sleeps[0]
     assert budget.snapshot()["openai/gpt-oss-20b"]["tokens_left"] == 7000
+
+
+def test_output_size_is_learned_per_model() -> None:
+    budget = HeaderBudget(None, now=Now())
+
+    assert budget.expected_output("m") == 400
+    budget.note_output("m", 2000)  # a long reasoning reply
+    budget.note_output("m", 2000)
+
+    assert budget.expected_output("m") == 2000
+    assert budget.expected_output("other") == 400
