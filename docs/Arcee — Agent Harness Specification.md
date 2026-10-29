@@ -484,12 +484,15 @@ class Platform(Protocol):
 
 ## 11. Tool registry
 
-A tool is a Python class with a name, a Pydantic args model, a permission tier and an async `run`. The registry discovers built-in tools from `arcee/tools/*/`, user tools from `~/.config/arcee/tools/`, and remote tools from configured MCP servers, and renders all of them into the same prompt block the models see.
+A tool is a Python class with a name, a Pydantic args model, a permission tier, a usage card and an async `run`. The registry discovers built-in tools from `arcee/tools/*/`, user tools from `~/.config/arcee/tools/`, and remote tools from configured MCP servers, and renders all of them into the same prompt block the models see.
 
 **Tool definition format**
 
 ```python
-class FsTrash(Tool):
+class TrashArgs(ToolArgs):                         # ToolArgs forbids unknown arguments
+    paths: list[str] = Field(..., description="Absolute paths or ~ paths", max_length=50)
+
+class FsTrash(Tool[TrashArgs]):
     name = "fs.trash"
     description = "Move files or folders to the trash (recoverable). Never deletes permanently."
     tier = Tier.CONFIRM
@@ -504,13 +507,12 @@ class FsTrash(Tool):
         example='fs.trash(paths=["~/Downloads/a.deb", "~/Downloads/b.deb"])',
     )
 
-    class Args(BaseModel):
-        paths: list[str] = Field(..., description="Absolute paths or ~ paths", max_length=50)
+    args_model = TrashArgs
 
-    def sentence(self, a: Args) -> str:           # shown in the confirm bubble
+    def sentence(self, a: TrashArgs) -> str:      # shown in the confirm bubble
         return f"Move {len(a.paths)} item(s) to the trash?"
 
-    async def run(self, a: Args, ctx: ToolContext) -> ToolResult:
+    async def run(self, a: TrashArgs, ctx: ToolContext) -> ToolResult:
         ...
         return ToolResult.ok(f"Trashed {n} items", data={"trashed": trashed, "count": n})
 ```
