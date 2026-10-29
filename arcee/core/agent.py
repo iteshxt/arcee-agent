@@ -36,6 +36,8 @@ from arcee.tools.registry import Registry, ToolCall, ToolCallError, native_tools
 # Failures in a row on one tier before the next tier takes over.
 STRIKES_TO_ESCALATE: Final = 2
 EMPTY_LOOKUPS_BEFORE_ASKING: Final = 3
+# Room for a reasoning trace on the thinking tier as well as the answer.
+MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
 
@@ -197,7 +199,9 @@ class Agent:
     async def _turn(self, state: _State, system: str, tools: list[dict[str, Any]]) -> Completion:
         model = self._ladder[state.tier]
         started = time.monotonic()
-        completion = await model.respond(ToolRequest(system, tuple(state.messages), tools))
+        completion = await model.respond(
+            ToolRequest(system, tuple(state.messages), tools, max_tokens=MAX_TOKENS)
+        )
         state.model_calls += 1
         self._emit(
             ModelTurn(

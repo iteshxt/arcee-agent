@@ -1,0 +1,184 @@
+"""`arcee-cli`: run one task from the terminal (roadmap 1.17).
+
+Confirmations and questions are answered on stdin. Every step is printed: the
+model's call, the result, guards and escalations, so a run doubles as a trace.
+"""
+
+import argparse
+import asyncio
+import os
+import sys
+import time
+from collections.abc import Sequence
+from pathlib import Path
+from typing import TextIO
+
+from arcee.core.agent import Agent, Escalated, Event, Guarded, Limits, ModelTurn, ToolRan
+from arcee.core.executor import Executor
+from arcee.core.gate import Gate
+from arcee.core.policy import Policy
+from arcee.core.protocol import ConfirmRequest
+from arcee.models.base import ModelAdapter
+from arcee.models.errors import ModelUnavailableError
+from arcee.models.ollama import DEFAULT_HOST
+from arcee.models.presets import local_core_ladder
+from arcee.tools.builtin import builtin_registry
+
+
+class Style:
+    def __init__(self, stream: TextIO) -> None:
+        self._on = stream.isatty() and "NO_COLOR" not in os.environ
+
+    def _wrap(self, code: str, text: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if self._on else text
+
+    def dim(self, text: str) -> str:
+        return self._wrap("2", text)
+
+    def bold(self, text: str) -> str:
+        return self._wrap("1", text)
+
+    def red(self, text: str) -> str:
+        return self._wrap("31", text)
+
+    def green(self, text: str) -> str:
+        return self._wrap("32", text)
+
+    def yellow(self, text: str) -> str:
+        return self._wrap("33", text)
+
+
+class Terminal:
+    """Prints events and answers the agent's questions and confirmations on stdin."""
+
+    def __init__(self, *, verbose: bool, out: TextIO = sys.stdout) -> None:
+        self._verbose = verbose
+        self._out = out
+        self._style = Style(out)
+
+    def print(self, text: str = "") -> None:
+        print(text, file=self._out, flush=True)
+
+    def on_event(self, event: Event) -> None:
+        s = self._style
+        match event:
+            case ModelTurn(call=call, thinking=thinking, model=model, seconds=seconds):
+                if thinking and self._verbose:
+                    self.print(s.dim(f"  thinking: {' '.join(thinking.split())[:300]}"))
+                if call is not None:
+                    args = " ".join(f"{k}={v!r}" for k, v in call.args.items())
+                    self.print(
+                        f"{s.bold('→')} {call.name} {args}  {s.dim(f'{model}, {seconds:.1f}s')}"
+                    )
+            case ToolRan(result=result):
+                mark = s.green("✓") if result.status == "ok" else s.red("✗")
+                self.print(f"  {mark} {result.summary}  {s.dim(f'{result.duration_ms} ms')}")
+            case Guarded(what=what):
+                self.print(s.yellow(f"  ⚑ guard: {what}"))
+            case Escalated(tier=tier, model=model, reason=reason):
+                label = f"tier {tier + 1}, {model}" + (", thinking" if tier == 1 else "")
+                self.print(s.yellow(f"  ↑ escalating to {label}: {reason[:120]}"))
+
+    async def confirm(self, request: ConfirmRequest) -> bool:
+        lines = [self._style.yellow(f"? {request.sentence}")]
+        lines += [f"    {target}" for target in request.args_preview]
+        self.print("\n".join(lines))
+        answer = await self._input("  Allow? [y/N] ")
+        return answer.strip().lower() in {"y", "yes"}
+
+    async def ask(self, question: str, options: Sequence[str] = ()) -> str:
+        self.print(self._style.yellow(f"? {question}"))
+        if options:
+            self.print("    " + " / ".join(options))
+        return (await self._input("  > ")).strip()
+
+    async def _input(self, prompt: str) -> str:
+        try:
+            return await asyncio.to_thread(input, prompt)
+        except EOFError:
+            return ""
+
+
+async def _usable(ladder: Sequence[ModelAdapter], terminal: Terminal) -> list[ModelAdapter]:
+    """The ladder's tiers whose model is pulled; empty when the first tier is missing."""
+    healthy = await asyncio.gather(*(model.health() for model in ladder))
+    if not healthy[0]:
+        return []
+    for model, ok in zip(ladder, healthy, strict=True):
+        if not ok:
+            terminal.print(
+                f"note: {model.profile.model} is not pulled, so escalation skips it "
+                f"(ollama pull {model.profile.model})"
+            )
+    return [model for model, ok in zip(ladder, healthy, strict=True) if ok]
+
+
+async def run(request: str, *, host: str, limits: Limits, verbose: bool) -> int:
+    terminal = Terminal(verbose=verbose)
+    ladder = local_core_ladder(host)
+    try:
+        usable = await _usable(ladder, terminal)
+        if not usable:
+            terminal.print(
+                f"Ollama is not running at {host}, or the model is missing. "
+                f"Start it, then: ollama pull {ladder[0].profile.model}"
+            )
+            return 2
+        agent = Agent(
+            usable,
+            builtin_registry(),
+            Executor(Gate(Policy(), terminal)),
+            terminal,
+            home=Path.home(),
+            limits=limits,
+            on_event=terminal.on_event,
+        )
+        started = time.monotonic()
+        try:
+            outcome = await agent.run(request)
+        except ModelUnavailableError as exc:
+            terminal.print(f"model unavailable: {exc}")
+            return 2
+        style = Style(sys.stdout)
+        terminal.print()
+        terminal.print(style.bold("Arcee: ") + outcome.reply)
+        terminal.print(
+            style.dim(
+                f"({outcome.status}: {outcome.steps} steps, {outcome.model_calls} model calls, "
+                f"{time.monotonic() - started:.1f}s)"
+            )
+        )
+        return 0 if outcome.status == "done" else 1
+    finally:
+        await asyncio.gather(*(model.aclose() for model in ladder))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="arcee-cli", description="Run one Arcee task from the terminal."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    run_cmd = sub.add_parser("run", help="carry out a request")
+    run_cmd.add_argument("request", nargs="+", help="what to do, in plain words")
+    run_cmd.add_argument("--max-steps", type=int, default=25)
+    run_cmd.add_argument("--max-seconds", type=float, default=600.0)
+    run_cmd.add_argument("--host", default=os.environ.get("OLLAMA_HOST", DEFAULT_HOST))
+    run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
+    args = parser.parse_args(argv)
+
+    limits = Limits(max_steps=args.max_steps, max_seconds=args.max_seconds)
+    request = " ".join(args.request)
+    try:
+        return asyncio.run(run(request, host=_host(args.host), limits=limits, verbose=args.verbose))
+    except KeyboardInterrupt:
+        print("\ncancelled", file=sys.stderr)
+        return 130
+
+
+def _host(value: str) -> str:
+    # OLLAMA_HOST is often written without a scheme, e.g. 127.0.0.1:11434.
+    return value if "://" in value else f"http://{value}"
+
+
+if __name__ == "__main__":
+    sys.exit(main())

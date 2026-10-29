@@ -52,16 +52,24 @@ class ListArgs(ToolArgs):
     path: str = Field(description="Folder to list, e.g. ~/Downloads")
     glob: str | None = Field(default=None, description="Only names matching this, e.g. *.pdf")
     hidden: bool = Field(default=False, description="Include names starting with a dot")
+    sort: Literal["name", "largest", "newest", "oldest"] = Field(
+        default="name", description="Order: largest or newest first answers 'biggest'/'latest'"
+    )
+    limit: int = Field(
+        default=MAX_ENTRIES, ge=1, le=MAX_ENTRIES, description="Return at most this many"
+    )
 
 
 class FsList(Tool[ListArgs]):
     name = "fs.list"
     description = "List a folder: each entry's name, type, size and modified date, plus a count."
     usage = Usage(
-        when="You need to know what is in one folder, or how many files of a kind it holds.",
+        when="You need what is in one folder, how many files of a kind it holds, "
+        "or its biggest, newest or oldest files.",
         avoid="You already listed this folder in this task; use that result.",
-        mistakes="Counting by hand: pass glob (e.g. *.pdf) and read `count`.",
-        example='fs.list(path="~/Documents", glob="*.pdf")',
+        mistakes="Counting or comparing sizes by hand: pass glob and read `count`; "
+        "for the biggest or newest pass sort and limit and take the first entry.",
+        example='fs.list(path="~/Downloads", sort="largest", limit=1)',
     )
     args_model = ListArgs
     timeout_s = 10
@@ -70,16 +78,23 @@ class FsList(Tool[ListArgs]):
         folder = resolve(args.path, ctx)
         if not folder.is_dir():
             return ToolResult.fail(f"{display(folder, ctx)} is not a folder")
-        entries = await asyncio.to_thread(_list, folder, args.glob, args.hidden)
-        shown = entries[:MAX_ENTRIES]
-        data = {"path": display(folder, ctx), "entries": shown, "count": len(entries)}
-        if len(entries) > MAX_ENTRIES:
-            data["truncated"] = True
+        entries = await asyncio.to_thread(_list, folder, args.glob, args.hidden, args.sort)
+        shown = [_public(entry) for entry in entries[: args.limit]]
+        data: dict[str, Any] = {
+            "path": display(folder, ctx),
+            "sort": args.sort,
+            "entries": shown,
+            "count": len(entries),
+        }
+        if len(entries) > len(shown):
+            data["shown"] = len(shown)
         what = f"{len(entries)} entries" + (f" matching {args.glob}" if args.glob else "")
+        if args.sort != "name" and shown:
+            what += f", {args.sort} first: {shown[0]['name']}"
         return ToolResult.ok(f"Listed {display(folder, ctx)}: {what}", data=data)
 
 
-def _list(folder: Path, glob: str | None, hidden: bool) -> list[dict[str, Any]]:
+def _list(folder: Path, glob: str | None, hidden: bool, sort: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     with os.scandir(folder) as it:
         for entry in it:
@@ -89,7 +104,16 @@ def _list(folder: Path, glob: str | None, hidden: bool) -> list[dict[str, Any]]:
                 continue
             entries.append(_entry(entry))
     entries.sort(key=lambda e: (e["type"] != "folder", e["name"].lower()))
+    if sort == "largest":
+        # Folders have no size of their own here; they go last.
+        entries.sort(key=lambda e: e.get("_bytes", -1), reverse=True)
+    elif sort in ("newest", "oldest"):
+        entries.sort(key=lambda e: e.get("_mtime", 0.0), reverse=sort == "newest")
     return entries
+
+
+def _public(entry: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in entry.items() if not key.startswith("_")}
 
 
 def _entry(entry: os.DirEntry[str]) -> dict[str, Any]:
@@ -98,9 +122,10 @@ def _entry(entry: os.DirEntry[str]) -> dict[str, Any]:
     except OSError:
         return {"name": entry.name, "type": "unreadable"}
     kind = "folder" if entry.is_dir() else "link" if entry.is_symlink() else "file"
-    out: dict[str, Any] = {"name": entry.name, "type": kind}
+    out: dict[str, Any] = {"name": entry.name, "type": kind, "_mtime": info.st_mtime}
     if kind == "file":
         out["size"] = _size(info.st_size)
+        out["_bytes"] = info.st_size
     out["modified"] = datetime.fromtimestamp(info.st_mtime).strftime("%Y-%m-%d %H:%M")
     return out
 

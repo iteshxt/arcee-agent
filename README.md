@@ -4,6 +4,18 @@ Arcee (pronounced "R-C") is a model-agnostic desktop agent harness for Ubuntu on
 
 **Status:** early development. See [the roadmap](docs/ROADMAP.md) for progress and [the specification](docs/) for the design.
 
+## Try it
+
+Arcee runs on a local model through [Ollama](https://ollama.com). Install Ollama, then pull the default model (1.1 GB):
+
+```sh
+ollama pull lfm3
+uv sync
+uv run arcee-cli run "How much free disk space do I have?"
+```
+
+Each step is printed as it happens: the model's tool call, the result, and any guard or escalation. Read-only commands run at once; anything that changes files asks first (`Allow? [y/N]`), and destructive commands such as `rm -rf` or `sudo` are refused. Add `-v` to see the model's reasoning when it uses thinking mode. `ollama pull lfm2.5:8b` adds the slower top tier of the escalation ladder.
+
 ## Development setup
 
 v1 targets Ubuntu 26.04 with GNOME 50. The virtualenv is built on the system Python so the apt-provided GTK and accessibility bindings stay importable.

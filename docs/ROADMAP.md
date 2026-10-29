@@ -16,7 +16,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry merged (1.7). Next: the Ollama adapter (1.6) with both call modes.
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry, Ollama adapter, gate, file/shell/control tools, the native-mode step loop and `arcee-cli` merged: `uv run arcee-cli run "..."` runs real tasks on LFM3. Next: the eval suite (1.18), then the Planner (1.15) and the store (1.13).
 **Last updated:** 2026-10-29
 
 ## Target machine
@@ -70,24 +70,24 @@ Protocol and models
 - [x] 1.3 `arcee/models/base.py`: `ModelAdapter`, `ModelProfile`, `ModelRequest`, `ModelResponse`, plus a scripted `FakeAdapter` for tests
 - [x] 1.4 `arcee/models/limiter.py`: sliding-window `rpm`, daily `rpd` counter, 429 backoff (the fallback switch is per-task state, so it moved to 1.16)
 - [ ] ~~1.5 `arcee/models/gemini.py`~~: built and tested, parked unmerged on `feat/models-gemini` (decision 0003)
-- [ ] 1.6 `arcee/models/ollama.py`: `call_mode` native (`tools`, `tool` messages) and schema (`format`); `num_gpu`, `think` and recommended sampling per profile; `/api/embed`
+- [x] 1.6 `arcee/models/ollama.py`: `call_mode` native (`tools`, `tool` messages) and schema (`format`); `num_gpu`, `think` and recommended sampling per profile; `/api/embed`
 
 Tools and safety
 
 - [x] 1.7 `arcee/tools/base.py`, `registry.py`: `Tool` with usage card, `ToolContext`, `ToolResult` with structured `data`, registration, wire names, per-tool argument validation with hints, per-step selection, native and schema rendering
-- [ ] 1.8 `arcee/core/gate.py` and `config/policy.toml` defaults: tiers, shell allowlist, `never` list, path rules, stdin confirmer
-- [ ] 1.9 Control tools: `control.done`, `ask_user`, `confirm`, `replan`, `wait`, `speak` (prints in CLI), `note`
-- [ ] 1.10 File tools: `fs.list`, `read`, `write`, `search`, `move`, `copy`, `trash`, `open_with_default`
-- [ ] 1.11 Shell tools: `shell.run` (allowlist and `never` parsing, `systemd-run` limits), `shell.script` via the sandbox helper; dev script that installs the AppArmor profile; fallback to resource limits only when isolation is off
+- [x] 1.8 `arcee/core/gate.py` and `arcee/core/policy.py`: tiers, shell allowlist, `never` list, stdin confirmer (`policy.toml` loading and path rules still to do)
+- [ ] 1.9 Control tools: `control.done`, `ask_user`, `replan` done; `confirm`, `wait`, `speak`, `note` to do
+- [ ] 1.10 File tools: `fs.list` (sort, limit, glob counts), `read`, `search`, `trash` done; `write`, `move`, `copy`, `open_with_default` to do
+- [ ] 1.11 Shell tools: `shell.run` done (allowlist, `never` parsing including chained and substituted commands, `systemd-run` limits, secrets stripped from the environment); still to do: (allowlist and `never` parsing, `systemd-run` limits), `shell.script` via the sandbox helper; dev script that installs the AppArmor profile; fallback to resource limits only when isolation is off
 - [ ] 1.12 App tools: `app.open`, `app.list` (`Gio.DesktopAppInfo`)
 
 Loop and storage
 
 - [ ] 1.13 `arcee/context/store.py` (minimal): SQLite `tasks`, `steps`, `observations`; `actions.jsonl` with secret redaction
-- [ ] 1.14 `arcee/core/executor.py`: validate, gate, run with timeouts, truncate output, store
+- [x] 1.14 `arcee/core/executor.py`: gate, run with timeouts, errors and crashes as results (storing waits for 1.13)
 - [ ] 1.15 Prompt templates `planner.j2`, `core.j2`, `tools.j2`; `arcee/core/planner.py`
-- [ ] 1.16 `arcee/core/orchestrator.py`: task lifecycle, step loop, in-task history packing, escalation ladder, code guards (repeat-lookup block, 3 empty lookups → ask), stop conditions (step and time limits, identical-action loop, replan limit)
-- [ ] 1.17 `arcee-cli`: run a task from the terminal, confirmations and questions on stdin
+- [ ] 1.16 Step loop in `arcee/core/agent.py` (native mode) done: history as tool messages, escalation ladder, code guards, step and time limits; still to do: Planner integration, schema-mode loop, replan, and the rest of task lifecycle, step loop, in-task history packing, escalation ladder, code guards (repeat-lookup block, 3 empty lookups → ask), stop conditions (step and time limits, identical-action loop, replan limit)
+- [x] 1.17 `arcee-cli`: run a task from the terminal, confirmations and questions on stdin
 - [ ] 1.18 `tests/eval/`: text-mode tasks with machine-checkable criteria, growing to about 50 single-decision cases, and the `arcee eval` runner; reports results per call mode and escalation tier
 - [ ] 1.19 Example library and retrieval for the Core (spec §8, context assembly), measured against the eval suite with the library on and off
 
@@ -185,3 +185,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-23** — Phase 0: uv project on system Python 3.14 (decision 0001), Ruff, Pyright strict, pytest, pre-commit, GitHub Actions CI, contributing guide. Phase 1: `protocol.py`, `jsonfix.py`, adapter base with shared retry loop and `FakeAdapter`, sliding-window limiter with 429 backoff. 85 unit tests. Spec updated: no `task_id` in Planner output, `text` observation kind, adapter template method, limiter details.
 - **2026-10-29** — Model selection. Gemini adapter built (5xx retry, thinking levels, live tests), then parked: the free tier's daily cap is too low for an agent. NVIDIA free endpoints (MiniMax, GLM) queued or never answered. Local benchmarks on 8 agent-decision cases: Qwen3.5 0.8B 2/8, Qwen3.5 2B 4/8 (5/8 with rules and examples), LFM3 1.7B 3/8 plain, 7/8 with rules and examples, 5/8 with native tool calling at 1.55 s. Decision 0003: local-first, LFM3 1.7B Core with an escalation ladder to thinking mode and LFM2.5 8B, native and schema call modes, code guards, usage cards and retrieved examples. Generic retry and thinking changes merged from the Gemini work.
 - **2026-10-29** — 1.7 tool registry: `Tool` with usage card and typed args model, `ToolResult` with structured `data` (also added to the protocol's `ExecutorResult`), registration with wire names (`fs.list` ↔ `fs_list`) and collision checks, per-step selection with Planner filters, argument validation whose errors suggest the closest name and list the accepted arguments, rendering for native tool calls and for the schema-mode prompt. 120 unit tests.
+- **2026-10-29** — First runnable agent. Ollama adapter (native tool calls and schema mode, `num_gpu`, `think`), permission policy and gate (shell classifier that refuses `sudo`, `rm -r`, disk and power commands even behind `;`, `&&` or `$(...)`), `fs.list`/`read`/`search`/`trash`, `shell.run` under `systemd-run` limits, control tools, executor, native-mode step loop with code guards and the escalation ladder, and `arcee-cli`. Manual runs on the reference machine with LFM3 1.7B: PDF count, free disk space, IP address, newest and biggest file, find-then-read, a confirmed trash of two files, and a refused `rm -rf`, each in 2-3 model calls and 6-38 s. The first biggest-file run compared sizes wrongly, so `fs.list` gained `sort` and `limit`, which made it correct. 242 unit tests.
