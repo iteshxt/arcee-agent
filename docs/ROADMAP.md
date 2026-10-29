@@ -16,7 +16,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on free preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base and rate limiter merged (1.1-1.4); next is the Gemini adapter (1.5).
+**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base and rate limiter (1.1-1.4); Gemini API adapter for Gemma 4 merged (1.5); Ollama (1.6) deferred; next is the tool registry (1.7).
 **Last updated:** 2026-10-23
 
 ## Target machine
@@ -60,8 +60,8 @@ Prerequisites: none.
 
 Prerequisites on the machine:
 
-- [ ] Gemini API key available as an environment variable (never committed)
-- [ ] Ollama installed, `qwen3:4b` pulled (thinking disabled for JSON output)
+- [x] Gemini API key in the git-ignored `.env` (load with `uv run --env-file .env`)
+- [ ] Ollama installed, `qwen3:4b` pulled — deferred (no local models for now, 2026-10-29)
 
 Protocol and models
 
@@ -69,8 +69,8 @@ Protocol and models
 - [x] 1.2 `arcee/models/jsonfix.py`: strip fences and surrounding text, `json_repair`, validation-error retry message
 - [x] 1.3 `arcee/models/base.py`: `ModelAdapter`, `ModelProfile`, `ModelRequest`, `ModelResponse`, plus a scripted `FakeAdapter` for tests
 - [x] 1.4 `arcee/models/limiter.py`: sliding-window `rpm`, daily `rpd` counter, 429 backoff (the fallback switch is per-task state, so it moved to 1.16)
-- [ ] 1.5 `arcee/models/gemini.py`: REST client with `responseSchema`
-- [ ] 1.6 `arcee/models/ollama.py`: `/api/chat` with `format` schema, `/api/embed`
+- [x] 1.5 `arcee/models/gemini.py`: Gemini API REST client (`responseJsonSchema`, thinking levels, 5xx retry); default model Gemini 3.5 Flash-Lite, Gemma 4 as fallback; live tests in `tests/live/`
+- [ ] 1.6 `arcee/models/ollama.py`: `/api/chat` with `format` schema, `/api/embed` — deferred until local inference
 
 Tools and safety
 
@@ -92,8 +92,8 @@ Loop and storage
 
 **Gate:**
 
-- [ ] JSON first-try validity above 90% on Gemini Flash
-- [ ] JSON first-try validity above 90% on Qwen 3 4B (Ollama)
+- [ ] JSON first-try validity above 90% on Gemini 3.5 Flash-Lite (Gemini API)
+- [ ] Same on Qwen 3 4B (Ollama) — deferred with 1.6
 - [ ] 60% or more of the text-mode eval tasks pass
 - [ ] Tag `v0.1.0`
 
@@ -183,3 +183,5 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 
 - **2026-10-23** — Spec reviewed. Ambiguities fixed: D-Bus-only UI events, kill-switch last resort, AppArmor sandbox helper, wake-word models, Core sees the full plan, roadmap table with gates. Retargeted v1 to the reference machine (Ubuntu 26.04, GNOME 50, Python 3.14); added D-Bus caller checks, `pressed.json` for input release, minimal store and eval tasks in phase 1, dev deb in phase 4. This roadmap added.
 - **2026-10-23** — Phase 0: uv project on system Python 3.14 (decision 0001), Ruff, Pyright strict, pytest, pre-commit, GitHub Actions CI, contributing guide. Phase 1: `protocol.py`, `jsonfix.py`, adapter base with shared retry loop and `FakeAdapter`, sliding-window limiter with 429 backoff. 85 unit tests. Spec updated: no `task_id` in Planner output, `text` observation kind, adapter template method, limiter details.
+- **2026-10-29** — Switched the default cloud model to Gemma 4 26B A4B through the Gemini API (decision 0002). Gemini API adapter with live tests; probing showed transient 500s on about half of requests and 2-60 s latency, so 5xx is retried and the read timeout is 180 s. Ollama deferred.
+- **2026-10-29** — Benchmarked free models on the existing key (decision 0002, revised). Gemini 3.5 Flash-Lite: 7/8 correct agent decisions, 1.6 s median, 2.8 s max, no server errors; Gemma 4 26B: 6/8, 6.0 s median, 50 s max. Default switched to 3.5 Flash-Lite, with 3.1 Flash-Lite and Gemma 4 as fallbacks. Gemini 3.8 Flash has no free quota on this key.

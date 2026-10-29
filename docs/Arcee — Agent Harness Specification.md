@@ -91,9 +91,9 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 
 | Role | Job | Called | Needs | Default on reference machine | Fallback |
 | --- | --- | --- | --- | --- | --- |
-| Planner | Turn a raw request into a structured task: resolve ambiguity, pull memory, split into steps, set constraints | Once per task; again on `replan` | Reasoning, 8k+ context, no vision | Gemini Flash (free tier) | Local Qwen 3 4B via Ollama |
-| Core | Given one step and the current observation, return one JSON action | Every step | Instruction following, strict JSON; vision + grounding only for screenshot mode | Gemini Flash (free tier) | Gemma 3 4B local for tree-mode steps |
-| Context | Summarize finished tasks and old history into compact memory; tag records | Background, after each task and nightly | Cheap, local, 4k context is enough | Gemma 3 4B or Llama 3.2 3B via Ollama | Gemini Flash-Lite |
+| Planner | Turn a raw request into a structured task: resolve ambiguity, pull memory, split into steps, set constraints | Once per task; again on `replan` | Reasoning, 8k+ context, no vision | Gemini 3.5 Flash-Lite (free tier), thinking on | Gemini 3.1 Flash-Lite, then Gemma 4 26B A4B (both free) |
+| Core | Given one step and the current observation, return one JSON action | Every step | Instruction following, strict JSON; vision + grounding only for screenshot mode | Gemini 3.5 Flash-Lite (free tier), thinking off | Gemini 3.1 Flash-Lite, then Gemma 4 26B A4B (both free) |
+| Context | Summarize finished tasks and old history into compact memory; tag records | Background, after each task and nightly | Cheap, local, 4k context is enough | Gemma 3 4B or Llama 3.2 3B via Ollama | Gemini 3.1 Flash-Lite |
 | Embedder | Turn every record into a vector for retrieval | Every stored record and every query | Fast, local | `nomic-embed-text` via Ollama (768-d) | `bge-small-en` via sentence-transformers |
 
 **Capability flags.** Each configured model carries a profile the orchestrator reads before choosing a strategy. The user sets these in the app; presets fill them for known models.
@@ -107,10 +107,11 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 | `rpm`, `rpd` | int | Rate limits; the adapter throttles and queues to stay under them. |
 | `cost_tier` | free / paid / local | Shown in the UI; `paid` models require an explicit opt-in per task. |
 | `max_image_px` | int | Longest side the harness downscales screenshots to before sending (default 1280). |
+| `thinking` | bool or unset | Reason before answering. Unset keeps the provider default; Gemma 4 maps on/off to `thinkingLevel` `high`/`minimal`. Planner on, Core off by default, since the Core runs every step. |
 
 **Role presets shipped with v1**
 
-- *Free cloud:* Planner = Gemini Flash, Core = Gemini Flash, Context = local Gemma 3 4B, Embedder = nomic-embed-text.
+- *Free cloud:* Planner = Gemini 3.5 Flash-Lite (thinking on), Core = Gemini 3.5 Flash-Lite (thinking off), fallback Gemini 3.1 Flash-Lite then Gemma 4 26B A4B, all on one free Gemini API key; Context = local Gemma 3 4B, Embedder = nomic-embed-text.
 - *Fully local (16 GB, 4 GB VRAM):* Planner = Qwen 3 4B, Core = Qwen 3 4B (tree mode only), Context = Gemma 3 4B, Embedder = nomic-embed-text. Slower, no quota, private.
 - *Custom:* any OpenAI-compatible endpoint (vLLM, LM Studio, OpenRouter) per role.
 
@@ -147,7 +148,7 @@ Providers implement only `_send` and `health`; the parse-validate-retry loop bel
 
 | Adapter | Transport | Schema enforcement | Vision | Notes |
 | --- | --- | --- | --- | --- |
-| `gemini` | REST `generativelanguage.googleapis.com` | `responseMimeType=application/json` + `responseSchema` | Yes | Free tier; adapter reads `rpm`/`rpd` from profile and throttles |
+| `gemini` | REST `generativelanguage.googleapis.com` | `responseMimeType=application/json` + `responseJsonSchema` | Yes | Serves Gemini and Gemma 4 (`gemma-4-26b-a4b-it`, `gemma-4-31b-it`). Free tier; quota day resets at midnight Pacific. Skips `thought` parts; retries 5xx (frequent and transient for Gemma); 180 s read timeout because latency varies from 2 s to over 60 s |
 | `openai_compat` | `/v1/chat/completions` | `response_format: {type: json_schema}` when supported, else prompt only | Depends on endpoint | Covers OpenRouter, vLLM, LM Studio, Groq, Mistral |
 | `ollama` | `/api/chat` on `127.0.0.1:11434` | `format: <json schema>` (Ollama 0.5+) | Yes for vision models (llava, gemma3, qwen-vl) | Also exposes `/api/embed` for the Embedder role |
 | `llamacpp` | `llama-server` HTTP | GBNF grammar generated from the Pydantic schema | Via `--mmproj` | Optional; for users who want grammar-level guarantees |
@@ -791,14 +792,14 @@ The table below carries the same content as the drawing, so it reads the same in
 
 | Phase | Weeks | Deliverables | Gate (measured) |
 | --- | --- | --- | --- |
-| 1. Core loop | 1-2 | `protocol.py`, Gemini and Ollama adapters, `jsonfix`, limiter, tool registry, permission gate, control/shell/app/fs tools, sandbox helper with a dev install script for its AppArmor profile, Planner, orchestrator, executor, minimal SQLite store (`tasks`, `steps`, `observations`) and `actions.jsonl`, in-task history packing (last 3 full, older one line each; no retrieval yet), `arcee-cli` with stdin confirmations, the text-mode eval tasks and `arcee eval` runner, unit tests | JSON first-try validity above 90% on both models; 60% pass on the text-mode tasks of the eval suite |
+| 1. Core loop | 1-2 | `protocol.py`, Gemini API adapter (Gemma 4), Ollama adapter (deferred until local inference is set up), `jsonfix`, limiter, tool registry, permission gate, control/shell/app/fs tools, sandbox helper with a dev install script for its AppArmor profile, Planner, orchestrator, executor, minimal SQLite store (`tasks`, `steps`, `observations`) and `actions.jsonl`, in-task history packing (last 3 full, older one line each; no retrieval yet), `arcee-cli` with stdin confirmations, the text-mode eval tasks and `arcee eval` runner, unit tests | JSON first-try validity above 90% on Gemini 3.5 Flash-Lite; 60% pass on the text-mode tasks of the eval suite |
 | 2. Browser and desktop tree | 3-4 | Playwright worker, DOM tree extraction (grounding level 1), AT-SPI tools (level 2), `ui.act` (AT-SPI actions only; the pointer fallback arrives with phase 3), Planner `steps[].tools` filter, window API stub | A web form fill and a GUI file rename both complete using trees only, with zero screenshots sent |
 | 3. Wayland capture and input | 5-6 | ScreenCast and RemoteDesktop portals with restore tokens, ydotool fallback, `ScreenMap`, set-of-marks, `screen.ocr_find`, levels 3-4, kill switch, `release_all`, watchdog thread | Clicks land within 5 px of target on two monitors (a virtual second monitor counts) with fractional scaling; kill switch returns in under 100 ms |
 | 4. Daemon, extension, app | 7-9 | `systemd --user` unit, D-Bus service and activation, GNOME extension (indicator, dropdown, confirm bubble, keybindings, `org.arcee.Shell`), GTK4 pages Models, Tools, History, Diagnostics, first-run wizard, a local dev deb (`dpkg-buildpackage`, no APT repository) | On a fresh user account on the reference machine: install the dev deb, finish the wizard and complete a first task within 10 minutes |
 | 5. Context manager and voice | 10-12 | LanceDB vector store on top of the phase 1 SQLite store, embeddings, retrieval and budget packing, summarizer and nightly timer, Memory page, both wake-word models, VAD, faster-whisper, Piper, follow-up mode, optional verifier | Wake word to transcript in under 1.5 s; a fact from a week-old task is recalled correctly without being restated |
 | 6. Packaging and release | 13-14 | release deb (AppArmor profile loaded in postinst, sandbox helper), APT repository, docs, MCP client, eval report, v1.0 tag, extension submitted to extensions.gnome.org | 75% eval pass rate on the free preset; 20 external testers each complete a task |
 
-**Phase 1 deliverable**, the first code to write: `arcee/core/protocol.py`, `arcee/models/{base,gemini,ollama,jsonfix,limiter}.py`, `arcee/tools/{base,registry}.py`, the control, shell, app and fs tools, `arcee/core/{planner,orchestrator,executor,gate}.py`, a minimal `arcee/context/store.py` (SQLite tasks, steps, observations, plus `actions.jsonl`), the text-mode tasks in `tests/eval/` with the `arcee eval` runner, and `arcee-cli` that runs a task from a terminal with confirmations on stdin. Tested against Gemini Flash (free) and Qwen 3 4B on Ollama.
+**Phase 1 deliverable**, the first code to write: `arcee/core/protocol.py`, `arcee/models/{base,gemini,ollama,jsonfix,limiter}.py`, `arcee/tools/{base,registry}.py`, the control, shell, app and fs tools, `arcee/core/{planner,orchestrator,executor,gate}.py`, a minimal `arcee/context/store.py` (SQLite tasks, steps, observations, plus `actions.jsonl`), the text-mode tasks in `tests/eval/` with the `arcee eval` runner, and `arcee-cli` that runs a task from a terminal with confirmations on stdin. Tested against Gemini 3.5 Flash-Lite through the Gemini API (free); the Ollama adapter and local models follow when local inference is set up.
 
 **Order inside later phases** is flexible, with two fixed rules: the kill switch ships with the first tool that moves the pointer (phase 3), and the permission gate exists from phase 1 even when every tool is `auto`.
 
@@ -816,7 +817,8 @@ The three risks that could change the design are free-tier volatility, GNOME por
 | 4B local models fail at planning multi-step tasks | Medium | Fully-local preset is weak | Planner prompt uses few-shot examples and a smaller step vocabulary; preset labelled "experimental"; 7-8B models possible on 8 GB VRAM machines |
 | AT-SPI trees are empty for popular Electron apps (VS Code, Slack, Discord) | High | Those apps need screenshots every step | Marks mode with OCR; per-app launch flags added by the wizard (`--force-renderer-accessibility`) |
 | Free-tier terms allow training on inputs; screenshots may contain private data | Certain | Privacy exposure for cloud users | Warning badge per model; screenshot-free modes; incognito tasks; local preset |
-| Gemma via API has 15k tokens/min, too small for screenshot steps | Certain | Gemma only works for tree-mode steps | Capability flags hide screenshot tools for it; Core switches to Flash or local for GUI steps |
+| Free-tier daily quotas are small and undocumented per model (third-party reports: about 20/day for 3.5 Flash, 500/day for 3.1 Flash-Lite, 1,500/day for Gemma 4) | High | A long task can exhaust the Core's quota mid-task | Fallback chain on the same key (3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4); `rpd` set per model from AI Studio's rate-limit page; usage shown against limits |
+| Gemma 4 through the Gemini API is slow and flaky: frequent transient HTTP 500s and 2-60 s latency (measured October 2026) | Certain | Slow steps when the chain falls back to Gemma | Kept last in the fallback chain; 5xx retried with backoff; long read timeout |
 | ydotool requires group membership and a re-login | Certain | Confusing first run | Wizard explains it; portal path needs no re-login and is tried first |
 | Prompt injection through web pages | Medium | Unwanted actions | Untrusted wrappers, detector, forced confirmation, `never` tier on exfiltration tools |
 
