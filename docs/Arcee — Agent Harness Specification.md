@@ -41,7 +41,7 @@ The reference machine is the developer's own: Ubuntu 26.04 LTS, GNOME 50 on Wayl
 | Node.js | 20+ (Playwright runtime only) | 20+ |
 | Audio | Any microphone (PipeWire) | Microphone with noise suppression |
 
-**What fits in 4 GB VRAM.** A 4-bit quantized 3-4B model (Gemma 3 4B Q4, Qwen 3 4B Q4, Llama 3.2 3B) occupies about 2.5-3 GB and runs at 20-40 tokens/s on a GTX 1650. A 7-8B model at Q4 needs about 5 GB, so it spills partly to CPU and drops to 5-10 tokens/s: usable for the background summarizer, too slow for the planner on the critical path. Faster-whisper `small` (int8) takes about 500 MB of VRAM; Piper runs on CPU; `nomic-embed-text` takes about 300 MB. The reference machine can therefore keep one 3-4B model, whisper and the embedder resident at once. Measured on the reference machine, the GNOME desktop itself holds 0.8-2 GB of VRAM; LFM3 1.7B at Q4 takes 1.1 GiB and runs at about 65 tokens/s fully on the GPU, which is why it is the default Core (decision 0003). Ollama does not always put every layer on the GPU when VRAM is shared with the desktop, so the adapter sets `num_gpu` explicitly.
+**What fits in 4 GB VRAM.** A 4-bit quantized 3-4B model (Gemma 3 4B Q4, Qwen 3 4B Q4, Llama 3.2 3B) occupies about 2.5-3 GB and runs at 20-40 tokens/s on a GTX 1650. A 7-8B model at Q4 needs about 5 GB, so it spills partly to CPU and drops to 5-10 tokens/s: usable for the background summarizer, too slow for the planner on the critical path. Faster-whisper `small` (int8) takes about 500 MB of VRAM; Piper runs on CPU; `nomic-embed-text` takes about 300 MB. The reference machine can therefore keep one 3-4B model, whisper and the embedder resident at once. Measured on the reference machine, the GNOME desktop itself holds 0.8-2 GB of VRAM; LFM3 1.7B at Q4 takes 1.1 GiB and runs at about 65 tokens/s fully on the GPU; LFM3-Omni, the same model with image and audio, takes 2.0 GB and is the default (decisions 0003 and 0005). Ollama does not always put every layer on the GPU when VRAM is shared with the desktop, so the adapter sets `num_gpu` explicitly.
 
 **System packages (Ubuntu names)**
 
@@ -91,9 +91,9 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 
 | Role | Job | Called | Needs | Default on reference machine | Fallback |
 | --- | --- | --- | --- | --- | --- |
-| Planner | Turn a raw request into a structured task: resolve ambiguity, pull memory, split into steps, set constraints | Once per task; again on `replan` | Reasoning, 8k+ context, no vision | LFM3 1.7B with thinking on | LFM2.5 8B |
-| Core | Given one step and the current observation, return one action | Every step | Tool calling, instruction following; vision + grounding only for screenshot mode | LFM3 1.7B, thinking off | The escalation ladder below |
-| Context | Summarize finished tasks and old history into compact memory; tag records | Background, after each task and nightly | Cheap, local, 4k context is enough | LFM3 1.7B | LFM2.5 8B |
+| Planner | Turn a raw request into a structured task: resolve ambiguity, pull memory, split into steps, set constraints | Long requests only; again on `replan` | Reasoning, 8k+ context, no vision | LFM3-Omni 1.7B (schema mode) | LFM2.5 8B |
+| Core | Given one step and the current observation, return one action | Every step | Tool calling, instruction following; vision + grounding only for screenshot mode | LFM3-Omni 1.7B (decision 0005) | The escalation ladder below |
+| Context | Summarize finished tasks and old history into compact memory; tag records | Background, after each task and nightly | Cheap, local, 4k context is enough | LFM3-Omni 1.7B | LFM2.5 8B |
 | Embedder | Turn every record into a vector for retrieval | Every stored record and every query | Fast, local | `nomic-embed-text` via Ollama (768-d) | `bge-small-en` via sentence-transformers |
 
 **Capability flags.** Each configured model carries a profile the orchestrator reads before choosing a strategy. The user sets these in the app; presets fill them for known models.
@@ -114,13 +114,13 @@ Four roles, each bound to one model in settings. Only the Core sits on the criti
 
 | Tier | Core model on the local preset | Cost |
 | --- | --- | --- |
-| 1 | LFM3 1.7B, thinking off | about 1.5 s per step |
-| 2 | LFM3 1.7B, thinking on | about 4.5 s; same weights, no swap |
+| 1 | LFM3-Omni 1.7B (no thinking mode) | about 3 s per step |
+| 2 | LFM3 1.7B, thinking on | about 5-15 s; a second model, swapped in on escalation |
 | 3 | LFM2.5 8B | partly on CPU; seconds per step plus a model swap |
 
 **Role presets shipped with v1**
 
-- *Local (default; 16 GB, 4 GB VRAM):* Planner = LFM3 1.7B thinking, Core = the ladder above (tree mode only), Context = LFM3 1.7B, Embedder = nomic-embed-text. No quota, private, works offline.
+- *Local (default; 16 GB, 4 GB VRAM):* Planner = LFM3-Omni, Core = the ladder above, Context = LFM3-Omni, Embedder = nomic-embed-text. One base model for text, screenshots and voice (decision 0005). No quota, private, works offline.
 - *Cloud:* any configured cloud model per role for users who bring a key (the Gemini adapter is parked on a branch, decision 0003).
 - *Custom:* any OpenAI-compatible endpoint (vLLM, LM Studio, OpenRouter) per role.
 

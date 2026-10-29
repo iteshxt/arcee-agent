@@ -10,9 +10,7 @@ from arcee.models.ollama import ALL_LAYERS, OllamaAdapter
 
 pytestmark = pytest.mark.live
 
-CORE = ModelProfile(
-    model="lfm3", context_tokens=8192, cost_tier="local", call_mode="native", thinking=False
-)
+CORE = ModelProfile(model="lfm3-omni", context_tokens=8192, cost_tier="local", call_mode="native")
 TOOLS = [
     {
         "type": "function",
@@ -34,7 +32,7 @@ async def core() -> OllamaAdapter:
     model = OllamaAdapter(CORE, options={"num_gpu": ALL_LAYERS, "num_ctx": 8192})
     if not await model.health():
         await model.aclose()
-        pytest.skip("Ollama is not running or lfm3 is not pulled")
+        pytest.skip("Ollama is not running or lfm3-omni is not pulled")
     return model
 
 

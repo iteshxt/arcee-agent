@@ -6,9 +6,10 @@ Arcee (pronounced "R-C") is a model-agnostic desktop agent harness for Ubuntu on
 
 ## Try it
 
-Arcee runs on a local model through [Ollama](https://ollama.com). Install Ollama, then pull the default model (1.1 GB):
+Arcee runs on a local model through [Ollama](https://ollama.com). Install Ollama, then pull the base model (2.0 GB) and the thinking tier (1.1 GB):
 
 ```sh
+ollama pull lfm3-omni
 ollama pull lfm3
 uv sync
 uv run arcee-cli run "How much free disk space do I have?"
@@ -35,7 +36,7 @@ uv run pyright
 uv run pytest
 ```
 
-Live tests talk to the real local model and are skipped by default. With Ollama running and `ollama pull lfm3` done:
+Live tests talk to the real local model and are skipped by default. With Ollama running and `ollama pull lfm3-omni` done:
 
 ```sh
 uv run pytest -m live
