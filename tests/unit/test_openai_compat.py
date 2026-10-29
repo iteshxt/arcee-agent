@@ -8,7 +8,7 @@ from arcee.core.protocol import CoreAction
 from arcee.models.base import Message, ModelProfile, ModelRequest, ToolRequest, WireCall
 from arcee.models.errors import ModelUnavailableError, QuotaExhaustedError
 from arcee.models.openai_compat import OpenAICompatAdapter
-from arcee.models.presets import cloud_profile, core_ladder
+from arcee.models.presets import cloud_profile, core_ladder, planner_for, share_budget
 from tests.fakes import FakeClock
 
 NATIVE = cloud_profile("google/gemma-4-31b-it")
@@ -158,10 +158,27 @@ def test_core_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="unknown provider 'acme'"):
         core_ladder("acme:model")
     with pytest.raises(ValueError, match="unknown core"):
-        core_ladder("groq")
+        core_ladder("openrouter")
     monkeypatch.setenv("GROQ_API_KEY", "g")
     [groq] = core_ladder("groq:openai/gpt-oss-20b")
     assert groq.profile.model == "openai/gpt-oss-20b"
+    small, large = core_ladder("groq")
+    assert (small.profile.model, large.profile.model) == (
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+    )
+
+
+def test_planner_shares_the_large_models_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    ladder = core_ladder("groq")
+    planner = planner_for("groq")
+
+    share_budget(ladder, planner)
+
+    assert planner.profile.model == "openai/gpt-oss-120b"
+    assert planner.limiter is ladder[1].limiter
+    assert planner.limiter is not ladder[0].limiter
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     [model] = core_ladder("openrouter:google/gemma-4-31b-it")
     assert (model.profile.model, model.profile.rpm) == ("google/gemma-4-31b-it", 20)
