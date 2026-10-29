@@ -7,21 +7,24 @@ matched paths) instead of re-deriving them from raw text (decision 0003).
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from arcee.core.policy import Policy, Tier
 from arcee.core.protocol import Risk
 
-
-class Tier(StrEnum):
-    """Permission tier; the gate decides with it, the tool never does."""
-
-    AUTO = "auto"
-    CONFIRM = "confirm"
-    NEVER = "never"
+__all__ = [
+    "NoArgs",
+    "ObservationKind",
+    "Tier",
+    "Tool",
+    "ToolArgs",
+    "ToolContext",
+    "ToolResult",
+    "Usage",
+]
 
 
 type ObservationKind = Literal[
@@ -118,9 +121,21 @@ class Tool[A: ToolArgs](ABC):
     timeout_s: ClassVar[float] = 30.0
     observation_kind: ClassVar[ObservationKind] = "text"
 
+    def tier_for(self, args: A, policy: Policy) -> Tier:
+        """This call's tier. Tools whose risk depends on the arguments override it."""
+        return self.tier
+
+    def refusal(self, args: A, policy: Policy) -> str:
+        """Why a `never` call is refused, in words the model can act on."""
+        return f"{self.name} is not allowed"
+
     def sentence(self, args: A) -> str:
-        """The confirmation question shown to the user; tools in `confirm` should override it."""
+        """The confirmation question shown to the user; tools that can need one override it."""
         return f"Run {self.name}?"
+
+    def preview(self, args: A) -> tuple[str, ...]:
+        """The concrete targets listed under the confirmation question."""
+        return ()
 
     @abstractmethod
     async def run(self, args: A, ctx: ToolContext) -> ToolResult: ...
