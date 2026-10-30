@@ -84,6 +84,8 @@ class Message:
     text: str
     tool_calls: tuple[WireCall, ...] = ()
     tool_name: str = ""
+    # A tool result in one line, shown in its place once the result is old.
+    summary: str = ""
 
 
 @dataclass(frozen=True, slots=True)

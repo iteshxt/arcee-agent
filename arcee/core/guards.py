@@ -84,10 +84,19 @@ class Review:
 
 
 def review_reply(
-    reply: str, messages: Sequence[Message], wire_names: Iterable[str], *, grounding: bool = True
+    reply: str,
+    messages: Sequence[Message],
+    wire_names: Iterable[str],
+    *,
+    grounding: bool = True,
+    narration: bool = True,
 ) -> Review | None:
-    """Check a would-be final answer against the conversation so far; None when it passes."""
-    if (named := narrated_tool(reply, wire_names)) is not None:
+    """Check a would-be final answer against the conversation so far; None when it passes.
+
+    `narration` is off for a plan step's handoff note, which may name the tools
+    the next steps will use.
+    """
+    if narration and (named := narrated_tool(reply, wire_names)) is not None:
         return Review("narration", f"reply was narration naming {named}", NARRATION_NUDGE)
     if not grounding:
         return None

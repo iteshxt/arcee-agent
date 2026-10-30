@@ -136,8 +136,11 @@ class TestPlannedTasks:
         assert "2. [next] Report the count" in first.system
         assert "2. [current] Report the count" in third.system
         assert "answer their whole request" in third.system
-        assert [m.text for m in third.messages if m.role != "tool"][-2:] == [
-            "Found 0 files.",
+        # Step 2 starts fresh: the request, step 1's note, its own turn; no step 1 calls.
+        assert [m.text for m in third.messages] == [
+            "how many files in ~?",
+            "Done so far (earlier tool results are not shown again):\n"
+            "Step 1: List the folder\nResult: Found 0 files.",
             "Now step 2: Report the count",
         ]
         assert [e for e in events if isinstance(e, StepStarted)] == [
@@ -145,6 +148,19 @@ class TestPlannedTasks:
             StepStarted(2, 2, "Report the count"),
         ]
         assert outcome.model_calls == 4  # one plan, three Core turns
+
+    async def test_a_handoff_note_may_name_tools(self) -> None:
+        note = "Opened the inbox; browser_get_elements lists the rows next."
+        agent, _, core, events, _ = make(
+            [plan(("Open Gmail", ["browser.*"]), ("Report", ["control.done"]))],
+            [Completion(note), Completion("Nothing unread.")],
+        )
+
+        outcome = await agent.run("check my gmail")
+
+        assert (outcome.status, outcome.reply) == ("done", "Nothing unread.")
+        assert not [e for e in events if isinstance(e, Guarded)]
+        assert len(core.requests) == 2
 
     async def test_one_step_plans_keep_the_plain_prompt(self) -> None:
         agent, _, core, events, _ = make([plan(("Say hello", ["*"]))], [Completion("Hello!")])
