@@ -37,6 +37,7 @@ from arcee.tools.browser import (
     FillArgs,
     NavigateArgs,
     TabsArgs,
+    browser_tools,
 )
 
 CTX = ToolContext(task_id="t_1", home=Path("/home/u"))
@@ -292,3 +293,13 @@ async def test_html_entities_are_decoded() -> None:
 
     assert result.data is not None
     assert result.data["elements"][0]["name"] == "A & B"
+
+
+def test_only_looking_at_the_page_is_read_only() -> None:
+    session = BrowserSession()
+    reads = {"browser.get_elements", "browser.read_text"}
+    for tool in browser_tools(session):
+        assert tool.read_only == (tool.name in reads), tool.name
+    tabs = BrowserTabs(session)
+    assert not tabs.changes_things(TabsArgs(action="list"))
+    assert tabs.changes_things(TabsArgs(action="switch", tab=1))

@@ -104,6 +104,9 @@ class BrowserTabs(_BrowserTool[TabsArgs]):
     )
     args_model = TabsArgs
 
+    def changes_things(self, args: TabsArgs) -> bool:
+        return args.action != "list"
+
     def tier_for(self, args: TabsArgs, policy: Policy) -> Tier:
         return Tier.CONFIRM if args.action == "close" else Tier.AUTO
 
@@ -208,6 +211,7 @@ class ElementsArgs(ToolArgs):
 
 class BrowserElements(_BrowserTool[ElementsArgs]):
     name = "browser.get_elements"
+    read_only = True
     description = (
         "Read the current Chrome page: its title, address, a text excerpt, and its buttons, "
         "links, fields and rows, each numbered el_N for browser.click and browser.fill."
@@ -245,6 +249,7 @@ class ReadArgs(ToolArgs):
 
 class BrowserReadText(_BrowserTool[ReadArgs]):
     name = "browser.read_text"
+    read_only = True
     description = "Read the text of the current Chrome page, or of one part of it."
     usage = Usage(
         when="Questions about what an open page says: the emails in an inbox, an open "

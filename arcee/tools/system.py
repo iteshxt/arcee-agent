@@ -30,6 +30,7 @@ def _gb(n_bytes: float) -> str:
 
 class SystemStatus(Tool[NoArgs]):
     name = "system.status"
+    read_only = True
     description = (
         "This computer's state: memory (RAM) used and free, disk space used and free for / "
         "and home, CPU count and load, uptime, kernel and OS version."
@@ -109,6 +110,7 @@ def _uptime(path: Path) -> str:
 
 class NetworkStatus(Tool[NoArgs]):
     name = "network.status"
+    read_only = True
     description = (
         "Network facts: the computer's main local IP address and the interface it uses, the "
         "gateway, whether it is online, and every interface's IPv4 addresses."

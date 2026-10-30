@@ -63,6 +63,7 @@ class ListArgs(ToolArgs):
 
 class FsList(Tool[ListArgs]):
     name = "fs.list"
+    read_only = True
     description = (
         "List a folder: each entry's name, type, size and modified date, the count, how many "
         "files of each type (by_type), and the folder's total size including subfolders."
@@ -184,6 +185,7 @@ class ReadArgs(ToolArgs):
 
 class FsRead(Tool[ReadArgs]):
     name = "fs.read"
+    read_only = True
     description = "Read a text file and return its content."
     usage = Usage(
         when="You need what a specific file says.",
@@ -228,6 +230,7 @@ class SearchArgs(ToolArgs):
 
 class FsSearch(Tool[SearchArgs]):
     name = "fs.search"
+    read_only = True
     description = (
         "Find files under a folder (and its subfolders) by name, pattern or text inside them. "
         "Returns the matches, their count, and how many are in each folder."
