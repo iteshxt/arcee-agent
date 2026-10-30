@@ -30,6 +30,7 @@ from typing import Any, Final, Literal, Protocol
 
 from arcee.context.examples import ExampleLibrary
 from arcee.context.examples import render as render_examples
+from arcee.core.context import Handoff, core_view
 from arcee.core.executor import Executor
 from arcee.core.guards import review_reply
 from arcee.core.planner import Planner
@@ -178,6 +179,10 @@ class _State:
     # Set when the last result held instruction-like outside text: the next action is
     # confirmed by the user whatever its tier (spec section 12).
     confirm_next: bool = False
+    # Where the turns before the first step end, and where the current step's begin.
+    prelude: int = 1
+    start: int = 1
+    handoffs: list[Handoff] = field(default_factory=list[Handoff])
 
 
 class Agent:
@@ -223,6 +228,7 @@ class Agent:
                 planned = self._planner is not None and self._plan_if(request)
                 if planned and (failed := await self._plan(state, request)):
                     return failed
+                state.prelude = state.start = len(state.messages)
                 return await self._run_plan(state, ctx, request)
         except TimeoutError:
             minutes = self._limits.max_seconds / 60
@@ -267,8 +273,12 @@ class Agent:
                 if state.plan is None or state.index + 1 >= len(state.plan.steps):
                     return Outcome("done", end.text, state.steps, state.model_calls)
                 state.messages.append(Message("assistant", end.text))
+                state.handoffs.append(
+                    Handoff(step.id if step else 0, step.do if step else "", end.text)
+                )
                 state.index += 1
                 upcoming = state.plan.steps[state.index]
+                state.start = len(state.messages)
                 state.messages.append(Message("user", f"Now step {upcoming.id}: {upcoming.do}"))
                 continue
             if self._planner is None or replans >= MAX_REPLANS:
@@ -280,6 +290,7 @@ class Agent:
                 tried=tuple(state.tried[-6:]),
                 replan_count=replans,
             )
+            state.start = len(state.messages)
             if failed := await self._plan(state, request, context):
                 return failed
             assert state.plan is not None
@@ -316,7 +327,7 @@ class Agent:
             call = completion.tool_calls[0] if completion.tool_calls else None
             if call is None:
                 if reply := completion.text.strip():
-                    if (nudge := self._check_reply(state, reply)) is None:
+                    if (nudge := self._check_reply(state, reply, final=self._last(state))) is None:
                         return _StepDone(reply)
                     state.messages += (Message("assistant", reply), Message("user", nudge))
                     await self._strike(state, "the reply failed a check")
@@ -361,7 +372,7 @@ class Agent:
                 state.seen.clear()
             else:
                 state.seen[key] = message
-            self._answer(state, call, message)
+            self._answer(state, call, message, summary=result.summary)
             if result.status == "ok":
                 await self._settle(state)
             else:
@@ -403,8 +414,15 @@ class Agent:
         model = self._ladder[state.tier]
         started = time.monotonic()
         state.model_calls += 1
+        view = core_view(
+            state.messages,
+            prelude=state.prelude,
+            start=state.start,
+            handoffs=state.handoffs,
+            asked=state.asked,
+        )
         completion = await model.respond(
-            self.core_request(state.messages, offered, plan=state.plan, index=state.index)
+            self.core_request(view, offered, plan=state.plan, index=state.index)
         )
         self._emit(
             ModelTurn(
@@ -468,19 +486,25 @@ class Agent:
         state.messages.append(Message("user", f"(You asked: {question})\n{answer}"))
         state.empty_lookups.clear()
 
-    def _answer(self, state: _State, call: WireCall, content: str) -> None:
+    def _answer(self, state: _State, call: WireCall, content: str, summary: str = "") -> None:
         state.messages += (
             Message("assistant", "", tool_calls=(call,)),
-            Message("tool", content, tool_name=call.name),
+            Message("tool", content, tool_name=call.name, summary=summary),
         )
 
-    def _check_reply(self, state: _State, reply: str) -> str | None:
+    @staticmethod
+    def _last(state: _State) -> bool:
+        """Whether a plain reply now is the answer to the user, not a step's handoff note."""
+        return state.plan is None or state.index + 1 >= len(state.plan.steps)
+
+    def _check_reply(self, state: _State, reply: str, *, final: bool = True) -> str | None:
         """The nudge for a would-be answer that fails a guard; None when it passes."""
         review = review_reply(
             reply,
             state.messages,
             (wire_name(tool.name) for tool in self._registry),
             grounding=state.grounding_nudges < MAX_GROUNDING_NUDGES,
+            narration=final,
         )
         if review is None:
             return None
@@ -538,7 +562,8 @@ def plan_brief(plan: PlannerOutput | None, index: int) -> str:
             "That reply is your answer to the user: answer their whole request, using "
             "what the earlier steps found."
             if last
-            else "The next step follows."
+            else "The next steps see only that reply, not your tool results: include every "
+            "fact they need (names, subjects, dates, links)."
         )
     )
     return "\n".join(lines)
