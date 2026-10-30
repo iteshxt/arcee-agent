@@ -132,6 +132,14 @@ class Tool[A: ToolArgs](ABC):
     # Results carry outside content (web pages, file text, command output): they are
     # marked for the model and scanned for injected instructions.
     untrusted: ClassVar[bool] = False
+    # Only looks: the same call again returns the same result until something changes,
+    # so the agent may block an exact repeat. Anything else (a click, a typed search, a
+    # wait) may change what later looks return, and lets them run again.
+    read_only: ClassVar[bool] = False
+
+    def changes_things(self, args: A) -> bool:
+        """Whether this call may change what later reads return."""
+        return not self.read_only
 
     def tier_for(self, args: A, policy: Policy) -> Tier:
         """This call's tier. Tools whose risk depends on the arguments override it."""

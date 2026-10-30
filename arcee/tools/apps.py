@@ -97,6 +97,7 @@ class ListArgs(ToolArgs):
 
 class AppList(Tool[ListArgs]):
     name = "app.list"
+    read_only = True
     description = "Find installed apps by name or purpose; returns their names and ids."
     usage = Usage(
         when="You need to know whether an app is installed, or its exact name to open it.",

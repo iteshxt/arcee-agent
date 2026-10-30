@@ -48,6 +48,7 @@ class _DesktopTool[A: ToolArgs](Tool[A]):
 
 class UiWindows(_DesktopTool[NoArgs]):
     name = "ui.windows"
+    read_only = True
     description = "List the open app windows: app, title, and which one is active."
     usage = Usage(when="You need to know which apps are open before reading one.")
     args_model = NoArgs
@@ -69,6 +70,7 @@ class TreeArgs(ToolArgs):
 
 class UiTree(_DesktopTool[TreeArgs]):
     name = "ui.tree"
+    read_only = True
     description = (
         "Read an app window: its buttons, menu items, fields, list and table entries, each "
         "numbered el_N, plus the window's own actions (like view.rename) for ui.act."

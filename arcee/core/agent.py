@@ -30,7 +30,7 @@ from typing import Any, Final, Literal, Protocol
 
 from arcee.context.examples import ExampleLibrary
 from arcee.context.examples import render as render_examples
-from arcee.core.context import Handoff, core_view
+from arcee.core.context import KEEP_WHOLE, Handoff, core_view
 from arcee.core.executor import Executor
 from arcee.core.guards import review_reply
 from arcee.core.planner import Planner
@@ -172,7 +172,8 @@ class _State:
     steps: int = 0
     model_calls: int = 0
     empty_lookups: list[str] = field(default_factory=list[str])
-    seen: dict[str, str] = field(default_factory=dict[str, str])
+    # Read calls since the last change: their key -> (index of the result, the result).
+    seen: dict[str, tuple[int, str]] = field(default_factory=dict[str, tuple[int, str]])
     grounding_nudges: int = 0
     # Questions already put to the user in this task, with their answers.
     asked: dict[str, str] = field(default_factory=dict[str, str])
@@ -346,11 +347,14 @@ class Agent:
                 continue
             key = _key(valid)
             if (previous := state.seen.get(key)) is not None:
-                self._answer(state, call, _repeat_note(previous))
+                index, earlier = previous
+                # Resend the result only when the Core no longer sees it whole.
+                visible = _shown_whole(state, index)
+                self._answer(state, call, _repeat_note(None if visible else earlier))
                 self._emit(Guarded(state.steps, f"blocked a repeat of {valid.tool.name}"))
                 await self._strike(state, "repeated an earlier call")
                 continue
-            changes_things = (
+            changes_things = valid.tool.changes_things(valid.args) or (
                 self._executor.gate.tier(valid, model_asked=state.confirm_next) is not Tier.AUTO
             )
             result = await self._executor.execute(
@@ -367,12 +371,13 @@ class Agent:
                 )
             state.tried.append(result.summary)
             message = tool_message(result)
-            # After anything that can change the system, looking again is verification.
+            self._answer(state, call, message, summary=result.summary)
+            # After anything that can change the system or the page, looking again is
+            # verification, not a repeat.
             if changes_things:
                 state.seen.clear()
             else:
-                state.seen[key] = message
-            self._answer(state, call, message, summary=result.summary)
+                state.seen[key] = (len(state.messages) - 1, message)
             if result.status == "ok":
                 await self._settle(state)
             else:
@@ -573,7 +578,22 @@ def _key(call: ToolCall) -> str:
     return f"{call.tool.name} {call.args.model_dump_json()}"
 
 
-def _repeat_note(previous: str) -> str:
+def _shown_whole(state: _State, index: int) -> bool:
+    """Whether the result at `index` is still in the Core's view, not shortened."""
+    later = sum(1 for m in state.messages[index + 1 :] if m.role == "tool")
+    return index >= state.start and later < KEEP_WHOLE
+
+
+def _repeat_note(previous: str | None) -> str:
+    """The answer to an exact repeat: a pointer when the result is in view, else the result."""
+    if previous is None:
+        return json.dumps(
+            {
+                "status": "error",
+                "error": "You already made this exact call and nothing has changed since; its "
+                "result is above. Use it, or take a different next action.",
+            }
+        )
     return json.dumps(
         {
             "status": "error",

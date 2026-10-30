@@ -47,6 +47,7 @@ class SearchArgs(ToolArgs):
 
 class WebSearch(Tool[SearchArgs]):
     name = "web.search"
+    read_only = True
     description = "Search the web; returns titles, links and snippets of the top results."
     usage = Usage(
         when="The answer is on the internet: news, documentation, facts you do not have.",
@@ -169,6 +170,7 @@ class FetchArgs(ToolArgs):
 
 class WebFetch(Tool[FetchArgs]):
     name = "web.fetch"
+    read_only = True
     description = "Read a web page as plain text (title, headings and paragraphs; no scripts)."
     usage = Usage(
         when="You have a link (from the user or web.search) and need what the page says.",

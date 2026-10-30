@@ -15,9 +15,10 @@ from arcee.core.protocol import ConfirmRequest
 from arcee.models.base import Completion, Message, ModelProfile, ToolRequest, WireCall
 from arcee.models.errors import MalformedReplyError
 from arcee.models.fake import FakeAdapter
+from arcee.tools.base import NoArgs, Tool, ToolContext, ToolResult, Usage
 from arcee.tools.control import CONTROL_TOOLS
 from arcee.tools.files import FsList, FsSearch, FsTrash
-from arcee.tools.registry import Registry
+from arcee.tools.registry import AnyTool, Registry
 from arcee.tools.shell import ShellRun
 
 TEN_STEPS = Limits(max_steps=10)
@@ -62,6 +63,7 @@ def make(
     *scripts: Sequence[Completion | Exception],
     user: User | None = None,
     limits: Limits = TEN_STEPS,
+    extra: Sequence[AnyTool] = (),
 ) -> tuple[Agent, list[FakeAdapter], list[Event], User]:
     user = user or User()
     ladder = [
@@ -75,6 +77,7 @@ def make(
             FsTrash(command=("mv", "-t", str(home / ".trash"), "--")),
             ShellRun(limits=False),
             *(tool() for tool in CONTROL_TOOLS),
+            *extra,
         ]
     )
     events: list[Event] = []
@@ -152,7 +155,59 @@ async def test_exact_repeat_is_not_run_again(home: Path) -> None:
     assert Guarded(2, "blocked a repeat of fs.list") in events
     repeat = tool_results(model)[1]
     assert "already made this exact call" in repeat["error"]
+    assert "previous_result" not in repeat  # the result is still in view, whole
+
+
+async def test_a_repeat_gets_the_result_again_once_it_is_out_of_view(home: Path) -> None:
+    agent, [model], _, _ = make(
+        home,
+        [
+            call("fs_list", path="~/Downloads"),
+            call("fs_list", path="~"),
+            call("fs_search", query="deb"),
+            call("fs_list", path="~/Downloads"),
+            say("3 files"),
+        ],
+    )
+
+    await agent.run("what is in Downloads")
+
+    repeat = tool_results(model)[3]
     assert repeat["previous_result"]["data"]["count"] == 3
+
+
+class Poke(Tool[NoArgs]):
+    """An automatic action that changes what reads return, like a click in Chrome."""
+
+    name = "app.poke"
+    description = "Poke."
+    usage = Usage(when="Never.")
+    args_model = NoArgs
+
+    async def run(self, args: NoArgs, ctx: ToolContext) -> ToolResult:
+        return ToolResult.ok("Poked")
+
+
+async def test_reading_again_after_an_automatic_change_is_allowed(home: Path) -> None:
+    agent, _, events, _ = make(
+        home,
+        [
+            call("fs_list", path="~/Downloads"),
+            call("app_poke"),
+            call("fs_list", path="~/Downloads"),
+            say("done"),
+        ],
+        extra=[Poke()],
+    )
+
+    await agent.run("do the usual")
+
+    assert [e.result.tool for e in events if isinstance(e, ToolRan)] == [
+        "fs.list",
+        "app.poke",
+        "fs.list",
+    ]
+    assert not [e for e in events if isinstance(e, Guarded)]
 
 
 async def test_looking_again_after_a_change_is_allowed(home: Path) -> None:
