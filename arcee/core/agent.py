@@ -35,6 +35,7 @@ from arcee.core.executor import Executor
 from arcee.core.guards import review_reply
 from arcee.core.planner import Planner
 from arcee.core.policy import Tier
+from arcee.core.presence import NoPresence, Presence, is_visible
 from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.core.toolsets import filters_for
@@ -212,6 +213,7 @@ class Agent:
         start_tier: Callable[[str], int] = lambda request: 0,
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
+        presence: Presence | None = None,
     ) -> None:
         if not ladder:
             raise ValueError("the escalation ladder needs at least one model")
@@ -228,6 +230,7 @@ class Agent:
         self._limits = limits
         self._emit = on_event
         self._clock = clock
+        self._presence = presence or NoPresence()
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
@@ -375,6 +378,8 @@ class Agent:
             changes_things = valid.tool.changes_things(valid.args) or (
                 self._executor.gate.tier(valid, model_asked=state.confirm_next) is not Tier.AUTO
             )
+            if is_visible(valid.tool.name):
+                await self._presence.acting()  # the glow, and a pause the user asked for
             result = await self._executor.execute(
                 valid, state.steps, ctx, model_asked=state.confirm_next
             )

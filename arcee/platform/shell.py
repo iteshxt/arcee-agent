@@ -20,6 +20,11 @@ TIMEOUT_MS: Final = 2000
 SCREENSHOT_TIMEOUT_MS: Final = 10_000
 
 
+CONTROL_REASON: Final = "Arcee is working"
+# How often to look whether the user has resumed Arcee.
+PAUSE_POLL_S: Final = 0.5
+
+
 class ShellUnavailableError(RuntimeError):
     """The Arcee shell extension is not running, or refused the call."""
 
@@ -136,6 +141,36 @@ class ShellBridge:
 
         reply = self._connect().call_sync(method, args, Gio.DBusCallFlags.NONE, TIMEOUT_MS, None)
         return reply.unpack()
+
+
+class ShellPresence:
+    """Control of the screen through the extension, for actions the user can see.
+
+    Without the extension it does nothing. A stop during a pause is left to the stop
+    signal, which cancels the task.
+    """
+
+    def __init__(self, bridge: ShellBridge | None = None) -> None:
+        self._bridge = bridge or ShellBridge()
+        self.held = False
+
+    async def acting(self) -> None:
+        import asyncio
+
+        if not await asyncio.to_thread(self._bridge.available):
+            return
+        state = await asyncio.to_thread(self._bridge.begin_control, CONTROL_REASON)
+        while state == "paused":
+            await asyncio.sleep(PAUSE_POLL_S)
+            state = await asyncio.to_thread(self._bridge.control_state)
+        self.held = state == "active"
+
+    async def release(self) -> None:
+        import asyncio
+
+        if self.held:
+            self.held = False
+            await asyncio.to_thread(self._bridge.end_control)
 
 
 class StopWatcher:

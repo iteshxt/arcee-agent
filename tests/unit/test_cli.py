@@ -72,3 +72,30 @@ def test_ollama_host_without_scheme(value: str, expected: str) -> None:
 def test_run_needs_a_request() -> None:
     with pytest.raises(SystemExit):
         main(["run"])
+
+
+async def test_answering_a_question_gives_control_back_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Presence:
+        held = True
+
+        async def acting(self) -> None:
+            events.append("acting")
+
+        async def release(self) -> None:
+            events.append("release")
+
+    term = Terminal(verbose=False, out=io.StringIO())
+    term.presence = Presence()
+
+    async def read(prompt: str) -> str:
+        events.append("read")
+        return "yes"
+
+    monkeypatch.setattr(term, "_read", read)
+
+    assert await term.ask("Proceed?") == "yes"
+    assert events == ["release", "read", "acting"]

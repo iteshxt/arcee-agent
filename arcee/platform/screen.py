@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from arcee.platform.shell import ShellBridge, ShellUnavailableError
+from arcee.platform.shell import (
+    CONTROL_REASON,
+    PAUSE_POLL_S,
+    ShellBridge,
+    ShellUnavailableError,
+)
 
 OCR_SCALE: Final = 2
 # Words further apart than this many text heights belong to different things.
@@ -26,9 +31,6 @@ WORD_GAP_HEIGHTS: Final = 1.5
 MIN_CONFIDENCE: Final = 50.0
 MIN_WORD_CONFIDENCE: Final = 30.0
 OCR_TIMEOUT_S: Final = 30.0
-CONTROL_REASON: Final = "Arcee is working"
-# How often to look whether the user has resumed Arcee.
-PAUSE_POLL_S: Final = 0.5
 # Time for GNOME's animations after bringing a window forward, before a screenshot.
 FOCUS_SETTLE_S: Final = 0.6
 

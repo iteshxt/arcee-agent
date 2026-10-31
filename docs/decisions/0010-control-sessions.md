@@ -28,6 +28,12 @@ mice have `/dev/input/event*` nodes, so the two can be told apart.
    amber, the pill offers Resume and Stop, and Arcee's input calls wait until the user
    resumes or stop the task if they press Stop.
 3. Glow and pill are hidden for the moment of each screenshot, so neither spoils OCR.
+5. Control covers every action the user can see, not only the screen tools: before a
+   browser, window-tree, screen, keyboard or app-opening action the agent takes control
+   and waits out a pause. Background work (files, web search, system facts) does not.
+   While Arcee asks the user something in the terminal it gives control back, so typing
+   the answer does not pause it. Opening or switching a Chrome tab, or navigating, brings
+   Chrome's window forward through the extension (Chrome cannot raise itself on Wayland).
 4. OCR splits a line at gaps wider than one and a half text heights and drops words
    under 30% confidence, so controls side by side read as separate targets.
 

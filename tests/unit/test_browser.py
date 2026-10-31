@@ -329,3 +329,24 @@ def test_only_looking_at_the_page_is_read_only() -> None:
     tabs = BrowserTabs(session)
     assert not tabs.changes_things(TabsArgs(action="list"))
     assert tabs.changes_things(TabsArgs(action="switch", tab=1))
+
+
+async def test_opening_and_navigating_bring_chrome_forward() -> None:
+    shown: list[str] = []
+
+    async def show(title: str) -> None:
+        shown.append(title)
+
+    client = FakeClient(
+        {
+            "tabs": [],
+            "new_tab": {"id": 9},
+            "navigate": {"id": 9, "url": "https://youtube.example/", "title": "YouTube"},
+        }
+    )
+    shared = BrowserSession(client=client, show=show)  # pyright: ignore[reportArgumentType]
+
+    await BrowserTabs(shared).run(TabsArgs(action="new"), CTX)
+    await BrowserNavigate(shared).run(NavigateArgs(url="https://youtube.example/"), CTX)
+
+    assert shown == ["", "YouTube"]
