@@ -422,10 +422,14 @@ def show_limits() -> int:
         print("no rate limits recorded yet; they appear after the first Groq request")
         return 0
     for model, s in snapshot.items():
-        print(
-            f"{model:<24} tokens {s['tokens_left']:>5}/{s['tokens_limit']} this minute   "
-            f"requests {s['requests_left']:>4}/{s['requests_limit']} today"
-        )
+        parts = [f"{model:<24}"]
+        if "tokens_limit" in s:
+            parts.append(f"tokens {s['tokens_left']:>5}/{s['tokens_limit']} this minute")
+        if "day_tokens_limit" in s:
+            parts.append(f"{s['day_tokens_left']:>7,}/{s['day_tokens_limit']:,} today")
+        if "requests_limit" in s:
+            parts.append(f"requests {s['requests_left']:>4}/{s['requests_limit']} today")
+        print("   ".join(parts))
     return 0
 
 

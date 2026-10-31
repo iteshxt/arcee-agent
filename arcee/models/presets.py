@@ -79,12 +79,15 @@ def cloud_profile(model: str, *, schema: bool = False, tpm: int | None = None) -
 GROQ_SMALL: Final = "openai/gpt-oss-20b"
 GROQ_LARGE: Final = "openai/gpt-oss-120b"
 DEFAULT_CORE: Final = "groq"
+# Groq's free tier also allows 200,000 tokens a day per model, which no header reports.
+GROQ_DAILY_TOKENS: Final = 200_000
 
 
 @cache
 def rate_budget() -> HeaderBudget:
     """Groq's own counts, kept per model and saved between runs; one per process."""
-    return HeaderBudget(data_dir() / "rate-limits.json")
+    daily: dict[str, int] = dict.fromkeys((GROQ_SMALL, GROQ_LARGE), GROQ_DAILY_TOKENS)
+    return HeaderBudget(data_dir() / "rate-limits.json", daily_tokens=daily)
 
 
 def groq_ladder() -> list[ModelAdapter]:
