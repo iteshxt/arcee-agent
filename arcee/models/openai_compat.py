@@ -9,11 +9,12 @@ profile's thinking flag (OpenRouter's unified field; other servers ignore it).
 import json
 import os
 from collections.abc import Sequence
-from typing import Any, Final, cast
+from typing import Any, Final, NoReturn, cast
 
 import httpx
 
 from arcee.models.base import (
+    MAX_RATE_LIMIT_WAIT_S,
     Completion,
     Message,
     ModelAdapter,
@@ -23,7 +24,7 @@ from arcee.models.base import (
     WireCall,
     estimate_input_tokens,
 )
-from arcee.models.budget import HeaderBudget
+from arcee.models.budget import HeaderBudget, describe_wait, parse_refusal
 from arcee.models.errors import (
     ModelUnavailableError,
     QuotaExhaustedError,
@@ -39,6 +40,8 @@ PROVIDERS: Final = {
     "openrouter": (OPENROUTER_URL, OPENROUTER_KEY_ENV),
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
 }
+# Groq's daily limits, as its 429 messages name them.
+DAILY: Final = {"TPD": "its tokens", "RPD": "its requests"}
 TIMEOUT: Final = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 
@@ -116,7 +119,9 @@ class OpenAICompatAdapter(ModelAdapter):
             self.budget.spend(self.profile.model, tokens)
         completion = _completion(await self._post("/chat/completions", body))
         if self.budget is not None:
-            self.budget.note_output(self.profile.model, completion.usage.output_tokens)
+            usage = completion.usage
+            self.budget.note_output(self.profile.model, usage.output_tokens)
+            self.budget.use(self.profile.model, usage.input_tokens + usage.output_tokens)
         return completion
 
     async def health(self) -> bool:
@@ -135,6 +140,20 @@ class OpenAICompatAdapter(ModelAdapter):
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def _refused(self, message: str, retry_after: float | None) -> NoReturn:
+        """Raise for a 429: a spent daily limit is a quota error, not a wait."""
+        refusal = parse_refusal(message)
+        if refusal is not None and self.budget is not None:
+            self.budget.refused(self.profile.model, *refusal)
+        if refusal and refusal[0] in DAILY and (retry_after or 0) > MAX_RATE_LIMIT_WAIT_S:
+            kind, limit, used = refusal
+            raise QuotaExhaustedError(
+                f"{self.profile.model}: {DAILY[kind]} for the day are used up "
+                f"({used:,} of {limit:,}); more frees up in about "
+                f"{describe_wait(retry_after or 0)}"
+            )
+        raise RateLimitedError(retry_after)
 
     async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -160,7 +179,7 @@ class OpenAICompatAdapter(ModelAdapter):
             return {"choices": [{"message": {"content": str(failed)}}]}
         message = str(error.get("message") or response.text[:200] or f"HTTP {status}")
         if status == 429:
-            raise RateLimitedError(_retry_after(response))
+            self._refused(message, _retry_after(response))
         if status in (402, 403):
             raise QuotaExhaustedError(f"{self.profile.model}: {message}")
         if status >= 500 or status == 200:
