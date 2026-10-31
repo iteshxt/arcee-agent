@@ -100,3 +100,15 @@ def test_desktop_tools_come_with_desktop_requests(request_text: str, desktop: bo
     filters = filters_for([Message("user", request_text)])
 
     assert (DESKTOP[0] in filters) is desktop
+
+
+async def test_a_thin_tree_points_to_reading_the_screen(tools: Any) -> None:
+    _, tree, _, _ = tools
+
+    read = await tree.run(TreeArgs(), CTX)
+
+    assert read.data is not None
+    assert read.data["hint"] == (
+        "This window's tree shows little. To see it as on screen: "
+        'screen.read(window="Home"), then screen.click.'
+    )

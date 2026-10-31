@@ -329,6 +329,8 @@ class Agent:
         # Mechanical steps (open a page, type given text) start on the smallest model.
         state.base_tier = state.task_tier if step is None or step.judgement else 0
         state.strikes = 0
+        # A step does not see the earlier steps' results, so looking again is not a repeat.
+        state.seen.clear()
         await self._switch(state, state.base_tier)
         while state.steps < self._limits.max_steps:
             state.steps += 1

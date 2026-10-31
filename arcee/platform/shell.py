@@ -104,6 +104,7 @@ class ShellBridge:
                 method, args, Gio.DBusCallFlags.NONE, timeout_ms, None
             )
         except GLib.Error as exc:
+            Gio.DBusError.strip_remote_error(exc)  # keep the extension's own words
             raise ShellUnavailableError(f"{method} failed: {exc.message}") from exc
         return reply.unpack()
 
