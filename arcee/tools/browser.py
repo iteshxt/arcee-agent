@@ -8,6 +8,7 @@ field, needs the user's confirmation. Everything read from pages is untrusted.
 """
 
 import asyncio
+import contextlib
 import html
 import re
 from collections.abc import Awaitable, Callable, Mapping
@@ -55,6 +56,21 @@ async def launch_chrome() -> None:
     )
 
 
+async def show_chrome(title: str) -> None:
+    """Bring Chrome's window forward: the one showing `title`, else any Chrome window."""
+    from arcee.platform.shell import ShellBridge
+
+    def focus() -> None:
+        bridge = ShellBridge()
+        chrome = [w for w in bridge.windows() if "chrome" in str(w.get("app_id", "")).lower()]
+        best = next((w for w in chrome if title and title in str(w.get("title", ""))), None)
+        if best or chrome:
+            bridge.focus_window(int((best or chrome[0])["id"]))
+
+    with contextlib.suppress(Exception):  # no extension: Chrome stays where it is
+        await asyncio.to_thread(focus)
+
+
 @dataclass
 class BrowserSession:
     """The bridge client and the last page snapshot, shared by the browser tools."""
@@ -65,7 +81,14 @@ class BrowserSession:
     # and windows are never read or changed by accident.
     tab: int | None = None
     # Starts Chrome when the extension is not connected; None leaves it to the user.
-    launch: Callable[[], Awaitable[None]] | None = field(default_factory=lambda: launch_chrome)
+    launch: Callable[[], Awaitable[None]] | None = None
+    # Brings Chrome's window to the front (given the page title): on Wayland Chrome
+    # cannot raise itself, so a tab opened behind the terminal. None leaves it.
+    show: Callable[[str], Awaitable[None]] | None = None
+
+    async def bring_forward(self, title: str) -> None:
+        if self.show is not None:
+            await self.show(title)
 
     def element(self, target: str) -> dict[str, Any]:
         return self.elements.get(target, {})
@@ -172,9 +195,11 @@ class BrowserTabs(_BrowserTool[TabsArgs]):
                     await self._call("switch_tab", tab=same)
                     self.session.tab = same
                     page = await self._call("navigate", url=args.url, tab=same)
+                    await self.session.bring_forward(str(page.get("title", "")))
                     return ToolResult.ok(f"Switched to the open tab for {args.url}", data=page)
                 opened = await self._call("new_tab", url=args.url)
                 self.session.tab = opened["id"]
+                await self.session.bring_forward("")
                 return ToolResult.ok(f"Opened a new tab at {args.url}", data=opened)
             if args.tab is None:
                 return ToolResult.fail("give the tab id from browser.tabs(action='list')")
@@ -184,6 +209,8 @@ class BrowserTabs(_BrowserTool[TabsArgs]):
                 self.session.tab = args.tab
             elif self.session.tab == args.tab:
                 self.session.tab = None
+            if args.action == "switch":
+                await self.session.bring_forward(str(result.get("title", "")))
             done = "Switched to" if args.action == "switch" else "Closed"
             return ToolResult.ok(f"{done} tab {args.tab}", data=result)
         except BrowserError as exc:
@@ -212,6 +239,7 @@ class BrowserNavigate(_BrowserTool[NavigateArgs]):
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
+        await self.session.bring_forward(str(page.get("title", "")))
         return ToolResult.ok(f"Opened {page.get('title') or page.get('url')}", data=page)
 
     async def _open(self, url: str) -> dict[str, Any]:
@@ -459,7 +487,9 @@ def _label(session: BrowserSession, target: str) -> str:
 
 
 def browser_tools(session: BrowserSession | None = None) -> list[Tool[Any]]:
-    shared = session or BrowserSession()
+    """The browser tools on `session`, or on the user's Chrome: started when it is not
+    running, and brought to the front as Arcee works in it."""
+    shared = session or BrowserSession(launch=launch_chrome, show=show_chrome)
     return [
         BrowserTabs(shared),
         BrowserNavigate(shared),

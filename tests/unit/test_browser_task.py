@@ -120,6 +120,7 @@ async def test_a_gmail_task_reads_each_new_page_and_hands_over_between_steps() -
     )
     events: list[Event] = []
     user = User()
+    presence = Presence()
     agent = Agent(
         [core],
         registry,
@@ -134,6 +135,7 @@ async def test_a_gmail_task_reads_each_new_page_and_hands_over_between_steps() -
         ),
         on_event=events.append,
         clock=lambda: NOW,
+        presence=presence,
     )
 
     outcome = await agent.run("check my gmail for unread mail and tell me what it says")
@@ -147,3 +149,18 @@ async def test_a_gmail_task_reads_each_new_page_and_hands_over_between_steps() -
     step_two = core.requests[5].messages
     assert not [m for m in step_two if m.role == "tool"]
     assert "One unread" in step_two[1].text
+    # Every action in Chrome first took control of the screen (the glow).
+    assert presence.acted == len(ran)
+
+
+class Presence:
+    held = False
+
+    def __init__(self) -> None:
+        self.acted = 0
+
+    async def acting(self) -> None:
+        self.acted += 1
+
+    async def release(self) -> None:
+        return None

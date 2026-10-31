@@ -37,6 +37,7 @@ from arcee.core.executor import Executor
 from arcee.core.gate import Gate
 from arcee.core.planner import Planner, needs_plan
 from arcee.core.policy import Policy
+from arcee.core.presence import NoPresence, Presence
 from arcee.core.protocol import ConfirmRequest, PlannerOutput
 from arcee.core.routing import start_tier
 from arcee.eval.cases import load as load_cases
@@ -53,7 +54,7 @@ from arcee.models.presets import (
     share_budget,
 )
 from arcee.platform.screen import GnomeScreen
-from arcee.platform.shell import ShellBridge, ShellUnavailableError, StopWatcher
+from arcee.platform.shell import ShellBridge, ShellPresence, ShellUnavailableError, StopWatcher
 from arcee.tools.builtin import builtin_registry
 
 
@@ -87,6 +88,9 @@ class Terminal:
         self._verbose = verbose
         self._out = out
         self._style = Style(out)
+        # Given back while the user answers, so typing the answer is not taken for the
+        # user taking over (which would pause Arcee).
+        self.presence: Presence = NoPresence()
 
     def print(self, text: str = "") -> None:
         print(text, file=self._out, flush=True)
@@ -138,6 +142,15 @@ class Terminal:
         return (await self._input("  > ")).strip()
 
     async def _input(self, prompt: str) -> str:
+        held = self.presence.held
+        await self.presence.release()
+        try:
+            return await self._read(prompt)
+        finally:
+            if held:
+                await self.presence.acting()
+
+    async def _read(self, prompt: str) -> str:
         # On a daemon thread, not the default executor: a pending input() there kept
         # Python from exiting on Ctrl+C and printed a threading traceback.
         loop = asyncio.get_running_loop()
@@ -197,6 +210,7 @@ async def run(
             )
             return 2
         registry = builtin_registry()
+        presence = terminal.presence = ShellPresence()
         planner = None if plan == "never" else Planner(planner_model, registry, home=Path.home())
         plans: list[PlannerOutput] = []
 
@@ -218,6 +232,7 @@ async def run(
             plan_if=needs_plan if plan == "auto" else lambda request: True,
             start_tier=start_tier if core == "groq" else lambda request: 0,
             on_event=on_event,
+            presence=presence,
         )
         task_id = await store.start_task(request)
         started = time.monotonic()
