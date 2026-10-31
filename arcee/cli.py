@@ -20,10 +20,10 @@ from typing import Any, Final, Literal, TextIO
 from arcee.browser.client import BrowserClient, BrowserError
 from arcee.browser.host import EXTENSION_ID
 from arcee.browser.setup import EXTENSION_DIR, install
+from arcee.config import load_env
 from arcee.context.examples import ExampleLibrary
 from arcee.context.store import Store, data_dir
 from arcee.core.agent import (
-    Agent,
     Escalated,
     Event,
     Guarded,
@@ -33,12 +33,8 @@ from arcee.core.agent import (
     StepStarted,
     ToolRan,
 )
-from arcee.core.executor import Executor
-from arcee.core.gate import Gate
-from arcee.core.planner import Planner, needs_plan
-from arcee.core.policy import Policy
 from arcee.core.presence import NoPresence, Presence
-from arcee.core.protocol import ConfirmRequest, PlannerOutput
+from arcee.core.protocol import ConfirmRequest
 from arcee.core.routing import start_tier
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
@@ -55,6 +51,7 @@ from arcee.models.presets import (
 )
 from arcee.platform.screen import GnomeScreen
 from arcee.platform.shell import ShellBridge, ShellPresence, ShellUnavailableError, StopWatcher
+from arcee.runner import TaskRunner
 from arcee.tools.builtin import builtin_registry
 
 
@@ -197,94 +194,60 @@ async def run(
     core: str = DEFAULT_CORE,
 ) -> int:
     terminal = Terminal(verbose=verbose)
-    ladder = core_ladder(core, host)
-    planner_model = planner_for(core, host)
-    share_budget(ladder, planner_model)
-    store = Store(data_dir())
+    presence = terminal.presence = ShellPresence()
+    runner = TaskRunner(
+        core=core, host=host, limits=limits, plan=plan, examples=examples, presence=presence
+    )
     try:
-        usable = await _usable(ladder, terminal)
-        if not usable:
-            terminal.print(
-                f"Ollama is not running at {host}, or the model is missing. "
-                f"Start it, then: ollama pull {ladder[0].profile.model}"
-            )
+        notes, problem = await runner.check()
+        for note in notes:
+            terminal.print(note)
+        if problem:
+            terminal.print(problem)
             return 2
-        registry = builtin_registry()
-        presence = terminal.presence = ShellPresence()
-        planner = None if plan == "never" else Planner(planner_model, registry, home=Path.home())
-        plans: list[PlannerOutput] = []
-
-        def on_event(event: Event) -> None:
-            if isinstance(event, Planned):
-                plans.append(event.plan)
-            terminal.on_event(event)
-
-        agent = Agent(
-            usable,
-            registry,
-            Executor(Gate(Policy(), terminal), record=store.record_action),
-            terminal,
-            home=Path.home(),
-            limits=limits,
-            planner=planner,
-            notes=store,
-            examples=ExampleLibrary.load() if examples else None,
-            plan_if=needs_plan if plan == "auto" else lambda request: True,
-            start_tier=start_tier if core == "groq" else lambda request: 0,
-            on_event=on_event,
-            presence=presence,
-        )
-        task_id = await store.start_task(request)
-        started = time.monotonic()
-        running = asyncio.ensure_future(agent.run(request, task_id=task_id))
-        stop_key = StopKey(running, terminal)
+        running = asyncio.ensure_future(runner.run(request, terminal, terminal.on_event))
+        stop_key = StopKey(running, terminal, on_stop=lambda: setattr(runner, "stopped", True))
         try:
-            outcome = await running
+            result = await running
         except ModelUnavailableError as exc:
-            await _finish(store, task_id, "failed", f"model unavailable: {exc}", plans)
             terminal.print(f"model unavailable: {exc}")
             return 2
         except asyncio.CancelledError:
             if stop_key.pressed:
-                await _finish(store, task_id, "stopped", "", plans)
                 terminal.print(f"\nstopped with {STOP_SHORTCUT}")
                 return 130
-            await asyncio.shield(_finish(store, task_id, "cancelled", "", plans))
             raise
         finally:
             stop_key.close()
-        await store.finish_task(
-            task_id,
-            status=outcome.status,
-            reply=outcome.reply,
-            steps=outcome.steps,
-            model_calls=outcome.model_calls,
-            plan=plans[-1] if plans else None,
-        )
         style = Style(sys.stdout)
         terminal.print()
-        terminal.print(style.bold("Arcee: ") + outcome.reply)
+        terminal.print(style.bold("Arcee: ") + result.reply)
         terminal.print(
             style.dim(
-                f"({outcome.status}: {outcome.steps} steps, {outcome.model_calls} model calls, "
-                f"{time.monotonic() - started:.1f}s, {task_id})"
+                f"({result.status}: {result.steps} steps, {result.model_calls} model calls, "
+                f"{result.seconds:.1f}s, {result.task_id})"
             )
         )
-        return 0 if outcome.status == "done" else 1
+        return 0 if result.status == "done" else 1
     finally:
-        await asyncio.gather(*(model.aclose() for model in [*ladder, planner_model]))
-        store.close()
+        await runner.aclose()
 
 
 class StopKey:
     """Cancels `task` when the user stops Arcee (shortcut or Stop pill); says when paused."""
 
-    def __init__(self, task: asyncio.Future[Any], terminal: Terminal) -> None:
+    def __init__(
+        self,
+        task: asyncio.Future[Any],
+        terminal: Terminal,
+        on_stop: Callable[[], None] = lambda: None,
+    ) -> None:
         self.pressed = False
         loop = asyncio.get_running_loop()
 
         def stop() -> None:
             self.pressed = True
+            on_stop()
             task.cancel()
 
         def later(action: Callable[[], None]) -> Callable[[], None]:
@@ -308,19 +271,6 @@ class StopKey:
         # Give the screen back: the glow goes when the task ends.
         with contextlib.suppress(Exception):
             ShellBridge().end_control()
-
-
-async def _finish(
-    store: Store, task_id: str, status: str, reply: str, plans: list[PlannerOutput]
-) -> None:
-    await store.finish_task(
-        task_id,
-        status=status,
-        reply=reply,
-        steps=0,
-        model_calls=0,
-        plan=plans[-1] if plans else None,
-    )
 
 
 async def history(task_id: str | None, limit: int) -> int:
@@ -496,6 +446,43 @@ async def shell_check() -> int:
     return 0
 
 
+def daemon_install() -> int:
+    """Write the systemd user unit and the D-Bus activation file for arceed.
+
+    The panel calls org.arcee.Agent; D-Bus starts arceed through systemd on the first
+    call, and its log goes to the journal (journalctl --user -u arceed).
+    """
+    arceed = Path(sys.executable).parent / "arceed"
+    if not arceed.exists():
+        print(f"{arceed} is missing; run `uv sync` first")
+        return 1
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    unit = config / "systemd" / "user" / "arceed.service"
+    activation = data / "dbus-1" / "services" / "org.arcee.Agent.service"
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    activation.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text(
+        "[Unit]\n"
+        "Description=Arcee agent\n"
+        "PartOf=graphical-session.target\n\n"
+        "[Service]\n"
+        "Type=dbus\n"
+        "BusName=org.arcee.Agent\n"
+        f"ExecStart={arceed}\n"
+        f"WorkingDirectory={Path(__file__).resolve().parents[1]}\n"
+        "TimeoutStopSec=2\n"
+        "Restart=on-failure\n"
+    )
+    activation.write_text(
+        f"[D-BUS Service]\nName=org.arcee.Agent\nExec={arceed}\nSystemdService=arceed.service\n"
+    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    print(f"wrote {unit}\nwrote {activation}")
+    print("arceed starts on the panel's first request; its log: journalctl --user -u arceed")
+    return 0
+
+
 async def screen_check(seconds: int) -> int:
     """Take control (glow and Stop pill), read the screen with local OCR, then hold
     control so the user can try the pause. Nothing leaves the machine."""
@@ -583,7 +570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="arcee-cli", description="Run Arcee tasks and evals from the terminal."
     )
-    _load_dotenv(Path(".env"))
+    load_env()
     host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -608,6 +595,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sub.add_parser("shell-extension", help="install the GNOME Shell extension (window focus)")
     sub.add_parser("shell-check", help="check that the GNOME Shell extension is running")
+    sub.add_parser(
+        "daemon-install", help="register arceed with systemd and D-Bus so the panel can start it"
+    )
     screen = sub.add_parser(
         "screen-check", help="show the control glow, read the screen locally, test the pause"
     )
@@ -645,6 +635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return shell_extension()
         if args.command == "shell-check":
             return asyncio.run(shell_check())
+        if args.command == "daemon-install":
+            return daemon_install()
         if args.command == "screen-check":
             return asyncio.run(screen_check(args.seconds))
         if args.command == "limits":
@@ -707,16 +699,6 @@ CORE_HELP = (
 )
 SHELL_EXTENSION = "arcee@arcee.dev"
 EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
-
-
-def _load_dotenv(path: Path) -> None:
-    """Read KEY=VALUE lines from a local .env (git-ignored) without overriding the environment."""
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        name, sep, value = line.strip().partition("=")
-        if sep and name and not name.startswith("#"):
-            os.environ.setdefault(name.strip(), value.strip().strip("'\""))
 
 
 def _host(value: str) -> str:

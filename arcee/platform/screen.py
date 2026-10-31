@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+from PIL import Image
+
 from arcee.platform.shell import (
     CONTROL_REASON,
     PAUSE_POLL_S,
@@ -114,6 +116,8 @@ class Shot:
     path: Path
     screen_width: int
     screen_height: int
+    # Height of GNOME's top bar in screen pixels; 0 when unknown.
+    top_bar: int = 0
 
 
 def parse_tsv(tsv: str, *, factor: float, min_confidence: float = MIN_CONFIDENCE) -> list[TextLine]:
@@ -171,22 +175,70 @@ def _split_at_gaps(words: list[list[str]]) -> list[list[list[str]]]:
 
 
 async def read_text(shot: Shot) -> list[TextLine]:
-    """OCR the screenshot into lines in screen coordinates."""
-    from PIL import Image
+    """OCR the screenshot into lines in screen coordinates.
 
+    Tesseract misses text depending on what else is in the image: with the top bar's
+    black strip in it, it read none of a dark menu below (the same pixels without the
+    strip read whole), and without the strip it missed the overview's search field.
+    So the whole screen and the top bar and the rest apart are read side by side, and
+    lines found twice are kept once.
+    """
+    with Image.open(shot.path) as image:
+        grey = image.convert("L")
+    scale = grey.width / shot.screen_width  # image pixels per screen pixel
+    bar = round(shot.top_bar * scale)
+    bands = [(0, grey.height)]
+    if 0 < bar < grey.height:
+        bands += [(0, bar), (bar, grey.height)]
+    found = await asyncio.gather(*(_read_band(grey, top, bottom) for top, bottom in bands))
+    lines = [
+        TextLine(
+            line.text,
+            round(line.x / scale),
+            round((line.y + top) / scale),
+            round(line.width / scale),
+            round(line.height / scale),
+        )
+        for (top, _), band in zip(bands, found, strict=True)
+        for line in band
+    ]
+    lines.sort(key=lambda line: (line.y // 12, line.x))
+    return merge_lines(lines)
+
+
+def merge_lines(lines: list[TextLine]) -> list[TextLine]:
+    """Keep one of lines whose boxes mostly overlap: the one with more text."""
+    kept: list[TextLine] = []
+    for line in sorted(lines, key=lambda line: -len(line.text)):
+        if not any(_overlap(line, other) > 0.5 for other in kept):
+            kept.append(line)
+    kept.sort(key=lambda line: (line.y // 12, line.x))
+    return kept
+
+
+def _overlap(a: TextLine, b: TextLine) -> float:
+    """Shared area over the smaller box's area."""
+    width = min(a.x + a.width, b.x + b.width) - max(a.x, b.x)
+    height = min(a.y + a.height, b.y + b.height) - max(a.y, b.y)
+    if width <= 0 or height <= 0:
+        return 0.0
+    smaller = min(a.width * a.height, b.width * b.height) or 1
+    return width * height / smaller
+
+
+async def _read_band(grey: Image.Image, top: int, bottom: int) -> list[TextLine]:
+    """OCR rows top..bottom of the greyscale screenshot; boxes in its pixels, from top."""
     with tempfile.TemporaryDirectory(prefix="arcee-ocr-") as folder:
-        scaled = Path(folder) / "screen.png"
+        scaled = Path(folder) / "band.png"
 
-        def prepare() -> int:
-            with Image.open(shot.path) as image:
-                grey = image.convert("L")
-                size = (grey.width * OCR_SCALE, grey.height * OCR_SCALE)
-                grey.resize(size, Image.Resampling.LANCZOS).save(  # pyright: ignore[reportUnknownMemberType]
-                    scaled
-                )
-                return image.width
+        def prepare() -> None:
+            band = grey.crop((0, top, grey.width, bottom))
+            size = (band.width * OCR_SCALE, band.height * OCR_SCALE)
+            band.resize(size, Image.Resampling.LANCZOS).save(  # pyright: ignore[reportUnknownMemberType]
+                scaled
+            )
 
-        image_width = await asyncio.to_thread(prepare)
+        await asyncio.to_thread(prepare)
         process = await asyncio.create_subprocess_exec(
             "tesseract",
             str(scaled),
@@ -202,8 +254,7 @@ async def read_text(shot: Shot) -> list[TextLine]:
         except TimeoutError:
             process.kill()
             raise
-    factor = shot.screen_width / (image_width * OCR_SCALE)
-    return parse_tsv(out.decode(errors="replace"), factor=factor)
+    return parse_tsv(out.decode(errors="replace"), factor=1 / OCR_SCALE)
 
 
 class GnomeScreen:
@@ -218,7 +269,9 @@ class GnomeScreen:
 
     async def capture(self) -> Shot:
         shot = await self._in_control(self._bridge.screenshot)
-        return Shot(Path(shot["path"]), int(shot["width"]), int(shot["height"]))
+        return Shot(
+            Path(shot["path"]), int(shot["width"]), int(shot["height"]), int(shot.get("top_bar", 0))
+        )
 
     async def read(self, shot: Shot) -> list[TextLine]:
         return await read_text(shot)
