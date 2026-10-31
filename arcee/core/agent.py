@@ -39,7 +39,12 @@ from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.core.toolsets import filters_for
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
-from arcee.models.errors import MalformedReplyError, ModelError, QuotaExhaustedError
+from arcee.models.errors import (
+    MalformedReplyError,
+    ModelError,
+    QuotaExhaustedError,
+    TruncatedReplyError,
+)
 from arcee.tools.base import Notes, ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
 from arcee.tools.registry import (
@@ -330,7 +335,9 @@ class Agent:
             try:
                 completion = await self._turn(state, offered)
             except MalformedReplyError as error:
-                self._emit(Guarded(state.steps, "the model wrote a broken tool call; asking again"))
+                cut = isinstance(error, TruncatedReplyError)
+                what = "the reply was cut off" if cut else "the model wrote a broken tool call"
+                self._emit(Guarded(state.steps, f"{what}; asking again"))
                 state.messages.append(Message("user", BROKEN_CALL_NUDGE))
                 await self._strike(state, str(error))
                 continue

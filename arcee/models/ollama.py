@@ -151,6 +151,7 @@ def _completion(data: dict[str, Any]) -> Completion:
         usage=TokenUsage(int(data.get("prompt_eval_count", 0)), int(data.get("eval_count", 0))),
         tool_calls=tuple(_wire_call(call) for call in calls),
         thinking=str(message.get("thinking") or ""),
+        truncated=data.get("done_reason") == "length",
     )
 
 

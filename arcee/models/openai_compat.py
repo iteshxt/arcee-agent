@@ -227,6 +227,7 @@ def _completion(data: dict[str, Any]) -> Completion:
         ),
         tool_calls=tuple(_wire_call(call) for call in calls),
         thinking=str(message.get("reasoning") or ""),
+        truncated=choice.get("finish_reason") == "length",
     )
 
 

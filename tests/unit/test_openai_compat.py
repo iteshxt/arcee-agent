@@ -6,7 +6,7 @@ import pytest
 
 from arcee.core.protocol import CoreAction
 from arcee.models.base import Message, ModelProfile, ModelRequest, ToolRequest, WireCall
-from arcee.models.errors import ModelUnavailableError, QuotaExhaustedError
+from arcee.models.errors import ModelUnavailableError, QuotaExhaustedError, TruncatedReplyError
 from arcee.models.openai_compat import OpenAICompatAdapter
 from arcee.models.presets import cloud_profile, core_ladder, planner_for, share_budget
 from tests.fakes import FakeClock
@@ -225,3 +225,35 @@ def test_schemas_sent_to_models_carry_no_top_level_description() -> None:
     from arcee.models.base import provider_schema
 
     assert "description" not in provider_schema(PlannerOutput)
+
+
+def cut_off(content: str) -> httpx.Response:
+    message = {"role": "assistant", "content": content}
+    return httpx.Response(
+        200,
+        json={
+            "choices": [{"message": message, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 1024},
+        },
+    )
+
+
+async def test_a_cut_off_plan_is_asked_for_again_with_more_room() -> None:
+    whole = '{"action": {"tool": "fs.list", "args": {"path": "~"}}}'
+    server = Server(cut_off('{"action": {"tool": "fs.li'), answer(whole))
+
+    response = await adapter(server, cloud_profile("m", schema=True)).complete(
+        ModelRequest(system="s", messages=[Message("user", "go")], schema=CoreAction)
+    )
+
+    assert response.parsed.action.tool == "fs.list"
+    assert [server.body(i)["max_tokens"] for i in range(2)] == [1024, 2048]
+
+
+async def test_a_reply_cut_off_twice_is_an_error_not_a_repaired_object() -> None:
+    server = Server(cut_off('{"action": {"tool": "fs.li'), cut_off('{"action": {"tool"'))
+
+    with pytest.raises(TruncatedReplyError, match="cut off at 2048 tokens"):
+        await adapter(server, cloud_profile("m", schema=True)).complete(
+            ModelRequest(system="s", messages=[Message("user", "go")], schema=CoreAction)
+        )

@@ -228,3 +228,20 @@ class TestHealth:
 
         assert not shared.is_closed
         await shared.aclose()
+
+
+async def test_a_cut_off_turn_is_asked_for_again_with_more_room() -> None:
+    cut = httpx.Response(
+        200,
+        json={
+            "message": {"role": "assistant", "content": "The three newest emails are"},
+            "done": True,
+            "done_reason": "length",
+        },
+    )
+    server = Server(cut, reply("The three newest emails are A, B and C."))
+
+    completion = await adapter(server).respond(tool_request())
+
+    assert completion.text.endswith("A, B and C.")
+    assert [server.body(i)["options"]["num_predict"] for i in range(2)] == [1024, 2048]

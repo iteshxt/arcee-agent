@@ -46,6 +46,14 @@ class MalformedReplyError(ModelError):
     """
 
 
+class TruncatedReplyError(MalformedReplyError):
+    """The reply hit its output limit even with more room: it was cut off, not finished.
+
+    A cut-off JSON object can be "repaired" into a valid but shorter one (a plan that
+    lost its last steps), so such a reply is never parsed.
+    """
+
+
 class ModelOutputError(ModelError):
     """The model did not produce a valid object within the retry budget."""
 
