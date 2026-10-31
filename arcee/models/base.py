@@ -10,7 +10,7 @@ behaving identically, and keeps the first-try success rate
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import tzinfo
 from functools import cache
 from types import TracebackType
@@ -23,6 +23,7 @@ from arcee.models.errors import (
     ModelUnavailableError,
     RateLimitedError,
     RetryableError,
+    TruncatedReplyError,
 )
 from arcee.models.jsonfix import ReplyError, parse_reply, retry_prompt
 from arcee.models.limiter import SYSTEM_CLOCK, Clock, RateLimiter
@@ -34,6 +35,8 @@ BACKOFF_S: Final = (1.0, 2.0, 4.0, 8.0)
 MAX_RETRY_AFTER_S: Final = 60.0
 # Total time spent waiting on rate limits the provider timed, before giving up.
 MAX_RATE_LIMIT_WAIT_S: Final = 120.0
+# The most output a cut-off reply is retried with.
+MAX_OUTPUT_TOKENS: Final = 8192
 
 
 class ModelProfile(BaseModel):
@@ -149,6 +152,8 @@ class Completion:
     usage: TokenUsage = field(default_factory=TokenUsage)
     tool_calls: tuple[WireCall, ...] = ()
     thinking: str = ""
+    # The reply stopped at max_tokens: what is here is the start of it, not all of it.
+    truncated: bool = False
 
 
 class ModelAdapter(ABC):
@@ -201,7 +206,7 @@ class ModelAdapter(ABC):
         attempts = 0
         while True:
             attempts += 1
-            reply = await self._send_with_backoff(
+            reply = await self._send_whole(
                 RawRequest(
                     system=request.system,
                     messages=tuple(messages),
@@ -229,7 +234,7 @@ class ModelAdapter(ABC):
         """
         if self.profile.call_mode != "native":
             raise ValueError(f"{self.profile.model} is configured for schema call mode")
-        return await self._send_with_backoff(
+        return await self._send_whole(
             RawRequest(
                 system=request.system,
                 messages=tuple(request.messages),
@@ -238,6 +243,23 @@ class ModelAdapter(ABC):
                 temperature=request.temperature,
                 tools=tuple(request.tools),
             )
+        )
+
+    async def _send_whole(self, request: RawRequest) -> Completion:
+        """Send `request`; a reply cut off at max_tokens is asked for again with more room.
+
+        Raises TruncatedReplyError when even that is cut off.
+        """
+        completion = await self._send_with_backoff(request)
+        if not completion.truncated:
+            return completion
+        roomier = replace(request, max_tokens=min(request.max_tokens * 2, MAX_OUTPUT_TOKENS))
+        if roomier.max_tokens > request.max_tokens:
+            completion = await self._send_with_backoff(roomier)
+            if not completion.truncated:
+                return completion
+        raise TruncatedReplyError(
+            f"{self.profile.model}: the reply was cut off at {roomier.max_tokens} tokens"
         )
 
     async def _send_with_backoff(self, request: RawRequest) -> Completion:
