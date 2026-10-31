@@ -38,6 +38,7 @@ from arcee.tools.browser import (
     NavigateArgs,
     TabsArgs,
     browser_tools,
+    element_line,
 )
 
 CTX = ToolContext(task_id="t_1", home=Path("/home/u"))
@@ -292,7 +293,32 @@ async def test_html_entities_are_decoded() -> None:
     result = await BrowserElements(shared).run(ElementsArgs(), CTX)
 
     assert result.data is not None
-    assert result.data["elements"][0]["name"] == "A & B"
+    assert result.data["elements"] == ["el_1 row: A & B"]
+
+
+def test_elements_are_one_line_each_with_only_the_flags_that_are_set() -> None:
+    assert element_line({"id": "el_1", "role": "button", "name": "Compose"}) == (
+        "el_1 button: Compose"
+    )
+    field = {"id": "el_36", "role": "combobox", "name": "Search mail", "value": "is:unread"}
+    assert element_line(field) == 'el_36 combobox: Search mail value="is:unread"'
+    box = {"id": "el_3", "role": "input", "name": "Pin", "type": "password", "checked": True}
+    assert element_line(box) == "el_3 input: Pin type=password (checked)"
+
+
+async def test_lines_fit_twice_as_many_elements_in_a_tool_result() -> None:
+    buttons = [{"id": f"el_{i}", "role": "button", "name": f"Action {i}"} for i in range(60)]
+    rows = [{"id": f"el_{60 + i}", "role": "row", "name": "x" * 120} for i in range(40)]
+    page = {**PAGE, "elements": buttons + rows}
+    as_objects = len(json.dumps(page))
+    shared, client = session({"elements": page})
+
+    result = await BrowserElements(shared).run(ElementsArgs(limit=100), CTX)
+
+    as_lines = len(json.dumps(result.data))
+    assert as_lines < as_objects * 0.75
+    assert client.calls[0][1]["text_chars"] == 800
+    assert shared.elements["el_3"]["name"] == "Action 3"  # labels stay for confirmations
 
 
 def test_only_looking_at_the_page_is_read_only() -> None:
