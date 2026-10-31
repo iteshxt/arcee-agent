@@ -97,6 +97,7 @@ class TestPlanner:
         assert "/home/u" in sent.system
         assert sent.messages[0].text == "Request: hi"
         assert sent.schema is not None
+        assert sent.max_tokens == 4096  # room for gpt-oss's reasoning and a long plan
         assert result.steps[0].do == "answer"
 
     async def test_includes_answers_and_replan_context(self) -> None:

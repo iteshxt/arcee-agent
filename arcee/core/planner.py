@@ -22,6 +22,9 @@ _MULTI_STEP: Final = re.compile(
     re.IGNORECASE,
 )
 LONG_REQUEST_WORDS: Final = 30
+# gpt-oss reasons before it writes the plan, and both count as output: a five-step plan
+# took 1,013 tokens, and at the old 1,024 longer plans were cut off and lost their steps.
+PLANNER_MAX_TOKENS: Final = 4096
 
 
 def needs_plan(request: str) -> bool:
@@ -55,9 +58,12 @@ Tools the agent has:
 
 Turn the user's request into a short plan:
 - goal: the request restated precisely. interpretation: assumptions you made.
-- steps: as few as possible. A simple question or one action is ONE step. A step is \
-tool work (look something up, act on something); never a step only for thinking, \
-comparing or choosing, which happens inside the step that needs it.
+- steps: as few as possible, but the plan covers the WHOLE request to the end. A simple \
+question or one action is ONE step. Each phase of a longer request is its own step: \
+finding items, reading them, and acting somewhere else (another site, app or folder) \
+are separate steps, because each step sees only the notes the earlier ones left. A \
+step is tool work (look something up, act on something); never a step only for \
+thinking, comparing or choosing, which happens inside the step that needs it.
 - Each step: id (1, 2, ...), do (one instruction), tools (the tool names it needs, or \
 "fs.*" for a group), success (what shows the step is done), judgement (false only for \
 mechanical steps such as opening a page or typing given text: a smaller model runs them).
@@ -107,6 +113,11 @@ class Planner:
             )
         system = planner_system(list(self._registry), home=self._home, now=self._clock())
         response = await self.model.complete(
-            ModelRequest(system=system, messages=[Message("user", text)], schema=PlannerOutput)
+            ModelRequest(
+                system=system,
+                messages=[Message("user", text)],
+                schema=PlannerOutput,
+                max_tokens=PLANNER_MAX_TOKENS,
+            )
         )
         return response.parsed
