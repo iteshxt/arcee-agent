@@ -7,7 +7,7 @@ from arcee.core.policy import Policy, Tier
 from arcee.core.routing import start_tier
 from arcee.core.toolsets import DESKTOP, filters_for
 from arcee.models.base import Message
-from arcee.platform.atspi import Snapshot
+from arcee.platform.atspi import Snapshot, pick_frame
 from arcee.tools.base import NoArgs, ToolContext
 from arcee.tools.desktop import ActArgs, TreeArgs, desktop_tools
 
@@ -127,3 +127,29 @@ async def test_a_thin_tree_points_to_reading_the_screen(tools: Any) -> None:
 def test_desktop_requests_get_the_desktop_tools_and_the_large_model(request_text: str) -> None:
     assert set(DESKTOP) <= set(filters_for([Message("user", request_text)]))
     assert start_tier(request_text) == 1
+
+
+def test_a_window_title_never_beats_the_app_it_names() -> None:
+    frames = [
+        ("ptyxis", "uv run arcee-cli run open the Calculator app"),
+        ("gnome-calculator", "Calculator"),
+    ]
+
+    assert pick_frame("Calculator", frames) == 1  # exact title
+    assert pick_frame("calculator app", frames) == 0  # only a title says it
+    assert pick_frame("gnome-calc", frames) == 1
+    assert pick_frame("Firefox", frames) is None
+
+
+async def test_the_tree_comes_one_line_per_element(tools: Any) -> None:
+    _, tree, _, _ = tools
+
+    read = await tree.run(TreeArgs(), CTX)
+
+    assert read.data is not None
+    assert read.data["elements"] == [
+        "el_1 table cell: report.pdf [select]",
+        "el_2 button: Move to Trash [click]",
+        "el_3 entry: Name (editable)",
+    ]
+    assert tree.session.elements["el_2"]["name"] == "Move to Trash"  # kept for confirmations

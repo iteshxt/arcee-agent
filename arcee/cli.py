@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -137,10 +138,25 @@ class Terminal:
         return (await self._input("  > ")).strip()
 
     async def _input(self, prompt: str) -> str:
-        try:
-            return await asyncio.to_thread(input, prompt)
-        except EOFError:
-            return ""
+        # On a daemon thread, not the default executor: a pending input() there kept
+        # Python from exiting on Ctrl+C and printed a threading traceback.
+        loop = asyncio.get_running_loop()
+        answer: asyncio.Future[str] = loop.create_future()
+
+        def settle(value: str) -> None:
+            if not answer.done():
+                answer.set_result(value)
+
+        def read() -> None:
+            try:
+                value = input(prompt)
+            except EOFError, KeyboardInterrupt:
+                value = ""
+            with contextlib.suppress(RuntimeError):  # Arcee already exited
+                loop.call_soon_threadsafe(settle, value)
+
+        threading.Thread(target=read, daemon=True, name="arcee-input").start()
+        return await answer
 
 
 async def _usable(ladder: Sequence[ModelAdapter], terminal: Terminal) -> list[ModelAdapter]:

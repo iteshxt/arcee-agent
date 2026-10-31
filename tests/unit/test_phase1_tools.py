@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -164,13 +165,39 @@ class TestApps:
     async def test_open_launches_the_best_match(
         self, app_dirs: list[Path], ctx: ToolContext
     ) -> None:
-        tool = AppOpen(dirs=app_dirs, command=("true",))
+        tool = AppOpen(dirs=app_dirs, command=("true",), windows=Windows([]))
 
         opened = await tool.run(OpenAppArgs(name="firefox"), ctx)
         unknown = await tool.run(OpenAppArgs(name="photoshop"), ctx)
 
         assert opened.data == {"opened": "Firefox", "id": "firefox_firefox.desktop"}
         assert unknown.error == "no installed app matches 'photoshop'; try app.list"
+
+    async def test_an_open_app_is_brought_forward_not_started_again(
+        self, app_dirs: list[Path], ctx: ToolContext
+    ) -> None:
+        windows = Windows([{"id": 7, "app_id": "firefox_firefox", "title": "Firefox"}])
+        tool = AppOpen(dirs=app_dirs, command=("false",), windows=windows)
+
+        opened = await tool.run(OpenAppArgs(name="firefox"), ctx)
+        with_file = await tool.run(OpenAppArgs(name="firefox", args=["a.html"]), ctx)
+
+        assert opened.summary == "Switched to the open Firefox window"
+        assert windows.focused == [7]
+        assert with_file.status == "error"  # files still go through a launch ("false" fails)
+
+
+class Windows:
+    def __init__(self, open_windows: list[dict[str, Any]]) -> None:
+        self.open_windows = open_windows
+        self.focused: list[int] = []
+
+    def windows(self) -> list[dict[str, Any]]:
+        return self.open_windows
+
+    def focus_window(self, window_id: int) -> bool:
+        self.focused.append(window_id)
+        return True
 
 
 class TestScript:

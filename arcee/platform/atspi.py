@@ -10,6 +10,7 @@ must not block Arcee's event loop (spec section 12).
 import asyncio
 import concurrent.futures
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -45,6 +46,26 @@ class _Refs:
 
     elements: dict[str, Any] = field(default_factory=dict)
     window: Any = None
+
+
+def pick_frame(wanted: str, frames: Sequence[tuple[str, str]]) -> int | None:
+    """Which of (app name, window title) `wanted` names: an exact app or title first,
+    then an app whose name contains it, and only then a title that does.
+
+    Titles say anything: a terminal's title held the command that asked for "the
+    Calculator app", so a title match alone picked the terminal over Calculator.
+    """
+    wanted = wanted.lower()
+    tests = (
+        lambda app, title: wanted in (app.lower(), title.lower()),
+        lambda app, title: wanted in app.lower(),
+        lambda app, title: wanted in title.lower(),
+    )
+    for test in tests:
+        for index, (app, title) in enumerate(frames):
+            if test(app, title):
+                return index
+    return None
 
 
 class AtspiDesktop:
@@ -100,11 +121,11 @@ class AtspiDesktop:
 
         frames = self._frames()
         if app:
-            wanted = app.lower()
-            for name, frame in frames:
-                if wanted in name.lower() or wanted in (frame.name or "").lower():
-                    return name, frame
-            raise LookupError(f"no open window matches {app!r}; see ui.windows")
+            if (
+                found := pick_frame(app, [(name, frame.name or "") for name, frame in frames])
+            ) is None:
+                raise LookupError(f"no open window matches {app!r}; see ui.windows")
+            return frames[found]
         for name, frame in frames:
             if frame.getState().contains(pyatspi.STATE_ACTIVE):
                 return name, frame
