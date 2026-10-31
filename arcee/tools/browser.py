@@ -9,6 +9,7 @@ field, needs the user's confirmation. Everything read from pages is untrusted.
 
 import html
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Literal
 from urllib.parse import urlparse
@@ -202,6 +203,9 @@ class BrowserBack(_BrowserTool[NoArgs]):
 
 # --- reading the page -----------------------------------------------------------
 
+# The page text sent with its elements; rows already carry most of it.
+ELEMENTS_TEXT_CHARS: Final = 800
+
 
 class ElementsArgs(ToolArgs):
     limit: int = Field(
@@ -227,17 +231,38 @@ class BrowserElements(_BrowserTool[ElementsArgs]):
 
     async def run(self, args: ElementsArgs, ctx: ToolContext) -> ToolResult:
         try:
-            page = await self._page("elements", ctx, limit=args.limit)
+            page = await self._page(
+                "elements", ctx, limit=args.limit, text_chars=ELEMENTS_TEXT_CHARS
+            )
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
-        elements: list[dict[str, Any]] = page.get("elements", [])
-        for element in elements:
-            # Some sites double-escape their labels (Gmail shows "&amp;").
-            element["name"] = html.unescape(str(element.get("name", "")))
-        page["text_excerpt"] = html.unescape(str(page.get("text_excerpt", "")))
+        # Some sites double-escape their labels (Gmail shows "&amp;").
+        elements: list[dict[str, Any]] = [
+            {**e, "name": html.unescape(str(e.get("name", "")))} for e in page.get("elements", [])
+        ]
         self.session.elements = {e["id"]: e for e in elements}
+        data = {
+            **page,
+            "text_excerpt": html.unescape(str(page.get("text_excerpt", ""))),
+            # One line per element: as JSON objects, a 100-element page was cut to about
+            # 20 to fit a tool result; as lines, far more fit.
+            "elements": [element_line(e) for e in elements],
+        }
         summary = f"{page.get('title', 'Page')}: {len(elements)} elements"
-        return ToolResult.ok(summary, data=page)
+        return ToolResult.ok(summary, data=data)
+
+
+def element_line(element: Mapping[str, Any]) -> str:
+    """`el_36 combobox: Search mail value="is:unread"`, flags only when they are set."""
+    line = f"{element.get('id')} {element.get('role')}: {element.get('name', '')}"
+    if element.get("type") not in (None, "text"):
+        line += f" type={element['type']}"
+    if element.get("value"):
+        line += f' value="{element["value"]}"'
+    line += "".join(
+        f" ({flag})" for flag in ("checked", "disabled", "editable") if element.get(flag)
+    )
+    return line
 
 
 class ReadArgs(ToolArgs):
