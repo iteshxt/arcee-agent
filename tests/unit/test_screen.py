@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from arcee.core.policy import Policy, Tier
-from arcee.platform.screen import Shot, TextLine, keyvals, parse_tsv
+from arcee.platform.screen import GnomeScreen, Shot, TextLine, keyvals, parse_tsv
 from arcee.platform.shell import ShellUnavailableError
 from arcee.tools.base import ToolContext
 from arcee.tools.screen import (
@@ -206,3 +206,57 @@ class TestTools:
 
         assert result.status == "error"
         assert "extension is not running" in str(result.error)
+
+
+class FakeBridge:
+    """The extension's control states, played in order."""
+
+    def __init__(self, *states: str) -> None:
+        self.states = list(states)
+        self.clicks: list[tuple[int, int]] = []
+
+    def begin_control(self, reason: str) -> str:
+        return self.states.pop(0)
+
+    def control_state(self) -> str:
+        return self.states.pop(0)
+
+    def click(self, x: int, y: int, button: int, count: int) -> None:
+        self.clicks.append((x, y))
+
+
+async def test_input_waits_while_the_user_has_paused_arcee(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("arcee.platform.screen.PAUSE_POLL_S", 0)
+    bridge = FakeBridge("paused", "paused", "active")
+
+    await GnomeScreen(bridge).click(10, 20, 1, 1)  # pyright: ignore[reportArgumentType]
+
+    assert bridge.clicks == [(10, 20)]
+
+
+async def test_a_stop_during_a_pause_ends_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("arcee.platform.screen.PAUSE_POLL_S", 0)
+    bridge = FakeBridge("paused", "off")
+
+    with pytest.raises(ShellUnavailableError, match="the user stopped Arcee"):
+        await GnomeScreen(bridge).click(10, 20, 1, 1)  # pyright: ignore[reportArgumentType]
+    assert bridge.clicks == []
+
+
+def test_far_apart_words_on_one_row_are_separate_lines() -> None:
+    # A label and a button on one row: Tesseract calls it one line.
+    tsv = "\n".join(
+        [
+            HEADER,
+            word(1, 1, 100, 100, "Arcee"),
+            word(1, 1, 200, 100, "working"),
+            word(1, 1, 400, 100, "Stop"),
+        ]
+    )
+
+    lines = parse_tsv(tsv, factor=1)
+
+    assert [line.text for line in lines] == ["Arcee working", "Stop"]
+    assert lines[1].center == (440, 115)

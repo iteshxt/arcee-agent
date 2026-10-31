@@ -6,12 +6,13 @@ model's call, the result, guards and escalations, so a run doubles as a trace.
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Final, Literal, TextIO
 
@@ -204,7 +205,7 @@ async def run(
         task_id = await store.start_task(request)
         started = time.monotonic()
         running = asyncio.ensure_future(agent.run(request, task_id=task_id))
-        stop_key = StopKey(running)
+        stop_key = StopKey(running, terminal)
         try:
             outcome = await running
         except ModelUnavailableError as exc:
@@ -244,9 +245,9 @@ async def run(
 
 
 class StopKey:
-    """Cancels `task` when the user presses the shell extension's stop shortcut."""
+    """Cancels `task` when the user stops Arcee (shortcut or Stop pill); says when paused."""
 
-    def __init__(self, task: asyncio.Future[Any]) -> None:
+    def __init__(self, task: asyncio.Future[Any], terminal: Terminal) -> None:
         self.pressed = False
         loop = asyncio.get_running_loop()
 
@@ -254,14 +255,27 @@ class StopKey:
             self.pressed = True
             task.cancel()
 
-        def on_stop() -> None:  # runs on the watcher's thread
-            loop.call_soon_threadsafe(stop)
+        def later(action: Callable[[], None]) -> Callable[[], None]:
+            # The watcher calls from its own thread; act on the event loop.
+            def run() -> None:
+                loop.call_soon_threadsafe(action)
 
-        self._watcher = StopWatcher(on_stop)
+            return run
+
+        self._watcher = StopWatcher(
+            later(stop),
+            on_pause=later(
+                lambda: terminal.print("  ⏸ paused: you have control (Resume or Stop at the top)")
+            ),
+            on_resume=later(lambda: terminal.print("  ▶ resumed")),
+        )
         self._watcher.start()
 
     def close(self) -> None:
         self._watcher.stop()
+        # Give the screen back: the glow goes when the task ends.
+        with contextlib.suppress(Exception):
+            ShellBridge().end_control()
 
 
 async def _finish(

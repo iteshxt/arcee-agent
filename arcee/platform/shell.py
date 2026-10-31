@@ -92,6 +92,21 @@ class ShellBridge:
     def release_all(self) -> None:
         self._must("ReleaseAll", None)
 
+    def begin_control(self, reason: str) -> str:
+        """Take (or keep) control of the screen; returns "active" or "paused"."""
+        from gi.repository import GLib
+
+        return str(self._must("BeginControl", GLib.Variant("(s)", (reason,)))[0])
+
+    def end_control(self) -> None:
+        """Give control back, if this process holds it. Quiet without the extension."""
+        if self.available():
+            self._must("EndControl", None)
+
+    def control_state(self) -> str:
+        """ "off", "active" or "paused"."""
+        return str(self._must("ControlState", None)[0])
+
     def _must(self, method: str, args: Any, timeout_ms: int = TIMEOUT_MS) -> Any:
         if not self.available():
             raise ShellUnavailableError(
@@ -118,14 +133,21 @@ class ShellBridge:
 
 
 class StopWatcher:
-    """Calls `on_stop` (from its own thread) when the user presses the stop shortcut.
+    """Calls `on_stop` (from its own thread) when the user stops Arcee.
 
-    The extension emits org.arcee.Shell.Stopped; a GLib main loop on a daemon thread
-    receives it, so the asyncio loop stays free.
+    The extension emits org.arcee.Shell.Stopped for the shortcut and the Stop pill,
+    and Paused and Resumed when the user takes the mouse or keyboard and gives it
+    back; a GLib main loop on a daemon thread receives them, so the asyncio loop
+    stays free.
     """
 
-    def __init__(self, on_stop: Callable[[], None]) -> None:
-        self._on_stop = on_stop
+    def __init__(
+        self,
+        on_stop: Callable[[], None],
+        on_pause: Callable[[], None] = lambda: None,
+        on_resume: Callable[[], None] = lambda: None,
+    ) -> None:
+        self._handlers = {"Stopped": on_stop, "Paused": on_pause, "Resumed": on_resume}
         self._loop: Any = None
 
     def start(self) -> None:
@@ -154,11 +176,13 @@ class StopWatcher:
         bus.signal_subscribe(
             None,
             BUS_NAME,
-            "Stopped",
+            None,
             OBJECT_PATH,
             None,
             Gio.DBusSignalFlags.NONE,
-            lambda *_: self._on_stop(),
+            lambda _bus, _sender, _path, _iface, signal, _args: self._handlers.get(
+                signal, lambda: None
+            )(),
         )
         ready.set()
         self._loop.run()

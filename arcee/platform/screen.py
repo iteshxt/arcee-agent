@@ -9,18 +9,26 @@ larger than the screen under fractional or HiDPI scaling.
 """
 
 import asyncio
+import itertools
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
-from arcee.platform.shell import ShellBridge
+from arcee.platform.shell import ShellBridge, ShellUnavailableError
 
 OCR_SCALE: Final = 2
+# Words further apart than this many text heights belong to different things.
+WORD_GAP_HEIGHTS: Final = 1.5
 # Lines Tesseract is less sure of than this are mostly icons read as letters.
 MIN_CONFIDENCE: Final = 50.0
+MIN_WORD_CONFIDENCE: Final = 30.0
 OCR_TIMEOUT_S: Final = 30.0
+CONTROL_REASON: Final = "Arcee is working"
+# How often to look whether the user has resumed Arcee.
+PAUSE_POLL_S: Final = 0.5
 # Time for GNOME's animations after bringing a window forward, before a screenshot.
 FOCUS_SETTLE_S: Final = 0.6
 
@@ -111,10 +119,16 @@ def parse_tsv(tsv: str, *, factor: float, min_confidence: float = MIN_CONFIDENCE
     lines: dict[tuple[str, ...], list[list[str]]] = {}
     for row in tsv.splitlines()[1:]:
         cells = row.split("\t")
-        if len(cells) == 12 and cells[11].strip() and float(cells[10]) >= 0:
+        # Borders and icons come back as low-confidence marks ("|", "J"): drop them
+        # before they join a line and move its box.
+        if (
+            len(cells) == 12
+            and float(cells[10]) >= MIN_WORD_CONFIDENCE
+            and re.search(r"\w", cells[11])
+        ):
             lines.setdefault(tuple(cells[1:5]), []).append(cells)
     out: list[TextLine] = []
-    for words in lines.values():
+    for words in (group for line in lines.values() for group in _split_at_gaps(line)):
         confidence = sum(float(w[10]) for w in words) / len(words)
         text = " ".join(w[11].strip() for w in words)
         if confidence < min_confidence or len(re.findall(r"\w", text)) < 2:
@@ -135,6 +149,23 @@ def parse_tsv(tsv: str, *, factor: float, min_confidence: float = MIN_CONFIDENCE
     # Reading order: top to bottom, then left to right within a band of rows.
     out.sort(key=lambda line: (line.y // 12, line.x))
     return out
+
+
+def _split_at_gaps(words: list[list[str]]) -> list[list[list[str]]]:
+    """Split a Tesseract line where words sit far apart: separate controls on one row.
+
+    A search box, a label and a Stop button in a row came back as one line, whose
+    centre was none of them.
+    """
+    words = sorted(words, key=lambda w: int(w[6]))
+    groups = [[words[0]]]
+    for previous, word in itertools.pairwise(words):
+        gap = int(word[6]) - (int(previous[6]) + int(previous[8]))
+        height = max(int(previous[9]), int(word[9]))
+        if gap > WORD_GAP_HEIGHTS * height:
+            groups.append([])
+        groups[-1].append(word)
+    return groups
 
 
 async def read_text(shot: Shot) -> list[TextLine]:
@@ -174,13 +205,17 @@ async def read_text(shot: Shot) -> list[TextLine]:
 
 
 class GnomeScreen:
-    """Screenshots and input through the Arcee shell extension, OCR with Tesseract."""
+    """Screenshots and input through the Arcee shell extension, OCR with Tesseract.
+
+    Each call first takes control of the screen, which shows the glow (decision
+    0010); while the user has paused Arcee it waits, and a stop ends the call.
+    """
 
     def __init__(self, bridge: ShellBridge | None = None) -> None:
         self._bridge = bridge or ShellBridge()
 
     async def capture(self) -> Shot:
-        shot = await asyncio.to_thread(self._bridge.screenshot)
+        shot = await self._in_control(self._bridge.screenshot)
         return Shot(Path(shot["path"]), int(shot["width"]), int(shot["height"]))
 
     async def read(self, shot: Shot) -> list[TextLine]:
@@ -193,13 +228,28 @@ class GnomeScreen:
         return focused
 
     async def click(self, x: int, y: int, button: int, count: int) -> None:
-        await asyncio.to_thread(self._bridge.click, x, y, button, count)
+        await self._in_control(self._bridge.click, x, y, button, count)
 
     async def scroll(self, x: int, y: int, steps: int) -> None:
-        await asyncio.to_thread(self._bridge.scroll, x, y, steps)
+        await self._in_control(self._bridge.scroll, x, y, steps)
 
     async def keys(self, combo: list[int]) -> None:
-        await asyncio.to_thread(self._bridge.key_combo, combo)
+        await self._in_control(self._bridge.key_combo, combo)
 
     async def type(self, text: str) -> None:
-        await asyncio.to_thread(self._bridge.type_text, text)
+        await self._in_control(self._bridge.type_text, text)
+
+    async def _in_control[T](self, call: Callable[..., T], *args: Any) -> T:
+        """Run `call` while holding control, waiting out a pause."""
+        while True:
+            state = await asyncio.to_thread(self._bridge.begin_control, CONTROL_REASON)
+            while state == "paused":
+                await asyncio.sleep(PAUSE_POLL_S)
+                state = await asyncio.to_thread(self._bridge.control_state)
+            if state == "off":
+                raise ShellUnavailableError("the user stopped Arcee")
+            try:
+                return await asyncio.to_thread(call, *args)
+            except ShellUnavailableError as exc:
+                if "paused" not in str(exc):  # paused between the check and the call
+                    raise
