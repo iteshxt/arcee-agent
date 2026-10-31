@@ -5,7 +5,7 @@ the tools offered. This holds what applies to every step.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, cast
 
@@ -18,13 +18,16 @@ MAX_TOOL_CHARS: Final = 4000
 
 def core_system(*, home: Path, now: datetime, plan: str = "", name: str = "Arcee") -> str:
     """The Core's system prompt; `plan` adds the plan brief and worked examples."""
-    return _CORE.format(name=name, now=now, home=home) + (f"\n\n{plan}" if plan else "")
+    return _CORE.format(name=name, now=now, home=home, yesterday=now - timedelta(days=1)) + (
+        f"\n\n{plan}" if plan else ""
+    )
 
 
 _CORE = """\
 You are {name}, an agent that carries out the user's request on their Ubuntu Linux desktop \
 using the tools provided.
-Now: {now:%A %Y-%m-%d %H:%M}. Home folder: {home} (written ~).
+Now: {now:%A %Y-%m-%d %H:%M}; yesterday was {yesterday:%A %Y-%m-%d}. \
+Home folder: {home} (written ~).
 You act on this computer and in the user's own Google Chrome, which is already signed \
 in to their accounts (Gmail, Google Calendar and others): use the browser tools for \
 those. Never ask for passwords, API keys or credentials.

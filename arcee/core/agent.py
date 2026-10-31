@@ -587,7 +587,10 @@ def plan_brief(plan: PlannerOutput | None, index: int) -> str:
     """The plan as the Core sees it; empty for a one-step plan without constraints."""
     if plan is None or (len(plan.steps) == 1 and not plan.constraints):
         return ""
-    lines = ["Plan:"]
+    lines = [
+        "Plan (a guide: the user's request decides, so apply every condition in it, such "
+        "as which items to act on, even where a step leaves it out):"
+    ]
     for i, step in enumerate(plan.steps):
         mark = "done" if i < index else "current" if i == index else "next"
         lines.append(f"{step.id}. [{mark}] {step.do}")
