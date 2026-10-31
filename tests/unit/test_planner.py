@@ -13,6 +13,7 @@ from arcee.core.planner import Planner, needs_plan
 from arcee.core.policy import Policy
 from arcee.core.protocol import ConfirmRequest, ReplanContext
 from arcee.models.base import Completion, ModelProfile, WireCall
+from arcee.models.errors import QuotaExhaustedError
 from arcee.models.fake import FakeAdapter
 from arcee.tools.builtin import builtin_registry
 
@@ -283,3 +284,74 @@ async def test_a_failing_planner_does_not_end_the_task() -> None:
 
     assert outcome.reply == "Done without a plan."
     assert any(isinstance(e, Guarded) and "running unplanned" in e.what for e in events)
+
+
+def two_models(
+    plans: Sequence[str],
+    small: Sequence[Completion | Exception],
+    large: Sequence[Completion | Exception],
+) -> tuple[Agent, FakeAdapter, FakeAdapter, list[Event]]:
+    """An agent on a small and a large model, with hard requests routed to the large one."""
+    user = User()
+    small_model = FakeAdapter(small, CORE.model_copy(update={"model": "small"}))
+    large_model = FakeAdapter(large, CORE.model_copy(update={"model": "large"}))
+    events: list[Event] = []
+    agent = Agent(
+        [small_model, large_model],
+        TOOLS,
+        Executor(Gate(Policy(), user)),
+        user,
+        home=Path("/tmp"),
+        planner=Planner(FakeAdapter(plans, PLANNER), TOOLS, home=Path("/tmp"), clock=lambda: NOW),
+        start_tier=lambda request: 1,
+        on_event=events.append,
+        clock=lambda: NOW,
+    )
+    return agent, small_model, large_model, events
+
+
+def steps_plan(*steps: tuple[str, bool]) -> str:
+    return json.dumps(
+        {
+            "goal": "g",
+            "interpretation": "",
+            "steps": [
+                {"id": i, "do": do, "tools": ["*"], "success": "s", "judgement": judgement}
+                for i, (do, judgement) in enumerate(steps, start=1)
+            ],
+        }
+    )
+
+
+class TestStepModels:
+    async def test_mechanical_steps_run_on_the_small_model(self) -> None:
+        plan_text = steps_plan(("Open Gmail", False), ("Read the unread mail", True))
+        agent, small, large, _ = two_models(
+            [plan_text], [Completion("Opened.")], [Completion("Two need you.")]
+        )
+
+        outcome = await agent.run("check my gmail and tell me what needs me")
+
+        assert outcome.reply == "Two need you."
+        assert len(small.requests) == 1
+        assert "Now step 2" in large.requests[0].messages[-1].text
+
+    async def test_a_spent_model_hands_the_task_to_the_other(self) -> None:
+        plan_text = steps_plan(("Read the unread mail", True))
+        spent = QuotaExhaustedError("large: its tokens for the day are used up")
+        agent, small, _, events = two_models(
+            [plan_text], [Completion("Nothing needs you.")], [spent]
+        )
+
+        outcome = await agent.run("check my gmail")
+
+        assert (outcome.status, outcome.reply) == ("done", "Nothing needs you.")
+        assert len(small.requests) == 1
+        assert any(isinstance(e, Guarded) and "continuing on small" in e.what for e in events)
+
+    async def test_when_every_model_is_spent_the_error_stands(self) -> None:
+        spent = QuotaExhaustedError("used up")
+        agent, _, _, _ = two_models([steps_plan(("Read", True))], [spent], [spent])
+
+        with pytest.raises(QuotaExhaustedError):
+            await agent.run("check my gmail")

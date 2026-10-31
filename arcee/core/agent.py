@@ -39,7 +39,7 @@ from arcee.core.prompts import core_system, tool_message
 from arcee.core.protocol import ExecutorResult, PlannerOutput, PlanStep, ReplanContext
 from arcee.core.toolsets import filters_for
 from arcee.models.base import Completion, Message, ModelAdapter, ToolRequest, WireCall
-from arcee.models.errors import MalformedReplyError, ModelError
+from arcee.models.errors import MalformedReplyError, ModelError, QuotaExhaustedError
 from arcee.tools.base import Notes, ToolContext
 from arcee.tools.control import ASK_USER, DONE, REPLAN
 from arcee.tools.registry import (
@@ -166,8 +166,12 @@ class _State:
     index: int = 0
     tried: list[str] = field(default_factory=list[str])
     tier: int = 0
-    # The tier a step starts on: 0, or higher for requests routed as hard.
+    # The tier the request was routed to: 0, or higher for hard requests.
+    task_tier: int = 0
+    # The tier the current step starts on: the task's, or 0 for a mechanical plan step.
     base_tier: int = 0
+    # Models whose daily allowance ran out during this task.
+    spent: set[str] = field(default_factory=set[str])
     strikes: int = 0
     steps: int = 0
     model_calls: int = 0
@@ -222,7 +226,8 @@ class Agent:
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
-        state.base_tier = state.tier = min(self._start_tier(request), len(self._ladder) - 1)
+        state.task_tier = min(self._start_tier(request), len(self._ladder) - 1)
+        state.base_tier = state.tier = state.task_tier
         ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
@@ -316,6 +321,10 @@ class Agent:
         self, state: _State, ctx: ToolContext, step: PlanStep | None
     ) -> Outcome | _StepDone | _Stuck:
         offered = self._offered(state, step)
+        # Mechanical steps (open a page, type given text) start on the smallest model.
+        state.base_tier = state.task_tier if step is None or step.judgement else 0
+        state.strikes = 0
+        await self._switch(state, state.base_tier)
         while state.steps < self._limits.max_steps:
             state.steps += 1
             try:
@@ -416,6 +425,25 @@ class Agent:
         return render_examples(self._examples.search(query))
 
     async def _turn(self, state: _State, offered: Sequence[AnyTool]) -> Completion:
+        while True:
+            if self._ladder[state.tier].profile.model in state.spent:
+                await self._switch(state, self._fallback(state))
+            try:
+                return await self._call_core(state, offered)
+            except QuotaExhaustedError as error:
+                model = self._ladder[state.tier].profile.model
+                state.spent.add(model)
+                if not any(m.profile.model not in state.spent for m in self._ladder):
+                    raise
+                other = self._ladder[self._fallback(state)].profile.model
+                self._emit(Guarded(state.steps, f"{error}; continuing on {other}"))
+
+    def _fallback(self, state: _State) -> int:
+        """The nearest tier whose model still has allowance, preferring a larger one."""
+        tiers = sorted(range(len(self._ladder)), key=lambda t: (abs(t - state.tier), -t))
+        return next(t for t in tiers if self._ladder[t].profile.model not in state.spent)
+
+    async def _call_core(self, state: _State, offered: Sequence[AnyTool]) -> Completion:
         model = self._ladder[state.tier]
         started = time.monotonic()
         state.model_calls += 1
