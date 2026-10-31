@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from arcee.core.policy import Policy, Tier
+from arcee.core.routing import start_tier
 from arcee.core.toolsets import DESKTOP, filters_for
 from arcee.models.base import Message
 from arcee.platform.atspi import Snapshot
@@ -112,3 +113,17 @@ async def test_a_thin_tree_points_to_reading_the_screen(tools: Any) -> None:
         "This window's tree shows little. To see it as on screen: "
         'screen.read(window="Home"), then screen.click.'
     )
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "open the Calculator app and work out 12 times 34 using its buttons",
+        "click the Save button",
+        "press ctrl+s in the text editor",
+        "in Files, rename old.txt to new.txt",
+    ],
+)
+def test_desktop_requests_get_the_desktop_tools_and_the_large_model(request_text: str) -> None:
+    assert set(DESKTOP) <= set(filters_for([Message("user", request_text)]))
+    assert start_tier(request_text) == 1

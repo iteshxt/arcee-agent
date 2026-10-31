@@ -62,10 +62,11 @@ _GROUPS: Final = (
     (
         DESKTOP,
         _words(
-            r"\b(windows?|click|button|menu|dialog|gui|toolbar|sidebar|screen|keyboard|"
-            r"shortcut|press|in (the )?(files|"
-            r"nautilus|settings|text editor|calculator|calendar)( app)?|files app|"
-            r"settings app|text editor)\b"
+            r"\b(windows?|clicks?|clicking|buttons?|menus?|dialogs?|gui|toolbars?|sidebar|"
+            r"screen|keyboard|shortcuts?|press(es|ing)?|typ(e|ing) (it )?in(to)?|"
+            r"(the|its|that|this) app|in (the )?(files|nautilus|settings|text editor|"
+            r"calculator|calendar)( app)?|files app|settings app|calendar app|text editor|"
+            r"calculator|nautilus)\b"
         ),
     ),
     (
