@@ -51,7 +51,8 @@ from arcee.models.presets import (
     rate_budget,
     share_budget,
 )
-from arcee.platform.shell import ShellBridge, StopWatcher
+from arcee.platform.screen import GnomeScreen
+from arcee.platform.shell import ShellBridge, ShellUnavailableError, StopWatcher
 from arcee.tools.builtin import builtin_registry
 
 
@@ -464,6 +465,38 @@ async def shell_check() -> int:
     return 0
 
 
+async def screen_check(seconds: int) -> int:
+    """Take control (glow and Stop pill), read the screen with local OCR, then hold
+    control so the user can try the pause. Nothing leaves the machine."""
+    bridge = ShellBridge()
+    if not await asyncio.to_thread(bridge.available):
+        print(f"the Arcee shell extension is not running ({SHELL_EXTENSION}); see shell-extension")
+        return 1
+    screen = GnomeScreen(bridge)
+    seen: set[str] = set()
+    try:
+        shot = await screen.capture()
+        lines = await screen.read(shot)
+        print(f"screen {shot.screen_width}x{shot.screen_height}: {len(lines)} lines of text read")
+        print(f"control is on for {seconds} s: move the mouse or press a key to pause,")
+        print(f"then Resume or Stop in the pill at the top ({STOP_SHORTCUT} also stops)")
+        for _ in range(seconds * 2):
+            state = await asyncio.to_thread(bridge.control_state)
+            if state not in seen:
+                seen.add(state)
+                print(f"  {state}")
+            if state == "off":
+                break
+            await asyncio.sleep(0.5)
+    except ShellUnavailableError as exc:
+        print(f"failed: {exc}")
+        return 1
+    finally:
+        await asyncio.to_thread(bridge.end_control)
+    print("paused by your input: works" if "paused" in seen else "never paused")
+    return 0
+
+
 def show_limits() -> int:
     """What Groq last reported for each model, with what has refilled since."""
     snapshot = rate_budget().snapshot()
@@ -544,6 +577,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sub.add_parser("shell-extension", help="install the GNOME Shell extension (window focus)")
     sub.add_parser("shell-check", help="check that the GNOME Shell extension is running")
+    screen = sub.add_parser(
+        "screen-check", help="show the control glow, read the screen locally, test the pause"
+    )
+    screen.add_argument("--seconds", type=int, default=15, help="how long to hold control")
     sub.add_parser("limits", help="show the cloud models' remaining rate limits")
     sub.add_parser("browser-setup", help="register the Chrome extension's native host")
     sub.add_parser("browser-check", help="check that the Chrome extension is connected")
@@ -577,6 +614,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return shell_extension()
         if args.command == "shell-check":
             return asyncio.run(shell_check())
+        if args.command == "screen-check":
+            return asyncio.run(screen_check(args.seconds))
         if args.command == "limits":
             return show_limits()
         if args.command == "browser-setup":
