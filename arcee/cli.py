@@ -8,11 +8,12 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, TextIO
+from typing import Any, Final, Literal, TextIO
 
 from arcee.browser.client import BrowserClient, BrowserError
 from arcee.browser.host import EXTENSION_ID
@@ -49,7 +50,7 @@ from arcee.models.presets import (
     rate_budget,
     share_budget,
 )
-from arcee.platform.shell import ShellBridge
+from arcee.platform.shell import ShellBridge, StopWatcher
 from arcee.tools.builtin import builtin_registry
 
 
@@ -202,15 +203,23 @@ async def run(
         )
         task_id = await store.start_task(request)
         started = time.monotonic()
+        running = asyncio.ensure_future(agent.run(request, task_id=task_id))
+        stop_key = StopKey(running)
         try:
-            outcome = await agent.run(request, task_id=task_id)
+            outcome = await running
         except ModelUnavailableError as exc:
             await _finish(store, task_id, "failed", f"model unavailable: {exc}", plans)
             terminal.print(f"model unavailable: {exc}")
             return 2
         except asyncio.CancelledError:
+            if stop_key.pressed:
+                await _finish(store, task_id, "stopped", "", plans)
+                terminal.print(f"\nstopped with {STOP_SHORTCUT}")
+                return 130
             await asyncio.shield(_finish(store, task_id, "cancelled", "", plans))
             raise
+        finally:
+            stop_key.close()
         await store.finish_task(
             task_id,
             status=outcome.status,
@@ -232,6 +241,27 @@ async def run(
     finally:
         await asyncio.gather(*(model.aclose() for model in [*ladder, planner_model]))
         store.close()
+
+
+class StopKey:
+    """Cancels `task` when the user presses the shell extension's stop shortcut."""
+
+    def __init__(self, task: asyncio.Future[Any]) -> None:
+        self.pressed = False
+        loop = asyncio.get_running_loop()
+
+        def stop() -> None:
+            self.pressed = True
+            task.cancel()
+
+        def on_stop() -> None:  # runs on the watcher's thread
+            loop.call_soon_threadsafe(stop)
+
+        self._watcher = StopWatcher(on_stop)
+        self._watcher.start()
+
+    def close(self) -> None:
+        self._watcher.stop()
 
 
 async def _finish(
@@ -385,12 +415,17 @@ def browser_setup() -> int:
     return 0
 
 
+STOP_SHORTCUT: Final = "Super+Shift+Escape"
+
+
 def shell_extension() -> int:
     """Link the Arcee GNOME Shell extension into the user's extensions folder."""
     source = EXTENSION_DIR.parent / "extension" / SHELL_EXTENSION
     data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
     target = Path(data) / "gnome-shell" / "extensions" / SHELL_EXTENSION
     target.parent.mkdir(parents=True, exist_ok=True)
+    # The stop shortcut lives in the extension's settings schema, compiled in place.
+    subprocess.run(["glib-compile-schemas", "--strict", str(source / "schemas")], check=True)
     if target.is_symlink() or target.exists():
         print(f"already installed: {target}")
     else:

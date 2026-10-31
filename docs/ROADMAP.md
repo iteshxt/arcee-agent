@@ -128,13 +128,13 @@ Prerequisites on the machine:
 - [ ] `ydotool` installed, udev rule, user in `input` group
 - [ ] Second monitor, or a virtual one
 
-- [ ] ScreenCast portal + PipeWire frame grab, restore token in the keyring
-- [ ] RemoteDesktop portal input on the same session
+- [x] Screenshots through the Arcee shell extension (`Shell.Screenshot`), decision 0009; ScreenCast portal + PipeWire kept for sessions without the extension
+- [x] Input through the extension's Clutter virtual pointer and keyboard (decision 0009); RemoteDesktop portal kept as the route without the extension
 - [ ] ydotool fallback; pressed set mirrored to `$XDG_RUNTIME_DIR/arcee/pressed.json`
 - [ ] `ScreenMap`: scaling, fractional scale, multi-monitor offsets
-- [ ] Set-of-marks (level 3), raw coordinates (level 4), `screen.ocr_find`, text-match targets
-- [ ] `mouse.*`, `kbd.*`, `screen.*` tools; click verification and level escalation
-- [ ] Kill switch, `release_all`, watchdog thread, `arceed --release-input`
+- [x] Set-of-marks as text: OCR lines numbered `t_N` with centres (`screen.read`), raw coordinates with confirmation (level 4); marks drawn on images wait for a vision Core
+- [x] `screen.read`, `screen.click`, `screen.scroll`, `kbd.type`, `kbd.key`; pointer moves verified and retried. Level escalation still to do
+- [x] Kill switch Super+Shift+Escape: releases input and cancels `arcee-cli run`; every input call is whole, so no watchdog is needed yet. `arceed --release-input` comes with the daemon
 
 **Gate:** clicks land within 5 px on two monitors with fractional scaling; kill switch returns in under 100 ms. Tag `v0.3.0`.
 
@@ -205,3 +205,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-10-30** — Desktop tools: `ui.windows`, `ui.tree`, `ui.act` over AT-SPI. On Files they read 56 elements, select files, and run window actions (`view.rename`, `view.move-to-trash`, `window.close`). The GUI rename stops at the rename popover: GTK closes popovers in a window that is not active, and on Wayland Arcee cannot raise another app's window; the GNOME Shell extension's `window.focus` is needed. Also: a repeated question to the user is blocked and counts as a strike. 452 unit tests.
 - **2026-10-30** — Gmail runs stalled and waited on the rate budget. A step's closing note ("opened the inbox; browser_get_elements next") tripped the narration guard, which now checks only the final answer. Every call resent the whole history, three page reads of up to 4,000 characters each by the fourth call; now each plan step starts fresh from the request and the earlier steps' notes, and older results inside a step shrink to one line. 462 unit tests.
 - **2026-10-31** — A Gmail-to-Calendar run showed five problems. The repeat guard returned stale pages after clicks and searches (it cleared only after approved actions), so the model never read the email it opened; tools now declare `read_only`. Groq's 200K tokens per day, missing from its headers, ended the run with a 372 s retry; the budget now counts it and names the limit from the 429. One task used about 100K tokens on gpt-oss-120b alone; mechanical plan steps now run on 20b, and a spent model hands over. The Planner's 1,024 output tokens cut plans short (a five-step plan took 1,013 with reasoning); it now has 4,096. Page elements are one line each, and results fill the limit: 21 inbox rows instead of 12. 476 unit tests.
+- **2026-10-31** — Phase 3 through the shell extension (decision 0009): screenshots, clicks, scrolls, keys and typing over `org.arcee.Shell`, the screen read as numbered OCR lines for text-only models, and a stop shortcut that cancels the task. Tested end to end in a headless GNOME Shell 50 with its own home: read a dialog, typed into it, clicked OK, got the text back. Also: cut-off model replies are retried with more room instead of being repaired into shorter plans, prompts name yesterday's date, and the request's conditions outrank the plan. 506 unit tests.
