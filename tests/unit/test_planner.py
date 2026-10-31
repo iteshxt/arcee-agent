@@ -9,8 +9,9 @@ import pytest
 from arcee.core.agent import Agent, Event, Guarded, Planned, StepStarted
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
-from arcee.core.planner import Planner, needs_plan
+from arcee.core.planner import Planner, needs_plan, planner_system
 from arcee.core.policy import Policy
+from arcee.core.prompts import core_system
 from arcee.core.protocol import ConfirmRequest, ReplanContext
 from arcee.models.base import Completion, ModelProfile, WireCall
 from arcee.models.errors import QuotaExhaustedError
@@ -356,3 +357,11 @@ class TestStepModels:
 
         with pytest.raises(QuotaExhaustedError):
             await agent.run("check my gmail")
+
+
+def test_prompts_name_yesterday() -> None:
+    for system in (
+        planner_system([], home=Path("/h"), now=NOW),
+        core_system(home=Path("/h"), now=NOW),
+    ):
+        assert "Thursday 2026-10-29 09:30; yesterday was Wednesday 2026-10-28" in system

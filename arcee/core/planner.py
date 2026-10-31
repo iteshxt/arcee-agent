@@ -8,7 +8,7 @@ cards are for the Core, which picks the actual calls.
 
 import re
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -48,7 +48,8 @@ def planner_system(tools: Sequence[AnyTool], *, home: Path, now: datetime) -> st
     catalog = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
     return f"""\
 You plan tasks for Arcee, an agent on the user's Ubuntu Linux desktop.
-Now: {now:%A %Y-%m-%d %H:%M}. Home folder: {home} (written ~).
+Now: {now:%A %Y-%m-%d %H:%M}; yesterday was {now - timedelta(days=1):%A %Y-%m-%d}. \
+Home folder: {home} (written ~).
 You act on this computer and in the user's own Google Chrome, which is already signed \
 in to their accounts (Gmail, Google Calendar and others): use the browser tools for \
 those. Never ask for passwords, API keys or credentials.
@@ -68,12 +69,16 @@ thinking, comparing or choosing, which happens inside the step that needs it.
 "fs.*" for a group), success (what shows the step is done), judgement (false only for \
 mechanical steps such as opening a page or typing given text: a smaller model runs them).
 - The last step ends with answering the user's whole request.
-- constraints: limits the user stated or implied, e.g. "do not delete anything".
+- constraints: limits the user stated or implied, e.g. "do not delete anything". A \
+condition on which items to act on is a constraint too, in the user's terms, e.g. "only \
+emails that need the user's attention"; the agent sees constraints at every step.
 - clarify: almost always null. A question for the user ONLY when the request cannot be \
 understood at all. Never ask what a tool can find out. Conditions in the request ("if \
 it needs my attention", "the important ones") are judgements the agent makes while \
 doing the work: plan steps that open and read each item and decide for each one, \
-and put your reading of the condition in interpretation.
+and put your reading of the condition in interpretation. The reading step says what \
+to decide ("decide which need the user's attention"), and later steps act only on the \
+items it chose, never on every item.
 - Never plan an action the tools cannot do; say so in a one-step plan instead."""
 
 
