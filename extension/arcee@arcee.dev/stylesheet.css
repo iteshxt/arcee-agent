@@ -64,3 +64,55 @@
 .arcee-stop:hover {
   background-color: #e74c3c;
 }
+
+/* The panel menu. */
+.arcee-entry {
+  min-width: 300px;
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+
+.arcee-round-button {
+  border-radius: 999px;
+  padding: 8px;
+  margin-left: 6px;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.arcee-round-button:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.arcee-status {
+  spacing: 6px;
+  max-width: 360px;
+}
+
+.arcee-status-title {
+  font-weight: bold;
+}
+
+.arcee-progress {
+  font-size: 90%;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.arcee-question {
+  spacing: 8px;
+  max-width: 360px;
+  padding: 8px;
+  border-radius: 12px;
+  background-color: rgba(96, 156, 255, 0.15);
+}
+
+.arcee-question-text {
+  font-weight: bold;
+}
+
+.arcee-question-buttons {
+  spacing: 8px;
+}
+
+.arcee-allow {
+  background-color: #2f7d4f;
+}

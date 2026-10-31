@@ -5,7 +5,14 @@ import pytest
 from pydantic import ValidationError
 
 from arcee.core.policy import Policy, Tier
-from arcee.platform.screen import GnomeScreen, Shot, TextLine, keyvals, parse_tsv
+from arcee.platform.screen import (
+    GnomeScreen,
+    Shot,
+    TextLine,
+    keyvals,
+    merge_lines,
+    parse_tsv,
+)
 from arcee.platform.shell import ShellUnavailableError
 from arcee.tools.base import ToolContext
 from arcee.tools.screen import (
@@ -260,3 +267,13 @@ def test_far_apart_words_on_one_row_are_separate_lines() -> None:
 
     assert [line.text for line in lines] == ["Arcee working", "Stop"]
     assert lines[1].center == (440, 115)
+
+
+def test_lines_read_twice_are_kept_once() -> None:
+    lines = [
+        TextLine("Quit Arc", 930, 308, 60, 16),
+        TextLine("Quit Arcee", 930, 308, 70, 16),
+        TextLine("Today", 930, 210, 40, 16),
+    ]
+
+    assert merge_lines(lines) == [lines[2], lines[1]]

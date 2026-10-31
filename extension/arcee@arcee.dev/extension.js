@@ -16,6 +16,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {ControlSession} from './control.js';
+import {ArceeIndicator} from './panel.js';
 
 Gio._promisify(Shell.Screenshot.prototype, 'screenshot');
 
@@ -188,7 +189,11 @@ class ShellBridge {
                 this._control.setShown(true);
             }
             stream.close(null);
-            const shot = {path, width: global.stage.width, height: global.stage.height};
+            const shot = {
+                path, width: global.stage.width, height: global.stage.height,
+                // OCR reads the top bar apart from the rest of the screen.
+                top_bar: Main.panel.visible ? Main.layoutManager.primaryMonitor.y + Main.panel.height : 0,
+            };
             invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(shot)]));
         } catch (error) {
             invocation.return_error_literal(
@@ -324,9 +329,13 @@ export default class ArceeExtension extends Extension {
         Main.wm.addKeybinding(
             'stop-agent', this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.ALL,
             () => this._bridge.stop());
+        this._indicator = new ArceeIndicator(this.path);
+        Main.panel.addToStatusArea('arcee', this._indicator);
     }
 
     disable() {
+        this._indicator.destroy();
+        this._indicator = null;
         Main.wm.removeKeybinding('stop-agent');
         Gio.bus_unown_name(this._owner);
         this._dbus.unexport();
