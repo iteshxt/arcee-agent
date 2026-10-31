@@ -59,7 +59,8 @@ Turn the user's request into a short plan:
 tool work (look something up, act on something); never a step only for thinking, \
 comparing or choosing, which happens inside the step that needs it.
 - Each step: id (1, 2, ...), do (one instruction), tools (the tool names it needs, or \
-"fs.*" for a group), success (what shows the step is done).
+"fs.*" for a group), success (what shows the step is done), judgement (false only for \
+mechanical steps such as opening a page or typing given text: a smaller model runs them).
 - The last step ends with answering the user's whole request.
 - constraints: limits the user stated or implied, e.g. "do not delete anything".
 - clarify: almost always null. A question for the user ONLY when the request cannot be \

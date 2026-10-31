@@ -95,6 +95,11 @@ class PlanStep(_ReplyModel):
         description='Tools the step may use: names, "namespace.*" or "*".',
     )
     success: Text = Field(description="Observable condition that means the step is done.")
+    judgement: bool = Field(
+        default=True,
+        description="True when the step reads and understands content or decides something; "
+        "false for mechanical steps (open a page, click a named button, type given text).",
+    )
 
 
 class Needs(_ReplyModel):
