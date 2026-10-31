@@ -1,8 +1,11 @@
 {
   "uuid": "arcee@arcee.dev",
   "name": "Arcee",
-  "description": "Desktop bridge for the Arcee agent: lists windows and brings one to the front on request, over D-Bus (org.arcee.Shell).",
-  "shell-version": ["50"],
+  "description": "Desktop bridge for the Arcee agent over D-Bus (org.arcee.Shell): lists and focuses windows, takes screenshots and clicks, scrolls and types on request. Super+Shift+Escape stops Arcee.",
+  "shell-version": [
+    "50"
+  ],
   "url": "https://github.com/iteshxt/arcee-agent",
-  "version": 1
+  "version": 2,
+  "settings-schema": "org.gnome.shell.extensions.arcee"
 }

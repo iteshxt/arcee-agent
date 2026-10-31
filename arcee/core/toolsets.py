@@ -27,7 +27,8 @@ SHELL: Final = ("shell.*",)
 LOCAL: Final = FILES + APPS + SYSTEM + SHELL
 ALWAYS: Final = LOCAL + CONTROL
 BROWSER: Final = ("browser.*",)
-DESKTOP: Final = ("ui.*",)
+# Desktop apps: their window tree first, the screen (OCR, clicks, keys) as fallback.
+DESKTOP: Final = ("ui.*", "screen.*", "kbd.*")
 WEB: Final = ("web.*",)
 
 
@@ -61,7 +62,8 @@ _GROUPS: Final = (
     (
         DESKTOP,
         _words(
-            r"\b(windows?|click|button|menu|dialog|gui|toolbar|sidebar|in (the )?(files|"
+            r"\b(windows?|click|button|menu|dialog|gui|toolbar|sidebar|screen|keyboard|"
+            r"shortcut|press|in (the )?(files|"
             r"nautilus|settings|text editor|calculator|calendar)( app)?|files app|"
             r"settings app|text editor)\b"
         ),
@@ -103,6 +105,8 @@ _NAMESPACE_GROUP: Final = {
     "network": SYSTEM,
     "shell": SHELL,
     "ui": DESKTOP,
+    "screen": DESKTOP,
+    "kbd": DESKTOP,
     "browser": BROWSER,
     "web": WEB,
 }

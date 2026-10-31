@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.arcee" path="/org/gnome/shell/extensions/arcee/">
+    <key name="stop-agent" type="as">
+      <default><![CDATA[['<Super><Shift>Escape']]]></default>
+      <summary>Stop Arcee</summary>
+      <description>Releases any held keys and buttons and stops the running task.</description>
+    </key>
+  </schema>
+</schemalist>
