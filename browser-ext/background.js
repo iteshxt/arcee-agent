@@ -29,8 +29,20 @@ function connect() {
 async function activeTab(tabId) {
   if (tabId) return chrome.tabs.get(tabId);
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab) throw new Error("no active tab");
-  return tab;
+  if (tab) return tab;
+  // Chrome keeps running with every window closed; open one to work in.
+  const created = await chrome.windows.create({ focused: true });
+  return created.tabs[0];
+}
+
+// A new tab, in a new window when Chrome has none open.
+async function newTab(url) {
+  const windows = await chrome.windows.getAll({ windowTypes: ["normal"] });
+  if (windows.length === 0) {
+    const created = await chrome.windows.create({ url: url || "about:blank", focused: true });
+    return created.tabs[0];
+  }
+  return chrome.tabs.create({ url: url || "about:blank" });
 }
 
 async function inPage(tabId, func, args = []) {
@@ -62,7 +74,7 @@ async function handle(method, params) {
       return tabs.map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active }));
     }
     case "new_tab": {
-      const tab = await chrome.tabs.create({ url: params.url || "about:blank" });
+      const tab = await newTab(params.url);
       if (params.url) await waitForLoad(tab.id);
       return { id: tab.id };
     }

@@ -7,16 +7,17 @@ labelled send, delete, pay and the like, or typing into a password or card
 field, needs the user's confirmation. Everything read from pages is untrusted.
 """
 
+import asyncio
 import html
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Literal
 from urllib.parse import urlparse
 
 from pydantic import Field
 
-from arcee.browser.client import BrowserClient, BrowserError
+from arcee.browser.client import NOT_CONNECTED, BrowserClient, BrowserError
 from arcee.core.policy import Policy, Tier
 from arcee.tools.base import NoArgs, Tool, ToolArgs, ToolContext, ToolResult, Usage
 
@@ -31,6 +32,29 @@ SECRET_FIELD: Final = re.compile(
 )
 
 
+# Chrome cold-starts and loads its extensions in a few seconds on the reference machine.
+CHROME_START_S: Final = 20.0
+CHROME_NAMES: Final = ("Google Chrome", "Chromium")
+
+
+async def launch_chrome() -> None:
+    """Start the user's own Chrome, the installed one, as from the app grid."""
+    from arcee.tools.apps import application_dirs, best_match, installed_apps
+
+    apps = await asyncio.to_thread(installed_apps, application_dirs())
+    app = next((a for name in CHROME_NAMES if (a := best_match(apps, name)) is not None), None)
+    if app is None:
+        raise BrowserError("Google Chrome is not installed")
+    await asyncio.create_subprocess_exec(
+        "gio",
+        "launch",
+        str(app.path),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 @dataclass
 class BrowserSession:
     """The bridge client and the last page snapshot, shared by the browser tools."""
@@ -40,6 +64,8 @@ class BrowserSession:
     # The tab Arcee is working in. Every page call names it, so the user's other tabs
     # and windows are never read or changed by accident.
     tab: int | None = None
+    # Starts Chrome when the extension is not connected; None leaves it to the user.
+    launch: Callable[[], Awaitable[None]] | None = field(default_factory=lambda: launch_chrome)
 
     def element(self, target: str) -> dict[str, Any]:
         return self.elements.get(target, {})
@@ -48,12 +74,33 @@ class BrowserSession:
 class _BrowserTool[A: ToolArgs](Tool[A]):
     untrusted: ClassVar[bool] = True
     observation_kind = "browser_tree"
-    timeout_s = 30
+    # Room to start Chrome and wait for its extension, then do the call.
+    timeout_s = 45
 
     def __init__(self, session: BrowserSession) -> None:
         self.session = session
 
     async def _call(self, method: str, **params: Any) -> Any:
+        try:
+            return await self.session.client.request(method, params)
+        except BrowserError as exc:
+            if str(exc) != NOT_CONNECTED or self.session.launch is None:
+                raise
+        # Chrome is not running (or not yet connected): start it and wait for the extension.
+        await self.session.launch()
+        deadline = asyncio.get_running_loop().time() + CHROME_START_S
+        while True:
+            try:
+                await self.session.client.request("ping")
+                break
+            except BrowserError:
+                if asyncio.get_running_loop().time() > deadline:
+                    raise BrowserError(
+                        f"started Chrome, but the Arcee extension did not connect within "
+                        f"{CHROME_START_S:.0f} s (see `arcee-cli browser-setup`)"
+                    ) from None
+                await asyncio.sleep(0.5)
+        self.session.tab = None
         return await self.session.client.request(method, params)
 
     async def _page(self, method: str, ctx: ToolContext, **params: Any) -> Any:

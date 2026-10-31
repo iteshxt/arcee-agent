@@ -57,6 +57,12 @@ class ShellBridge:
         result = self._call("ListWindows", None)
         return json.loads(result[0]) if result else []
 
+    def focus_window(self, window_id: int) -> bool:
+        from gi.repository import GLib
+
+        result = self._call("FocusWindow", GLib.Variant("(t)", (window_id,)))
+        return bool(result and result[0])
+
     def focus_title(self, title: str) -> bool:
         if not self.available():
             return False

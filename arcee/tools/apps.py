@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Final
+from typing import Any, Final, Protocol
 
 from pydantic import Field
 
@@ -122,6 +122,13 @@ class AppList(Tool[ListArgs]):
         return ToolResult.ok(f"{len(apps)} installed apps match {args.query!r}", data=data)
 
 
+class Windows(Protocol):
+    """Open windows and focusing one (the Arcee shell extension; a fake in tests)."""
+
+    def windows(self) -> list[dict[str, Any]]: ...
+    def focus_window(self, window_id: int) -> bool: ...
+
+
 class OpenAppArgs(ToolArgs):
     name: str = Field(description="App name or id, e.g. Firefox or org.gnome.Calculator")
     args: list[str] = Field(default_factory=list[str], description="Files or URLs to open in it")
@@ -141,16 +148,28 @@ class AppOpen(Tool[OpenAppArgs]):
     timeout_s = 15
 
     def __init__(
-        self, *, dirs: list[Path] | None = None, command: tuple[str, ...] = ("gio", "launch")
+        self,
+        *,
+        dirs: list[Path] | None = None,
+        command: tuple[str, ...] = ("gio", "launch"),
+        windows: Windows | None = None,
     ) -> None:
         self._dirs = dirs
         self._command = command
+        self._windows = windows
 
     async def run(self, args: OpenAppArgs, ctx: ToolContext) -> ToolResult:
         apps = await asyncio.to_thread(installed_apps, self._dirs or application_dirs())
         app = best_match(apps, args.name)
         if app is None:
             return ToolResult.fail(f"no installed app matches {args.name!r}; try app.list")
+        # Already open: bring its window forward. Launching again opened a second
+        # Calculator and left the model reading the wrong one.
+        if not args.args and await self._focus_open(app):
+            return ToolResult.ok(
+                f"Switched to the open {app.name} window",
+                data={"opened": app.name, "id": app.id, "already_open": True},
+            )
         proc = await asyncio.create_subprocess_exec(
             *self._command,
             str(app.path),
@@ -170,3 +189,22 @@ class AppOpen(Tool[OpenAppArgs]):
             )
         data = {"opened": app.name, "id": app.id}
         return ToolResult.ok(f"Opened {app.name}", data=data)
+
+    async def _focus_open(self, app: App) -> bool:
+        if self._windows is None:
+            from arcee.platform.shell import ShellBridge
+
+            self._windows = ShellBridge()
+        windows = self._windows
+        wanted = app.id.removesuffix(".desktop").lower()
+
+        def focus() -> bool:
+            try:
+                for window in windows.windows():
+                    if str(window.get("app_id", "")).lower() == wanted:
+                        return windows.focus_window(int(window["id"]))
+            except Exception:  # no extension or no session bus: just launch
+                return False
+            return False
+
+        return await asyncio.to_thread(focus)

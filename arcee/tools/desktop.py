@@ -98,7 +98,9 @@ class UiTree(_DesktopTool[TreeArgs]):
             "app": snap.app,
             "window": snap.window,
             "count": snap.count,
-            "elements": snap.elements,
+            # One line per element, like browser.get_elements: as objects, Calculator's
+            # 62 buttons filled most of a call to the rate-limited model.
+            "elements": [tree_line(e) for e in snap.elements],
             "window_actions": snap.window_actions,
         }
         if len(snap.elements) < SPARSE_TREE:
@@ -158,6 +160,18 @@ class UiAct(_DesktopTool[ActArgs]):
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
         return ToolResult.ok(done.capitalize(), data={"done": done})
+
+
+def tree_line(element: dict[str, Any]) -> str:
+    """`el_5 push button: 7 [click]`, with a value, states and actions only when set."""
+    line = f"{element.get('id')} {element.get('role')}: {element.get('name', '')}"
+    if element.get("value"):
+        line += f' value="{element["value"]}"'
+    if element.get("states"):
+        line += f" ({', '.join(element['states'])})"
+    if element.get("actions"):
+        line += f" [{', '.join(element['actions'])}]"
+    return line
 
 
 def _label(session: DesktopSession, target: str) -> str:

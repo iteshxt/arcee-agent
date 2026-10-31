@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Arcee",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lets the Arcee desktop agent read and act on web pages, on request, through a local helper.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn3+atgn83nuPPe7iLWssrBmSkj1XJnz40rJN49wFXXDj/IxE3/GcXO86O/F+ZGXi/fIrHzJDrJBAScu5EXVFrYhXdhgM1m6XWtTh0ddy6+zmS9oMQ0ilkX1xgt3d/lyd0NbzQihX1MFYZq/B5aJjHR3eTHQ1p2sJ1/t6IC/ot3x+bmAKoSzmzxsmZFkRxssPuDgKrwm6+FTkgueVtJOpgDwcEwHGuooTq8tZhK1F19IuTY/C9SkSYCvx8IecOa4DO0FD4qrLzMBm9J2ikRLdF1f939jm80eUpOLeRGesGbsLfY69/CUwKTgbLeoxoKsDItHUEx5DiEwPE4R7rWc6lwIDAQAB",
   "permissions": [
