@@ -24,6 +24,10 @@ RISKY: Final = re.compile(
 )
 
 
+# Fewer elements than this and the tree is unlikely to show what the user sees.
+SPARSE_TREE: Final = 5
+
+
 class Desktop(Protocol):
     """The accessibility backend (AT-SPI on GNOME; a fake in tests)."""
 
@@ -97,6 +101,14 @@ class UiTree(_DesktopTool[TreeArgs]):
             "elements": snap.elements,
             "window_actions": snap.window_actions,
         }
+        if len(snap.elements) < SPARSE_TREE:
+            # Canvases, games and apps without accessibility show little here; the
+            # screen itself still has their text.
+            title = snap.window or snap.app
+            data["hint"] = (
+                f"This window's tree shows little. To see it as on screen: "
+                f'screen.read(window="{title}"), then screen.click.'
+            )
         return ToolResult.ok(f"{snap.window or snap.app}: {len(snap.elements)} elements", data=data)
 
 
