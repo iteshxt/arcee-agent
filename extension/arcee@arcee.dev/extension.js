@@ -1,10 +1,11 @@
 // Arcee shell bridge (spec sections 9 and 10). On Wayland only the compositor can
 // raise a window, see the whole screen or synthesise input, so this extension
 // exposes org.arcee.Shell on the session bus for Arcee: list and focus windows,
-// take a screenshot, click, scroll and type (decision 0009). Every input call is
-// whole (press and release together), so nothing stays held between calls; the
-// stop shortcut (Super+Shift+Escape) still releases everything and tells Arcee
-// to stop. The indicator and confirmation bubble come in phase 4.
+// take a screenshot, click, scroll and type (decision 0009). Screen and input work
+// only inside a visible control session (control.js, decision 0010). Every input
+// call is whole (press and release together), so nothing stays held between calls;
+// the stop shortcut (Super+Shift+Escape) and the Stop pill release everything and
+// tell Arcee to stop.
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -13,6 +14,8 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+import {ControlSession} from './control.js';
 
 Gio._promisify(Shell.Screenshot.prototype, 'screenshot');
 
@@ -53,7 +56,17 @@ const INTERFACE = `
       <arg type="s" direction="in" name="text"/>
     </method>
     <method name="ReleaseAll"/>
+    <method name="BeginControl">
+      <arg type="s" direction="in" name="reason"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="EndControl"/>
+    <method name="ControlState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
     <signal name="Stopped"/>
+    <signal name="Paused"/>
+    <signal name="Resumed"/>
   </interface>
 </node>`;
 
@@ -61,6 +74,7 @@ const INTERFACE = `
 const EVENT_GAP_US = 8000;
 const MOVE_ATTEMPTS = 3;
 const OVERVIEW_CLOSE_MS = 500;
+const SCREENSHOT_HIDE_MS = 50;
 
 function windows() {
     return global.get_window_actors()
@@ -83,8 +97,13 @@ function sleep(ms) {
 }
 
 class ShellBridge {
-    constructor(onStop) {
-        this._onStop = onStop;
+    constructor(emit) {
+        this._emit = emit;
+        this._control = new ControlSession({
+            onStop: () => emit('Stopped'),
+            onPause: () => emit('Paused'),
+            onResume: () => emit('Resumed'),
+        });
         // Made now, not on first use: a device made just before its first event is not
         // yet on the seat, and those events are lost (typed text vanished in tests).
         const seat = Clutter.get_default_backend().get_default_seat();
@@ -98,6 +117,7 @@ class ShellBridge {
 
     destroy() {
         this.ReleaseAll();
+        this._control.end();
         this._pointer = null;
         this._keyboard = null;
     }
@@ -130,7 +150,28 @@ class ShellBridge {
         return true;
     }
 
+    BeginControlAsync([reason], invocation) {
+        try {
+            this._control.begin(invocation.get_sender(), reason);
+            invocation.return_value(new GLib.Variant('(s)', [this._control.state]));
+        } catch (error) {
+            this._fail(invocation, error.message);
+        }
+    }
+
+    EndControlAsync(params, invocation) {
+        if (this._control.owner === invocation.get_sender())
+            this._control.end();
+        invocation.return_value(null);
+    }
+
+    ControlState() {
+        return this._control.state;
+    }
+
     async ScreenshotAsync(params, invocation) {
+        if (!this._allowed(invocation))
+            return;
         try {
             // The runtime directory is the user's own (0700); the file is 0600.
             const dir = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'arcee']);
@@ -139,7 +180,13 @@ class ShellBridge {
             const stream = Gio.File.new_for_path(path).replace(
                 null, false, Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION,
                 null);
-            await new Shell.Screenshot().screenshot(false, stream);
+            this._control.setShown(false);
+            try {
+                await sleep(SCREENSHOT_HIDE_MS); // let the stage redraw without them
+                await new Shell.Screenshot().screenshot(false, stream);
+            } finally {
+                this._control.setShown(true);
+            }
             stream.close(null);
             const shot = {path, width: global.stage.width, height: global.stage.height};
             invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(shot)]));
@@ -150,7 +197,9 @@ class ShellBridge {
     }
 
     async PointerClickAsync([x, y, button, count], invocation) {
-        const pointer = this._pointerDevice();
+        if (!this._allowed(invocation))
+            return;
+        const pointer = this._pointer;
         if (!await this._moveTo(x, y)) {
             this._fail(invocation, `the pointer could not reach (${x}, ${y})`);
             return;
@@ -165,7 +214,9 @@ class ShellBridge {
     }
 
     async ScrollAsync([x, y, steps], invocation) {
-        const pointer = this._pointerDevice();
+        if (!this._allowed(invocation))
+            return;
+        const pointer = this._pointer;
         if (!await this._moveTo(x, y)) {
             this._fail(invocation, `the pointer could not reach (${x}, ${y})`);
             return;
@@ -176,9 +227,11 @@ class ShellBridge {
         invocation.return_value(null);
     }
 
-    KeyCombo(keyvals) {
+    KeyComboAsync([keyvals], invocation) {
+        if (!this._allowed(invocation))
+            return;
         // Press in order (modifiers first), release in reverse.
-        const keyboard = this._keyboardDevice();
+        const keyboard = this._keyboard;
         for (const keyval of keyvals) {
             this._keys.add(keyval);
             keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.PRESSED);
@@ -187,15 +240,18 @@ class ShellBridge {
             keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.RELEASED);
             this._keys.delete(keyval);
         }
+        invocation.return_value(null);
     }
 
-    TypeText(text) {
-        const keyboard = this._keyboardDevice();
+    TypeTextAsync([text], invocation) {
+        if (!this._allowed(invocation))
+            return;
         for (const character of text) {
             const keyval = Clutter.unicode_to_keysym(character.codePointAt(0));
-            keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.PRESSED);
-            keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.RELEASED);
+            this._keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.PRESSED);
+            this._keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.RELEASED);
         }
+        invocation.return_value(null);
     }
 
     ReleaseAll() {
@@ -208,8 +264,23 @@ class ShellBridge {
     }
 
     stop() {
+        // The shortcut stops a task whether or not it holds the screen.
         this.ReleaseAll();
-        this._onStop();
+        if (this._control.state !== 'off')
+            this._control.stop();
+        else
+            this._emit('Stopped');
+    }
+
+    // Whether the caller holds an active control session; answers the call if not.
+    _allowed(invocation) {
+        try {
+            this._control.check(invocation.get_sender());
+            return true;
+        } catch (error) {
+            this._fail(invocation, error.message);
+            return false;
+        }
     }
 
     async _moveTo(x, y) {
@@ -241,19 +312,11 @@ class ShellBridge {
         this._time = Math.max(GLib.get_monotonic_time(), this._time + EVENT_GAP_US);
         return this._time;
     }
-
-    _pointerDevice() {
-        return this._pointer;
-    }
-
-    _keyboardDevice() {
-        return this._keyboard;
-    }
 }
 
 export default class ArceeExtension extends Extension {
     enable() {
-        this._bridge = new ShellBridge(() => this._dbus?.emit_signal('Stopped', null));
+        this._bridge = new ShellBridge(signal => this._dbus?.emit_signal(signal, null));
         this._dbus = Gio.DBusExportedObject.wrapJSObject(INTERFACE, this._bridge);
         this._dbus.export(Gio.DBus.session, OBJECT_PATH);
         this._owner = Gio.bus_own_name(

@@ -1,0 +1,66 @@
+/* The screen edges while Arcee holds control: blue when working, amber when paused.
+   Each edge is a strip whose gradient fades towards the middle of the screen. */
+.arcee-glow-top {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(96, 156, 255, 0.7);
+  background-gradient-end: rgba(96, 156, 255, 0);
+}
+
+.arcee-glow-bottom {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(96, 156, 255, 0);
+  background-gradient-end: rgba(96, 156, 255, 0.7);
+}
+
+.arcee-glow-left {
+  background-gradient-direction: horizontal;
+  background-gradient-start: rgba(96, 156, 255, 0.7);
+  background-gradient-end: rgba(96, 156, 255, 0);
+}
+
+.arcee-glow-right {
+  background-gradient-direction: horizontal;
+  background-gradient-start: rgba(96, 156, 255, 0);
+  background-gradient-end: rgba(96, 156, 255, 0.7);
+}
+
+.arcee-glow-top.paused,
+.arcee-glow-left.paused {
+  background-gradient-start: rgba(255, 176, 64, 0.75);
+  background-gradient-end: rgba(255, 176, 64, 0);
+}
+
+.arcee-glow-bottom.paused,
+.arcee-glow-right.paused {
+  background-gradient-start: rgba(255, 176, 64, 0);
+  background-gradient-end: rgba(255, 176, 64, 0.75);
+}
+
+.arcee-pill {
+  background-color: rgba(28, 28, 32, 0.92);
+  border: 1px solid rgba(96, 156, 255, 0.7);
+  border-radius: 999px;
+  padding: 6px 8px 6px 16px;
+  spacing: 10px;
+  color: #f2f2f2;
+  font-weight: bold;
+}
+
+.arcee-pill-button {
+  border-radius: 999px;
+  padding: 4px 14px;
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #f2f2f2;
+}
+
+.arcee-pill-button:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.arcee-stop {
+  background-color: #c0392b;
+}
+
+.arcee-stop:hover {
+  background-color: #e74c3c;
+}
