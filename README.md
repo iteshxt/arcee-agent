@@ -10,6 +10,7 @@ By default Arcee thinks with `openai/gpt-oss-20b` and, for harder requests, `ope
 
 ```sh
 echo 'GROQ_API_KEY=gsk_...' >> .env
+echo 'GROQ_API_KEY_TTS=gsk_...' >> .env   # speech: whisper-large-v3-turbo, its own budget
 uv sync
 uv run arcee-cli run "How much free disk space do I have?"
 ```

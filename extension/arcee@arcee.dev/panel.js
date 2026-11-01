@@ -22,15 +22,22 @@ const AGENT_INTERFACE = `
     <method name="Status"><arg type="s" direction="out"/></method>
     <method name="Recent"><arg type="u" direction="in"/><arg type="s" direction="out"/></method>
     <method name="Limits"><arg type="s" direction="out"/></method>
+    <method name="StartListening"/>
+    <method name="StopListening"/>
     <signal name="Started"><arg type="s"/></signal>
     <signal name="Progress"><arg type="s"/></signal>
     <signal name="Question"><arg type="s"/></signal>
     <signal name="Finished"><arg type="s"/></signal>
+    <signal name="Listening"><arg type="b"/></signal>
+    <signal name="Level"><arg type="d"/></signal>
+    <signal name="Heard"><arg type="s"/></signal>
   </interface>
 </node>`;
 const AgentProxy = Gio.DBusProxy.makeProxyWrapper(AGENT_INTERFACE);
 
 const PROGRESS_LINES = 4;
+const WAVE_BARS = 28;
+const WAVE_HEIGHT = 26;
 const RECENT_TASKS = 5;
 
 function shorten(text, length) {
@@ -60,6 +67,9 @@ class ArceeIndicator extends PanelMenu.Button {
             this._agent.connectSignal('Progress', (_p, _s, [line]) => this._onProgress(line)),
             this._agent.connectSignal('Question', (_p, _s, [json]) => this._onQuestion(json)),
             this._agent.connectSignal('Finished', (_p, _s, [json]) => this._onFinished(json)),
+            this._agent.connectSignal('Listening', (_p, _s, [on]) => this._onListening(on)),
+            this._agent.connectSignal('Level', (_p, _s, [loudness]) => this._onLevel(loudness)),
+            this._agent.connectSignal('Heard', (_p, _s, [json]) => this._onHeard(json)),
         ];
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (!open)
@@ -87,14 +97,31 @@ class ArceeIndicator extends PanelMenu.Button {
             style_class: 'arcee-entry', hint_text: 'Ask Arcee…', can_focus: true, x_expand: true,
         });
         this._entry.clutter_text.connect('activate', () => this._run());
-        // Voice input comes with the next step; the button waits for it.
+        // Speak instead: Groq Whisper turns the recording into the request.
         this._mic = new St.Button({
-            style_class: 'arcee-round-button', can_focus: true, visible: false,
+            style_class: 'arcee-round-button', can_focus: true,
             child: new St.Icon({icon_name: 'audio-input-microphone-symbolic', icon_size: 16}),
         });
+        this._mic.connect('clicked', () => this._toggleListening());
         ask.add_child(this._entry);
         ask.add_child(this._mic);
         this.menu.addMenuItem(ask);
+
+        // The waveform while recording: one bar per recent loudness reading.
+        this._wave = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        const bars = new St.BoxLayout({style_class: 'arcee-wave', x_expand: true});
+        this._bars = [];
+        this._levels = new Array(WAVE_BARS).fill(0);
+        for (let i = 0; i < WAVE_BARS; i++) {
+            const bar = new St.Widget({style_class: 'arcee-wave-bar', y_align: Clutter.ActorAlign.CENTER});
+            bar.height = 3;
+            bars.add_child(bar);
+            this._bars.push(bar);
+        }
+        this._wave.add_child(bars);
+        this._wave.visible = false;
+        this._listening = false;
+        this.menu.addMenuItem(this._wave);
 
         // What Arcee is doing, or its last reply.
         const status = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
@@ -148,6 +175,42 @@ class ArceeIndicator extends PanelMenu.Button {
             this._statusLabel.text = shorten(Gio.DBusError.strip_remote_error(error) ??
                 error.message, 160);
         });
+    }
+
+    _toggleListening() {
+        const call = this._listening ? this._agent.StopListeningAsync() : this._agent.StartListeningAsync();
+        call.catch(error => {
+            this._statusLabel.text = shorten(Gio.DBusError.strip_remote_error(error) ??
+                error.message, 160);
+        });
+    }
+
+    _onListening(on) {
+        this._listening = on;
+        this._wave.visible = on;
+        this._levels.fill(0);
+        this._entry.hint_text = on ? 'Listening… (click the mic to finish)' : 'Ask Arcee…';
+        if (on)
+            this._mic.add_style_class_name('arcee-mic-on');
+        else
+            this._mic.remove_style_class_name('arcee-mic-on');
+    }
+
+    _onLevel(loudness) {
+        this._levels.shift();
+        // Speech sits around 0.02-0.2 RMS; stretch it so quiet talk still moves the bars.
+        this._levels.push(Math.min(1, Math.sqrt(loudness) * 2.5));
+        this._bars.forEach((bar, i) => {
+            bar.height = Math.max(3, Math.round(this._levels[i] * WAVE_HEIGHT));
+        });
+    }
+
+    _onHeard(json) {
+        const heard = JSON.parse(json);
+        if (heard.text)
+            this.run(heard.text);
+        else
+            this._statusLabel.text = heard.error ?? 'I did not catch that';
     }
 
     _onStarted(request) {

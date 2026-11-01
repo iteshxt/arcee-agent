@@ -142,7 +142,7 @@ Prerequisites on the machine:
 
 - [x] `arceed` as a `systemd --user` service (`TimeoutStopSec=2`), D-Bus service `org.arcee.Agent` with activation (`arcee-cli daemon-install`); runs one request at a time, asks questions and confirmations over D-Bus
 - [x] Control sessions (decision 0010): screen and input only inside a session owned by one D-Bus connection, with a glow on every monitor and a Stop pill; the user's input pauses Arcee (Resume or Stop)
-- [x] GNOME extension: indicator and menu (ask, live progress, Stop, questions and confirmations with buttons, recent tasks, today's tokens, Quit), stop keybinding, glow and Stop pill, `org.arcee.Shell`. Mic and waveform next
+- [x] GNOME extension: indicator and menu (ask, live progress, Stop, questions and confirmations with buttons, recent tasks, today's tokens, Quit), stop keybinding, glow and Stop pill, `org.arcee.Shell`. Mic with a live waveform: pw-record, transcribed by Groq `whisper-large-v3-turbo` on its own key (`GROQ_API_KEY_TTS`)
 - [ ] Real `window.*` and `app.close` tools over the extension
 - [ ] GTK4 app: Models, Tools, History, Diagnostics pages; the Models page shows each cloud model's tokens and requests left (from `rate-limits.json`) and lets the user choose local or API inference
 - [ ] First-run wizard
