@@ -1,5 +1,5 @@
 # pyright: basic, reportMissingImports=false
-"""Client for the Arcee GNOME Shell extension (org.arcee.Shell on the session bus).
+"""Client for the Arcee GNOME Shell extension (me.iteshxt.Arcee.Shell on the session bus).
 
 On Wayland only the compositor can bring a window to the front, see the whole
 screen or synthesise input, so these go through the extension (decision 0009).
@@ -14,8 +14,8 @@ import threading
 from collections.abc import Callable, Sequence
 from typing import Any, Final
 
-BUS_NAME: Final = "org.arcee.Shell"
-OBJECT_PATH: Final = "/org/arcee/Shell"
+BUS_NAME: Final = "me.iteshxt.Arcee.Shell"
+OBJECT_PATH: Final = "/me/iteshxt/Arcee/Shell"
 TIMEOUT_MS: Final = 2000
 # A screenshot of a large screen takes longer than a click.
 SCREENSHOT_TIMEOUT_MS: Final = 10_000
@@ -184,7 +184,7 @@ class ShellPresence:
 class StopWatcher:
     """Calls `on_stop` (from its own thread) when the user stops Arcee.
 
-    The extension emits org.arcee.Shell.Stopped for the shortcut and the Stop pill,
+    The extension emits me.iteshxt.Arcee.Shell.Stopped for the shortcut and the Stop pill,
     and Paused and Resumed when the user takes the mouse or keyboard and gives it
     back; a GLib main loop on a daemon thread receives them, so the asyncio loop
     stays free.

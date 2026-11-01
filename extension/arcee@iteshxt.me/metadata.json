@@ -1,0 +1,11 @@
+{
+  "uuid": "arcee@iteshxt.me",
+  "name": "Arcee",
+  "description": "Desktop bridge for the Arcee agent, by Itesh Tomar (iteshxt.me): lists and focuses windows, takes screenshots and clicks, scrolls and types on request, inside a visible control session. Super+Shift+Escape stops Arcee.",
+  "shell-version": [
+    "50"
+  ],
+  "url": "https://iteshxt.me",
+  "version": 3,
+  "settings-schema": "org.gnome.shell.extensions.arcee"
+}

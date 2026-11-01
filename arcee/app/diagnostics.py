@@ -50,9 +50,9 @@ async def daemon() -> Check:
         reply = await asyncio.wait_for(
             bus.call(
                 Message(
-                    destination="org.arcee.Agent",
-                    path="/org/arcee/Agent",
-                    interface="org.arcee.Agent",
+                    destination="me.iteshxt.Arcee.Agent",
+                    path="/me/iteshxt/Arcee/Agent",
+                    interface="me.iteshxt.Arcee.Agent",
                     member="Status",
                 )
             ),

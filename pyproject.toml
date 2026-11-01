@@ -3,7 +3,7 @@ name = "arcee"
 version = "0.0.1"
 description = "Model-agnostic desktop agent harness for GNOME on Wayland"
 readme = "README.md"
-authors = [{ name = "Itesh" }]
+authors = [{ name = "Itesh Tomar" }]
 # The daemon and app import PyGObject and pyatspi from apt, which are built for
 # the distro's system Python (3.14 on Ubuntu 26.04). See docs/decisions/0001.
 requires-python = ">=3.14,<3.15"
@@ -14,6 +14,10 @@ dependencies = [
     "pillow>=12",
     "pydantic>=2.14.1",
 ]
+
+[project.urls]
+Homepage = "https://iteshxt.me"
+Source = "https://github.com/iteshxt/arcee-agent"
 
 [project.scripts]
 arcee-cli = "arcee.cli:main"

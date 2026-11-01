@@ -1,6 +1,6 @@
 """arceed: Arcee as a background service on the session bus (spec section 10, phase 4).
 
-The panel in the GNOME Shell extension talks to it as org.arcee.Agent: `Run` starts a
+The panel in the GNOME Shell extension talks to it as me.iteshxt.Arcee.Agent: `Run` starts a
 request (one at a time), `Progress` signals each step, `Question` asks the user
 something (a question, or a confirmation before a risky action) and waits for
 `Answer`, and `Finished` carries the reply. `Cancel` stops the request. The models,
@@ -33,9 +33,9 @@ from arcee.runner import TaskRunner
 from arcee.settings import load as load_settings
 from arcee.voice import Recorder, Transcriber, VoiceError
 
-BUS_NAME: Final = "org.arcee.Agent"
-OBJECT_PATH: Final = "/org/arcee/Agent"
-BUSY_ERROR: Final = "org.arcee.Agent.Error.Busy"
+BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
+OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
+BUSY_ERROR: Final = "me.iteshxt.Arcee.Error.Busy"
 RECENT_LIMIT: Final = 20
 
 log = logging.getLogger("arceed")

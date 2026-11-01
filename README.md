@@ -2,6 +2,8 @@
 
 Arcee (pronounced "R-C") is a model-agnostic desktop agent harness for Ubuntu on GNOME and Wayland. It takes a voice or text request, plans it, carries it out step by step with tools (shell, files, browser, desktop GUI, web) and reports back. Any model can fill any role: a cloud API, an OpenAI-compatible endpoint or a local model through Ollama.
 
+Made by [Itesh Tomar](https://iteshxt.me).
+
 **Status:** early development. See [the roadmap](docs/ROADMAP.md) for progress and [the specification](docs/) for the design.
 
 ## Try it

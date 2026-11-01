@@ -1,6 +1,6 @@
 // Arcee shell bridge (spec sections 9 and 10). On Wayland only the compositor can
 // raise a window, see the whole screen or synthesise input, so this extension
-// exposes org.arcee.Shell on the session bus for Arcee: list and focus windows,
+// exposes me.iteshxt.Arcee.Shell on the session bus for Arcee: list and focus windows,
 // take a screenshot, click, scroll and type (decision 0009). Screen and input work
 // only inside a visible control session (control.js, decision 0010). Every input
 // call is whole (press and release together), so nothing stays held between calls;
@@ -20,11 +20,11 @@ import {ArceeIndicator} from './panel.js';
 
 Gio._promisify(Shell.Screenshot.prototype, 'screenshot');
 
-const BUS_NAME = 'org.arcee.Shell';
-const OBJECT_PATH = '/org/arcee/Shell';
+const BUS_NAME = 'me.iteshxt.Arcee.Shell';
+const OBJECT_PATH = '/me/iteshxt/Arcee/Shell';
 const INTERFACE = `
 <node>
-  <interface name="org.arcee.Shell">
+  <interface name="me.iteshxt.Arcee.Shell">
     <method name="ListWindows">
       <arg type="s" direction="out" name="windows_json"/>
     </method>

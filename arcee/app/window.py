@@ -24,7 +24,7 @@ from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.models.presets import GROQ_LARGE, GROQ_SMALL, read_budget  # noqa: E402
 from arcee.settings import Core, load, save  # noqa: E402
 
-APP_ID: Final = "org.arcee.App"
+APP_ID: Final = "me.iteshxt.Arcee"  # under the developer's own domain, iteshxt.me
 BUDGET_REFRESH_S: Final = 5
 HISTORY_LIMIT: Final = 50
 # Automatic actions the user may make ask first, in their words. Deleting, sending,
@@ -85,9 +85,9 @@ def restart_daemon_when_idle(background: Background, told: Callable[[str], None]
 
             def call(member: str) -> Message:
                 return Message(
-                    destination="org.arcee.Agent",
-                    path="/org/arcee/Agent",
-                    interface="org.arcee.Agent",
+                    destination="me.iteshxt.Arcee.Agent",
+                    path="/me/iteshxt/Arcee/Agent",
+                    interface="me.iteshxt.Arcee.Agent",
                     member=member,
                 )
 
@@ -126,6 +126,9 @@ class ArceeWindow(Adw.ApplicationWindow):
         )
 
         header = Adw.HeaderBar()
+        menu = Gio.Menu()
+        menu.append("About Arcee", "app.about")
+        header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu))
         header.set_title_widget(Adw.ViewSwitcher(stack=stack, policy=Adw.ViewSwitcherPolicy.WIDE))
         view = Adw.ToolbarView()
         view.add_top_bar(header)
@@ -381,6 +384,24 @@ class ArceeWindow(Adw.ApplicationWindow):
 class ArceeApp(Adw.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        about = Gio.SimpleAction(name="about")
+        about.connect("activate", lambda *_: self._about())
+        self.add_action(about)
+
+    def _about(self) -> None:
+        from importlib.metadata import version
+
+        Adw.AboutDialog(
+            application_name="Arcee",
+            developer_name="Itesh Tomar",
+            developers=["Itesh Tomar https://iteshxt.me"],
+            version=version("arcee"),
+            website="https://iteshxt.me",
+            issue_url="https://github.com/iteshxt/arcee-agent/issues",
+            comments="An agent for your Ubuntu desktop: ask in words or by voice, and it works "
+            "in your apps, your Chrome and your files, asking before anything risky.",
+            copyright="© 2026 Itesh Tomar",
+        ).present(self.get_active_window())
 
     def do_activate(self) -> None:
         window = self.get_active_window() or ArceeWindow(self)
