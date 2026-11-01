@@ -135,6 +135,11 @@ class ShellBridge {
         this._keys = new Set();
     }
 
+    // What Arcee is doing now, shown on the pill instead of "Arcee is working".
+    setStep(doing) {
+        this._control.setStep(doing);
+    }
+
     destroy() {
         this.ReleaseAll();
         this._control.end();
@@ -415,7 +420,7 @@ export default class ArceeExtension extends Extension {
         Main.wm.addKeybinding(
             'stop-agent', this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.ALL,
             () => this._bridge.stop());
-        this._indicator = new ArceeIndicator(this.path);
+        this._indicator = new ArceeIndicator(this.path, doing => this._bridge?.setStep(doing));
         Main.panel.addToStatusArea('arcee', this._indicator);
     }
 

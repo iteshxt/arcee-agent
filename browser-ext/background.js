@@ -10,6 +10,7 @@ const NAV_TIMEOUT_MS = 15000;
 let port = null;
 
 function connect() {
+  if (port) return;
   port = chrome.runtime.connectNative(HOST);
   port.onMessage.addListener(async (message) => {
     const { id, method, params } = message;
@@ -240,4 +241,9 @@ function scrollPage(direction, amount) {
   return { scroll_y: Math.round(scrollY), page_height: document.documentElement.scrollHeight };
 }
 
+// Chrome runs this worker at browser start only for a listener on onStartup: without
+// one, when Arcee started Chrome the bridge stayed down until something else woke the
+// worker. The open native port then keeps the worker alive.
+chrome.runtime.onStartup.addListener(connect);
+chrome.runtime.onInstalled.addListener(connect);
 connect();

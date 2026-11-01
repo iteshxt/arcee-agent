@@ -11,10 +11,11 @@ import pytest
 from dbus_fast import DBusError
 from dbus_fast.aio import MessageBus
 
-from arcee.core.agent import Event, ToolRan
+from arcee.core.agent import Event, ModelTurn, ToolRan
 from arcee.core.presence import NoPresence
 from arcee.core.protocol import ConfirmRequest, ExecutorResult
-from arcee.daemon import BUS_NAME, OBJECT_PATH, AgentService, describe
+from arcee.daemon import BUS_NAME, OBJECT_PATH, THINKING, AgentService, describe, doing
+from arcee.models.base import WireCall
 from arcee.runner import TaskResult, User
 
 pytestmark = pytest.mark.skipif(shutil.which("dbus-daemon") is None, reason="needs dbus-daemon")
@@ -136,6 +137,27 @@ async def test_cancel_stops_the_request(bus_address: str) -> None:
 def test_progress_lines_are_plain() -> None:
     result = ExecutorResult.model_construct(status="error", summary="no such file")
     assert describe(ToolRan(2, result)) == "✗ no such file"
+
+
+def turn(tool: str, **args: Any) -> ModelTurn:
+    return ModelTurn(1, 0, "m", "", WireCall(tool, args), "", 0.1)
+
+
+def test_the_step_says_what_arcee_is_doing_in_words() -> None:
+    assert doing(turn("app_open", name="google-chrome")) == "Opening google-chrome"
+    assert doing(turn("web_search", query="james bond")) == "Searching the web for james bond"
+    assert doing(turn("browser_tabs")) == "Looking at Chrome's tabs"
+    assert doing(turn("app_open")) == "Opening"
+    assert doing(turn("brand_new_tool")) == "Using brand new tool"
+    long = doing(turn("browser_navigate", url="https://example.com/" + "a" * 80))
+    assert long is not None
+    assert long.endswith("…")
+    assert len(long) < 60
+
+
+def test_after_a_tool_runs_arcee_is_thinking_again() -> None:
+    result = ExecutorResult.model_construct(status="ok", summary="done")
+    assert doing(ToolRan(2, result)) == THINKING
 
 
 class FakeRecorder:
