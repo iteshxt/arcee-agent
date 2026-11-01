@@ -8,8 +8,8 @@ system facts) needs neither.
 
 from typing import Final, Protocol
 
-VISIBLE_NAMESPACES: Final = frozenset({"browser", "ui", "screen", "kbd"})
-VISIBLE_TOOLS: Final = frozenset({"app.open", "fs.open_with_default"})
+VISIBLE_NAMESPACES: Final = frozenset({"browser", "ui", "screen", "kbd", "window"})
+VISIBLE_TOOLS: Final = frozenset({"app.open", "app.close", "fs.open_with_default"})
 
 
 def is_visible(tool_name: str) -> bool:

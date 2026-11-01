@@ -32,6 +32,11 @@ const INTERFACE = `
       <arg type="t" direction="in" name="id"/>
       <arg type="b" direction="out" name="focused"/>
     </method>
+    <method name="WindowAction">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="s" direction="in" name="action"/>
+      <arg type="b" direction="out" name="done"/>
+    </method>
     <method name="FocusTitle">
       <arg type="s" direction="in" name="title"/>
       <arg type="b" direction="out" name="focused"/>
@@ -129,6 +134,8 @@ class ShellBridge {
             title: window.get_title() ?? '',
             app_id: window.get_gtk_application_id() ?? window.get_wm_class() ?? '',
             focused: window.has_focus(),
+            minimized: window.minimized,
+            maximized: window.is_maximized(),
         })));
     }
 
@@ -138,6 +145,50 @@ class ShellBridge {
             return false;
         activate(window);
         return true;
+    }
+
+    // Minimize, maximize, restore or close a window; only while Arcee holds control.
+    WindowActionAsync([id, action], invocation) {
+        if (!this._allowed(invocation))
+            return;
+        const window = windows().find(w => w.get_id() === id);
+        if (!window) {
+            invocation.return_value(new GLib.Variant('(b)', [false]));
+            return;
+        }
+        switch (action) {
+        case 'focus':
+            activate(window);
+            break;
+        case 'minimize':
+            // GNOME keeps some windows (dialogs) from minimizing: say so, do not pretend.
+            if (!window.can_minimize()) {
+                this._fail(invocation, 'this window cannot be minimized');
+                return;
+            }
+            window.minimize();
+            break;
+        case 'maximize':
+            if (!window.can_maximize()) {
+                this._fail(invocation, 'this window cannot be maximized');
+                return;
+            }
+            window.unminimize();
+            window.maximize();
+            break;
+        case 'restore':
+            window.unminimize();
+            window.unmaximize();
+            break;
+        case 'close':
+            // Like the close button: the app may still ask to save first.
+            window.delete(global.get_current_time());
+            break;
+        default:
+            this._fail(invocation, `unknown window action ${action}`);
+            return;
+        }
+        invocation.return_value(new GLib.Variant('(b)', [true]));
     }
 
     FocusTitle(title) {

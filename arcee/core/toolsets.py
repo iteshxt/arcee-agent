@@ -28,7 +28,7 @@ LOCAL: Final = FILES + APPS + SYSTEM + SHELL
 ALWAYS: Final = LOCAL + CONTROL
 BROWSER: Final = ("browser.*",)
 # Desktop apps: their window tree first, the screen (OCR, clicks, keys) as fallback.
-DESKTOP: Final = ("ui.*", "screen.*", "kbd.*")
+DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
 WEB: Final = ("web.*",)
 
 
@@ -57,7 +57,7 @@ _GROUPS: Final = (
     ),
     (
         APPS,
-        _words(r"\b(apps?|applications?|launch|start|installed|programs?)\b"),
+        _words(r"\b(apps?|applications?|launch|start|installed|programs?|close|quit)\b"),
     ),
     (
         DESKTOP,
@@ -66,7 +66,7 @@ _GROUPS: Final = (
             r"screen|keyboard|shortcuts?|press(es|ing)?|typ(e|ing) (it )?in(to)?|"
             r"(the|its|that|this) app|in (the )?(files|nautilus|settings|text editor|"
             r"calculator|calendar)( app)?|files app|settings app|calendar app|text editor|"
-            r"calculator|nautilus)\b"
+            r"calculator|nautilus|minimi[sz]e|maximi[sz]e|close|quit)\b"
         ),
     ),
     (
@@ -97,6 +97,8 @@ _OPEN: Final = _words(r"\bopen\b")
 # tools ("save it to a file"); "Ubuntu" in a web search is not about this machine.
 _CLEARLY_LOCAL: Final = _words(
     r"\b(save|write|files?|folders?|documents|downloads|desktop|my computer|this computer)\b|~/"
+    # Window verbs ("close chrome", "minimise it"); closing a tab stays in the browser.
+    r"|\b(minimi[sz]e|maximi[sz]e|quit)\b|\bclose\b(?![^.,;]{0,30}\btabs?\b)"
 )
 _ADDRESS: Final = _words(r"https?://\S+|\bwww\.\S+|\b[\w-]+\.(com|org|net|io|in|dev|ai)\b\S*")
 _NAMESPACE_GROUP: Final = {
@@ -108,6 +110,7 @@ _NAMESPACE_GROUP: Final = {
     "ui": DESKTOP,
     "screen": DESKTOP,
     "kbd": DESKTOP,
+    "window": DESKTOP,
     "browser": BROWSER,
     "web": WEB,
 }

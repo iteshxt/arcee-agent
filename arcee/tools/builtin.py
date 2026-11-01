@@ -19,6 +19,7 @@ from arcee.tools.screen import screen_tools
 from arcee.tools.shell import ShellRun, ShellScript
 from arcee.tools.system import NetworkStatus, SystemStatus
 from arcee.tools.web import WebFetch, WebSearch
+from arcee.tools.windows import window_tools
 
 
 def builtin_registry(
@@ -44,6 +45,7 @@ def builtin_registry(
             *browser_tools(browser),
             *desktop_tools(),
             *screen_tools(),
+            *window_tools(),
             ShellRun(limits=shell_limits),
             ShellScript(limits=shell_limits),
             *(tool() for tool in UTILITY_CONTROL_TOOLS),
