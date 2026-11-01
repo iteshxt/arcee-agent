@@ -26,6 +26,10 @@ RISKY: Final = re.compile(
 
 # Fewer elements than this and the tree is unlikely to show what the user sees.
 SPARSE_TREE: Final = 5
+# Elements read at least: one line each, cheap enough to read a whole window at once.
+MIN_TREE: Final = 100
+# Text fields reported after an action.
+MAX_SHOWN: Final = 8
 
 
 class Desktop(Protocol):
@@ -40,6 +44,8 @@ class Desktop(Protocol):
 class DesktopSession:
     desktop: Desktop
     elements: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    # The app last read with ui.tree, read again after each action.
+    app: str | None = None
 
 
 class _DesktopTool[A: ToolArgs](Tool[A]):
@@ -69,7 +75,7 @@ class TreeArgs(ToolArgs):
     app: str = Field(
         default="", description="App or window title to read; empty for the active one"
     )
-    limit: int = Field(default=60, ge=10, le=150)
+    limit: int = Field(default=MIN_TREE, ge=10, le=150)
 
 
 class UiTree(_DesktopTool[TreeArgs]):
@@ -90,10 +96,12 @@ class UiTree(_DesktopTool[TreeArgs]):
 
     async def run(self, args: TreeArgs, ctx: ToolContext) -> ToolResult:
         try:
-            snap = await self.session.desktop.snapshot(args.app or None, args.limit)
+            # Never fewer than MIN_TREE: a small read missed the buttons and was read again.
+            snap = await self.session.desktop.snapshot(args.app or None, max(args.limit, MIN_TREE))
         except LookupError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements = {e["id"]: e for e in snap.elements}
+        self.session.app = snap.app
         data = {
             "app": snap.app,
             "window": snap.window,
@@ -158,8 +166,34 @@ class UiAct(_DesktopTool[ActArgs]):
             done = await self.session.desktop.act(args.target, args.action, args.value)
         except LookupError as exc:
             return ToolResult.fail(str(exc))
-        self.session.elements.clear()
-        return ToolResult.ok(done.capitalize(), data={"done": done})
+        data: dict[str, Any] = {"done": done}
+        data.update(await self._after())
+        return ToolResult.ok(done.capitalize(), data=data)
+
+    async def _after(self) -> dict[str, Any]:
+        """What the window shows now: its text fields, read again with no model call.
+
+        Told to work out 2 plus 2 in Calculator, the model could not see that its
+        clicks had landed, read the window again and again, and pressed + twice. The
+        fresh reading also keeps the labels behind el_N current, so a risky click is
+        judged by what is really there.
+        """
+        before = [(i, e.get("name")) for i, e in self.session.elements.items()]
+        try:
+            snap = await self.session.desktop.snapshot(self.session.app, MIN_TREE)
+        except LookupError:
+            self.session.elements.clear()
+            return {"note": "The window closed or changed; see ui.windows."}
+        self.session.elements = {e["id"]: e for e in snap.elements}
+        after: dict[str, Any] = {
+            "shows": [tree_line(e) for e in snap.elements if e.get("value")][:MAX_SHOWN]
+        }
+        if [(i, e.get("name")) for i, e in self.session.elements.items()] != before:
+            after["note"] = (
+                "The window changed and its elements were numbered again: read it with "
+                "ui.tree before using an el_N."
+            )
+        return after
 
 
 def tree_line(element: dict[str, Any]) -> str:

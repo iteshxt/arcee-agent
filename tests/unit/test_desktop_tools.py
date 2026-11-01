@@ -28,6 +28,9 @@ SNAP = Snapshot(
 class FakeDesktop:
     def __init__(self) -> None:
         self.acts: list[tuple[str, str, str | None]] = []
+        self.limits: list[int] = []
+        self.after_act: str | None = None
+        self.renamed = False
 
     async def windows(self) -> list[dict[str, Any]]:
         return [{"app": "org.gnome.Nautilus", "window": "Home", "active": True}]
@@ -35,7 +38,13 @@ class FakeDesktop:
     async def snapshot(self, app: str | None, limit: int) -> Snapshot:
         if app == "nowhere":
             raise LookupError("no open window matches 'nowhere'; see ui.windows")
-        return SNAP
+        self.limits.append(limit)
+        elements = [dict(e) for e in SNAP.elements]
+        if self.acts and self.after_act:
+            elements[2]["value"] = self.after_act
+        if self.acts and self.renamed:
+            elements[1]["name"] = "Delete forever"
+        return Snapshot(SNAP.app, SNAP.window, elements, SNAP.window_actions, SNAP.count)
 
     async def act(self, target: str, action: str, value: str | None) -> str:
         self.acts.append((target, action, value))
@@ -76,9 +85,10 @@ async def test_risky_elements_and_window_actions_need_confirmation(tools: Any) -
     assert act.sentence(ActArgs(target="el_2", action="click")) == "Click “Move to Trash”?"
 
 
-async def test_act_passes_through_and_forgets_stale_numbers(tools: Any) -> None:
+async def test_act_passes_through_and_reports_what_the_window_shows(tools: Any) -> None:
     _, tree, act, desktop = tools
     await tree.run(TreeArgs(), CTX)
+    desktop.after_act = "beach.jpg"
 
     done = await act.run(ActArgs(target="el_3", action="set_value", value="beach.jpg"), CTX)
     empty = await act.run(ActArgs(target="el_3", action="set_value"), CTX)
@@ -86,7 +96,22 @@ async def test_act_passes_through_and_forgets_stale_numbers(tools: Any) -> None:
     assert done.summary == "Set_value el_3"
     assert desktop.acts == [("el_3", "set_value", "beach.jpg")]
     assert empty.error == "set_value needs a value"
-    assert act.session.elements == {}
+    assert done.data is not None
+    assert done.data["shows"] == ['el_3 entry: Name value="beach.jpg" (editable)']
+    assert "note" not in done.data  # same window, same numbers
+    assert desktop.limits[-1] == 100  # read whole, with no model call
+
+
+async def test_a_changed_window_after_an_act_asks_for_a_fresh_read(tools: Any) -> None:
+    _, tree, act, desktop = tools
+    await tree.run(TreeArgs(), CTX)
+    desktop.renamed = True
+
+    done = await act.run(ActArgs(target="el_1", action="select"), CTX)
+
+    assert done.data is not None
+    assert "numbered again" in done.data["note"]
+    assert act.session.elements["el_2"]["name"] == "Delete forever"  # labels are current
 
 
 @pytest.mark.parametrize(
