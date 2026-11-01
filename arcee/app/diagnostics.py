@@ -24,6 +24,9 @@ class Check:
     fix: str = ""
     # A failed advisory check is not a fault (Chrome closed is normal).
     advisory: bool = False
+    # What the app's Fix button runs: "shell_extension", "daemon", "browser_bridge" or
+    # "keys"; empty when only the user can fix it.
+    fix_action: str = ""
 
 
 async def shell_extension() -> Check:
@@ -33,7 +36,8 @@ async def shell_extension() -> Check:
             "GNOME Shell extension",
             False,
             "not running: no glow, screen reading or window focus",
-            "arcee-cli shell-extension, then log out and back in",
+            "install it, then log out and back in",
+            fix_action="shell_extension",
         )
     return Check("GNOME Shell extension", True, "running")
 
@@ -67,7 +71,8 @@ async def daemon() -> Check:
             "Arcee service (arceed)",
             False,
             "not reachable: the panel cannot run requests",
-            "arcee-cli daemon-install",
+            "install the service",
+            fix_action="daemon",
         )
     state = "working" if '"running"' in str(reply.body[0]) else "ready"
     return Check("Arcee service (arceed)", True, state)
@@ -82,8 +87,9 @@ async def chrome() -> Check:
             "Chrome bridge",
             False,
             "not connected: Arcee starts Chrome when it needs it",
-            "if it never connects: arcee-cli browser-setup",
+            "if it never connects: register it with Chrome and load the extension",
             advisory=True,
+            fix_action="browser_bridge",
         )
     finally:
         await client.aclose()
@@ -98,13 +104,15 @@ async def keys() -> list[Check]:
             "Groq key (thinking)",
             chat,
             "set" if chat else "missing: the Groq models cannot run",
-            "" if chat else "add GROQ_API_KEY to .env or ~/.config/arcee/env",
+            "" if chat else "add it on the Models page",
+            fix_action="" if chat else "keys",
         ),
         Check(
             "Groq key (speech)",
             speech,
             "set" if speech else "missing: the mic cannot transcribe",
-            "" if speech else f"add {SPEECH_KEY_ENV} to .env or ~/.config/arcee/env",
+            "" if speech else "add it on the Models page",
+            fix_action="" if speech else "keys",
         ),
     ]
 

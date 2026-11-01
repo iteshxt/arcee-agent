@@ -20,7 +20,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
+from arcee import install  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
+from arcee.app.setup import SetupDialog  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
 from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
@@ -117,7 +119,7 @@ class ArceeWindow(Adw.ApplicationWindow):
         self._settings = load()
         self._toasts = Adw.ToastOverlay()
 
-        stack = Adw.ViewStack()
+        stack = self._stack = Adw.ViewStack()
         stack.add_titled_with_icon(
             self._models_page(), "models", "Models", "applications-science-symbolic"
         )
@@ -133,6 +135,7 @@ class ArceeWindow(Adw.ApplicationWindow):
 
         header = Adw.HeaderBar()
         menu = Gio.Menu()
+        menu.append("Run setup", "app.setup")
         menu.append("About Arcee", "app.about")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu))
         header.set_title_widget(Adw.ViewSwitcher(stack=stack, policy=Adw.ViewSwitcherPolicy.WIDE))
@@ -144,6 +147,19 @@ class ArceeWindow(Adw.ApplicationWindow):
 
         self._refresh_budget()
         GLib.timeout_add_seconds(BUDGET_REFRESH_S, self._refresh_budget)
+
+    @property
+    def settings(self) -> Any:
+        return self._settings
+
+    def show_setup(self) -> None:
+        def done() -> None:
+            self._settings.setup_done = True
+            save(self._settings)
+            self._show_key_states()
+            self._run_checks()
+
+        SetupDialog(self._background.run, done).present(self)
 
     def _toast(self, text: str) -> None:
         self._toasts.add_toast(Adw.Toast(title=text, timeout=3))
@@ -477,8 +493,38 @@ class ArceeWindow(Adw.ApplicationWindow):
             subtitle = check.detail + (f"\nFix: {check.fix}" if check.fix else "")
             row = Adw.ActionRow(title=check.name, subtitle=GLib.markup_escape_text(subtitle))
             row.add_prefix(image)
+            if not check.ok and check.fix_action:
+                fix = Gtk.Button(label="Fix", valign=Gtk.Align.CENTER)
+                fix.connect("clicked", self._on_fix, check.fix_action)
+                row.add_suffix(fix)
             self._checks.add(row)
             self._check_rows.append(row)
+
+    def _on_fix(self, button: Gtk.Button, action: str) -> None:
+        if action == "keys":
+            self._stack.set_visible_child_name("models")
+            return
+        installers = {
+            "shell_extension": install.shell_extension,
+            "daemon": install.daemon,
+            "browser_bridge": install.browser_bridge,
+        }
+        button.set_sensitive(False)
+
+        async def run() -> install.Report:
+            import asyncio
+
+            report = await asyncio.to_thread(installers[action])
+            # Installed before but not turned on: turning it on may be all that is left.
+            if action == "shell_extension":
+                await asyncio.to_thread(install.enable_shell_extension)
+            return report
+
+        def done(report: install.Report) -> None:
+            self._toast(report.next[0] if report.next else "Done.")
+            self._run_checks()
+
+        self._background.run(run(), done, lambda exc: self._toast(f"Could not fix it: {exc}"))
 
 
 class ArceeApp(Adw.Application):
@@ -488,6 +534,13 @@ class ArceeApp(Adw.Application):
         about = Gio.SimpleAction(name="about")
         about.connect("activate", lambda *_: self._about())
         self.add_action(about)
+        setup = Gio.SimpleAction(name="setup")
+        setup.connect("activate", lambda *_: self._window().show_setup())
+        self.add_action(setup)
+
+    def _window(self) -> ArceeWindow:
+        window = self.get_active_window()
+        return window if isinstance(window, ArceeWindow) else ArceeWindow(self, self.from_keyring)
 
     def _about(self) -> None:
         from importlib.metadata import version
@@ -505,8 +558,10 @@ class ArceeApp(Adw.Application):
         ).present(self.get_active_window())
 
     def do_activate(self) -> None:
-        window = self.get_active_window() or ArceeWindow(self, self.from_keyring)
+        window = self._window()
         window.present()
+        if not window.settings.setup_done:  # first run
+            window.show_setup()
 
 
 def main() -> None:

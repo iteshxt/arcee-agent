@@ -30,6 +30,8 @@ class Settings:
     confirm_all: bool = False
     # Tools that always ask first, e.g. "browser.click".
     always_ask: list[str] = field(default_factory=list[str])
+    # The first-run setup was finished (or skipped) once.
+    setup_done: bool = False
 
     def policy(self) -> Policy:
         return Policy(
@@ -51,6 +53,7 @@ def load(path: Path | None = None) -> Settings:
         core=core if core in CORES else "groq",
         confirm_all=raw.get("confirm_all") is True,
         always_ask=[str(name) for name in cast(list[Any], asks)] if isinstance(asks, list) else [],
+        setup_done=raw.get("setup_done") is True,
     )
 
 
