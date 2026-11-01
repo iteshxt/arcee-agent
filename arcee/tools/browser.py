@@ -34,7 +34,7 @@ SECRET_FIELD: Final = re.compile(
 
 
 # Chrome cold-starts and loads its extensions in a few seconds on the reference machine.
-CHROME_START_S: Final = 20.0
+CHROME_START_S: Final = 30.0
 CHROME_NAMES: Final = ("Google Chrome", "Chromium")
 
 
@@ -82,6 +82,8 @@ class BrowserSession:
     tab: int | None = None
     # Starts Chrome when the extension is not connected; None leaves it to the user.
     launch: Callable[[], Awaitable[None]] | None = None
+    # When Arcee last started Chrome (event loop time), so it starts it only once.
+    launched_at: float | None = None
     # Brings Chrome's window to the front (given the page title): on Wayland Chrome
     # cannot raise itself, so a tab opened behind the terminal. None leaves it.
     show: Callable[[str], Awaitable[None]] | None = None
@@ -109,9 +111,15 @@ class _BrowserTool[A: ToolArgs](Tool[A]):
         except BrowserError as exc:
             if str(exc) != NOT_CONNECTED or self.session.launch is None:
                 raise
-        # Chrome is not running (or not yet connected): start it and wait for the extension.
-        await self.session.launch()
-        deadline = asyncio.get_running_loop().time() + CHROME_START_S
+        # Chrome is not running (or not yet connected): start it once and wait for the
+        # extension. A call soon after a start only waits: three calls each starting
+        # Chrome again and waiting 20 s made one request take a minute.
+        loop = asyncio.get_running_loop()
+        started = self.session.launched_at
+        if started is None or loop.time() - started > CHROME_START_S:
+            await self.session.launch()
+            self.session.launched_at = started = loop.time()
+        deadline = started + CHROME_START_S
         while True:
             try:
                 await self.session.client.request("ping")
@@ -120,7 +128,8 @@ class _BrowserTool[A: ToolArgs](Tool[A]):
                 if asyncio.get_running_loop().time() > deadline:
                     raise BrowserError(
                         f"started Chrome, but the Arcee extension did not connect within "
-                        f"{CHROME_START_S:.0f} s (see `arcee-cli browser-setup`)"
+                        f"{CHROME_START_S:.0f} s: in chrome://extensions, check Arcee is on and "
+                        "reload it (see `arcee-cli browser-setup`)"
                     ) from None
                 await asyncio.sleep(0.5)
         self.session.tab = None

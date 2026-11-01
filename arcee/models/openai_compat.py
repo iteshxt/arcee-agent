@@ -7,6 +7,7 @@ profile's thinking flag (OpenRouter's unified field; other servers ignore it).
 """
 
 import json
+import logging
 import math
 import os
 from collections.abc import Sequence
@@ -36,6 +37,8 @@ from arcee.models.errors import (
     ServerBusyError,
 )
 from arcee.models.limiter import SYSTEM_CLOCK, Clock
+
+log = logging.getLogger("arcee.models")
 
 OPENROUTER_URL: Final = "https://openrouter.ai/api/v1"
 OPENROUTER_KEY_ENV: Final = "OPENROUTER_API_KEY"
@@ -208,6 +211,9 @@ class OpenAICompatAdapter(ModelAdapter):
             # validation retry turn can still use it, so it is a reply, not an outage.
             return {"choices": [{"message": {"content": str(failed)}}]}
         message = str(error.get("message") or response.text[:200] or f"HTTP {status}")
+        # Why the provider refused, in the log (journalctl --user -u arceed); never the
+        # request itself.
+        log.warning("%s refused (HTTP %s): %s", self.profile.model, status, message[:300])
         if status == 429:
             self._refused(message, _retry_after(response))
         if status in (402, 403):

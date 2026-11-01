@@ -46,3 +46,24 @@ def test_review_prefers_narration_then_grounding() -> None:
     assert "'~/Downloads/x.iso'" in grounding.nudge
     assert review_reply("It is setup.deb", messages, ["fs_list"]) is None
     assert review_reply("It is ~/x.iso", messages, ["fs_list"], grounding=False) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        'User asks: "who is jason born tell me". Likely they mean Jason Bourne. '
+        "We can answer from knowledge. Provide brief answer.",
+        "The user wants to know the weather. I should provide a short answer.",
+    ],
+)
+def test_the_models_reasoning_is_not_taken_for_the_answer(reply: str) -> None:
+    review = review_reply(reply, [Message("user", "who is jason born")], [])
+
+    assert review is not None
+    assert review.detail == "reply was the model's own reasoning"
+
+
+def test_an_answer_that_mentions_users_is_still_an_answer() -> None:
+    reply = "Jason Bourne is a fictional CIA assassin; users of the films know him from 2002 on."
+
+    assert review_reply(reply, [Message("user", "who is jason bourne")], []) is None

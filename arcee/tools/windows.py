@@ -76,12 +76,14 @@ class WindowList(_WindowTool[NoArgs]):
 
 class WindowArgs(ToolArgs):
     window: str = Field(description="Window id from window.list, or its app or title")
-    action: Literal["focus", "minimize", "maximize", "restore", "close"]
+    action: Literal["focus", "minimize", "maximize", "fullscreen", "restore", "close"]
 
 
 class WindowAct(_WindowTool[WindowArgs]):
     name = "window.act"
-    description = "Bring a window to the front, minimize, maximize, restore or close it."
+    description = (
+        "Bring a window to the front, minimize, maximize, make it full screen, restore or close it."
+    )
     usage = Usage(
         when="The user asks to show, hide, enlarge or close a window.",
         avoid="Quitting a whole app with all its windows: app.close.",
@@ -108,9 +110,12 @@ class WindowAct(_WindowTool[WindowArgs]):
             return ToolResult.fail(str(exc))
         if not done:
             return ToolResult.fail(f"the window {window.get('title')!r} is gone")
-        past = {"focus": "Focused", "close": "Closed", "restore": "Restored"}.get(
-            args.action, f"{args.action.capitalize()}d"
-        )
+        past = {
+            "focus": "Focused",
+            "close": "Closed",
+            "restore": "Restored",
+            "fullscreen": "Made full screen:",
+        }.get(args.action, f"{args.action.capitalize()}d")
         return ToolResult.ok(f"{past} {window.get('title')}", data={"window": describe(window)})
 
 

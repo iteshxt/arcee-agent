@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from arcee.browser.client import BrowserClient, BrowserError
+from arcee.browser.client import NOT_CONNECTED, BrowserClient, BrowserError
 from arcee.browser.host import EXTENSION_ID, HOST_NAME, encode, read_message, serve
 from arcee.browser.setup import install
 from arcee.core.policy import Policy, Tier
@@ -350,3 +350,40 @@ async def test_opening_and_navigating_bring_chrome_forward() -> None:
     await BrowserNavigate(shared).run(NavigateArgs(url="https://youtube.example/"), CTX)
 
     assert shown == ["", "YouTube"]
+
+
+async def test_chrome_is_started_once_while_its_extension_connects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Starting(FakeClient):
+        """Not connected until Chrome has been up for three pings."""
+
+        def __init__(self) -> None:
+            super().__init__({"tabs": [], "ping": {"version": "0.3.0"}})
+            self.pings = 0
+
+        async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+            if method == "ping":
+                self.pings += 1
+            if self.pings < 3:
+                raise BrowserError(NOT_CONNECTED)
+            return await super().request(method, params)
+
+    monkeypatch.setattr("arcee.tools.browser.asyncio.sleep", _no_sleep)
+    starts: list[int] = []
+
+    async def launch() -> None:
+        starts.append(1)
+
+    client = Starting()
+    shared = BrowserSession(client=client, launch=launch)  # pyright: ignore[reportArgumentType]
+
+    first = await BrowserTabs(shared).run(TabsArgs(action="list"), CTX)
+    second = await BrowserTabs(shared).run(TabsArgs(action="list"), CTX)
+
+    assert first.status == second.status == "ok"
+    assert starts == [1]
+
+
+async def _no_sleep(seconds: float) -> None:
+    return None

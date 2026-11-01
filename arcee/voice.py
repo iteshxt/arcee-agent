@@ -45,6 +45,12 @@ REQUESTS_PER_DAY: Final = 2_000
 MIN_BILLED_S: Final = 10.0
 HOUR_S: Final = 3_600.0
 DAY_S: Final = 86_400.0
+# Words a request to Arcee often holds, as a hint to Whisper: without it "open Chrome"
+# came back as "open crow".
+VOCABULARY: Final = (
+    "Arcee, open Chrome, YouTube, Gmail, Google Calendar, Files, Calculator, Text Editor, "
+    "Terminal, Settings, full screen, minimize."
+)
 RECORD_COMMAND: Final = (
     "pw-record",
     "--raw",
@@ -203,7 +209,12 @@ class Transcriber:
             response = await client.post(
                 TRANSCRIBE_URL,
                 headers={"Authorization": f"Bearer {key}"},
-                data={"model": MODEL, "response_format": "json", "temperature": "0"},
+                data={
+                    "model": MODEL,
+                    "response_format": "json",
+                    "temperature": "0",
+                    "prompt": VOCABULARY,
+                },
                 files={"file": ("speech.wav", to_wav(pcm), "audio/wav")},
             )
         except httpx.HTTPError as exc:
