@@ -23,6 +23,7 @@ from arcee.app import diagnostics  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
 from arcee.settings import Core, load, save  # noqa: E402
+from arcee.voice import SpeechUsage  # noqa: E402
 
 APP_ID: Final = "me.iteshxt.Arcee"  # under the developer's own domain, iteshxt.me
 BUDGET_REFRESH_S: Final = 5
@@ -176,14 +177,17 @@ class ArceeWindow(Adw.ApplicationWindow):
             self._budget_rows[model] = (row, bar)
         page.add(self._budget)
 
-        speech = Adw.PreferencesGroup(title="Speech")
-        speech.add(
-            Adw.ActionRow(
-                title="whisper-large-v3-turbo on Groq",
-                subtitle="Turns what you say to the panel's mic into a request "
-                "(key GROQ_API_KEY_TTS).",
-            )
+        speech = Adw.PreferencesGroup(
+            title="Speech",
+            description="whisper-large-v3-turbo on Groq turns what you say to the panel's mic "
+            "into a request, on its own key and allowance.",
         )
+        self._speech_bar = Gtk.LevelBar(
+            min_value=0, max_value=1, value=1, valign=Gtk.Align.CENTER, width_request=140
+        )
+        self._speech_row = Adw.ActionRow(title="whisper-large-v3-turbo", subtitle="No use yet")
+        self._speech_row.add_suffix(self._speech_bar)
+        speech.add(self._speech_row)
         page.add(speech)
         return page
 
@@ -193,6 +197,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             self._saved()
 
     def _refresh_budget(self) -> bool:
+        self._refresh_speech()
         snapshot = read_budget().snapshot()
         for model, (row, bar) in self._budget_rows.items():
             counts = snapshot.get(model)
@@ -211,6 +216,19 @@ class ArceeWindow(Adw.ApplicationWindow):
                 parts.append(f"{counts['tokens_left']:.0f} tokens this minute")
             row.set_subtitle(" · ".join(parts))
         return GLib.SOURCE_CONTINUE
+
+    def _refresh_speech(self) -> None:
+        use = SpeechUsage().snapshot()
+        if not use["requests_day"]:
+            return
+        day_left = use["audio_s_day_limit"] - use["audio_s_day"]
+        hour_left = use["audio_s_hour_limit"] - use["audio_s_hour"]
+        self._speech_row.set_subtitle(
+            f"{day_left / 60:.0f} of {use['audio_s_day_limit'] / 60:.0f} min of audio left "
+            f"today · {hour_left / 60:.0f} min this hour · {use['requests_day']:.0f} of "
+            f"{use['requests_day_limit']:.0f} requests"
+        )
+        self._speech_bar.set_value(max(0.0, day_left / use["audio_s_day_limit"]))
 
     # --- History --------------------------------------------------------------------
 

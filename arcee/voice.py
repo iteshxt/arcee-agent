@@ -12,14 +12,19 @@ kept on disk.
 import asyncio
 import contextlib
 import io
+import json
 import math
 import os
 import struct
+import time
 import wave
 from collections.abc import Callable
+from pathlib import Path
 from typing import Final
 
 import httpx
+
+from arcee.context.store import data_dir
 
 KEY_ENV: Final = "GROQ_API_KEY_TTS"
 TRANSCRIBE_URL: Final = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -33,6 +38,13 @@ SPEECH_LEVEL: Final = 0.02
 END_SILENCE_S: Final = 1.5
 NO_SPEECH_S: Final = 8.0
 MAX_SECONDS: Final = 60.0
+# Groq's limits for whisper-large-v3-turbo, and its shortest billed clip.
+AUDIO_S_PER_HOUR: Final = 7_200
+AUDIO_S_PER_DAY: Final = 28_800
+REQUESTS_PER_DAY: Final = 2_000
+MIN_BILLED_S: Final = 10.0
+HOUR_S: Final = 3_600.0
+DAY_S: Final = 86_400.0
 RECORD_COMMAND: Final = (
     "pw-record",
     "--raw",
@@ -136,9 +148,51 @@ class Recorder:
         return bytes(audio), ender.spoke
 
 
+class SpeechUsage:
+    """Audio sent to Whisper in the last day and hour, for the app's usage bar.
+
+    Groq limits whisper-large-v3-turbo by audio seconds (7,200 an hour, 28,800 a day)
+    and requests (2,000 a day), and counts a short clip as 10 s. Counted here, since
+    Arcee is the only one using the speech key.
+    """
+
+    def __init__(self, path: Path | None = None, now: Callable[[], float] = time.time) -> None:
+        self._path = path or data_dir() / "speech-usage.json"
+        self._now = now
+
+    def record(self, seconds: float) -> None:
+        entries = self._recent(DAY_S)
+        entries.append([self._now(), max(seconds, MIN_BILLED_S)])
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(entries))
+
+    def snapshot(self) -> dict[str, float]:
+        day = self._recent(DAY_S)
+        hour_start = self._now() - HOUR_S
+        return {
+            "audio_s_day": round(sum(s for _, s in day)),
+            "audio_s_day_limit": AUDIO_S_PER_DAY,
+            "audio_s_hour": round(sum(s for t, s in day if t >= hour_start)),
+            "audio_s_hour_limit": AUDIO_S_PER_HOUR,
+            "requests_day": len(day),
+            "requests_day_limit": REQUESTS_PER_DAY,
+        }
+
+    def _recent(self, span: float) -> list[list[float]]:
+        try:
+            entries: list[list[float]] = json.loads(self._path.read_text())
+        except OSError, ValueError:
+            return []
+        start = self._now() - span
+        return [entry for entry in entries if entry[0] >= start]
+
+
 class Transcriber:
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self, client: httpx.AsyncClient | None = None, usage: SpeechUsage | None = None
+    ) -> None:
         self._client = client
+        self._usage = usage
 
     async def transcribe(self, pcm: bytes) -> str:
         key = os.environ.get(KEY_ENV)
@@ -159,4 +213,5 @@ class Transcriber:
                 await client.aclose()
         if response.status_code != 200:
             raise VoiceError(f"transcription failed (HTTP {response.status_code})")
+        (self._usage or SpeechUsage()).record(len(pcm) / 2 / RATE)
         return str(response.json().get("text", "")).strip()
