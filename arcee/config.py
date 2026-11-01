@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from arcee import keys
+
 # The project folder (for a source checkout), and the user's config folder (for the
 # daemon, which systemd starts elsewhere).
 PROJECT_ENV = Path(__file__).resolve().parents[1] / ".env"
@@ -13,9 +15,11 @@ def user_env() -> Path:
     return Path(config) / "arcee" / "env"
 
 
-def load_env(*paths: Path) -> None:
-    """Read KEY=VALUE lines from `paths` (default: ./.env, the project's .env and
-    ~/.config/arcee/env), never overriding what the environment already has."""
+def load_env(*paths: Path) -> set[str]:
+    """Keys from the GNOME Keyring (set in the app), then KEY=VALUE lines from `paths`
+    (default: ./.env, the project's .env and ~/.config/arcee/env), never overriding
+    what the environment already has. Returns the names taken from the keyring."""
+    from_keyring = set(keys.load_from_keyring())
     for path in paths or (Path(".env"), PROJECT_ENV, user_env()):
         if not path.is_file():
             continue
@@ -23,3 +27,4 @@ def load_env(*paths: Path) -> None:
             name, sep, value = line.strip().partition("=")
             if sep and name and not name.startswith("#"):
                 os.environ.setdefault(name.strip(), value.strip().strip("'\""))
+    return from_keyring

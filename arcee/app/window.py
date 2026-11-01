@@ -8,6 +8,7 @@ restarted when it is idle, so the next request uses them.
 """
 
 import asyncio
+import os
 import threading
 import time
 from collections.abc import Callable, Coroutine
@@ -21,6 +22,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from arcee.app import diagnostics  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
+from arcee.keys import KEYS, keyring, source  # noqa: E402
 from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
 from arcee.settings import Core, load, save  # noqa: E402
 from arcee.voice import SpeechUsage  # noqa: E402
@@ -107,8 +109,10 @@ def restart_daemon_when_idle(background: Background, told: Callable[[str], None]
 
 
 class ArceeWindow(Adw.ApplicationWindow):
-    def __init__(self, app: Adw.Application) -> None:
+    def __init__(self, app: Adw.Application, from_keyring: set[str]) -> None:
         super().__init__(application=app, title="Arcee", default_width=760, default_height=640)
+        self._from_keyring = from_keyring
+        self._syncing = False  # switches being set together, not by the user
         self._background = Background()
         self._settings = load()
         self._toasts = Adw.ToastOverlay()
@@ -152,6 +156,7 @@ class ArceeWindow(Adw.ApplicationWindow):
 
     def _models_page(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
+        page.add(self._keys_group())
         thinking = Adw.PreferencesGroup(
             title="Thinking", description="Which models read your requests and decide."
         )
@@ -190,6 +195,58 @@ class ArceeWindow(Adw.ApplicationWindow):
         speech.add(self._speech_row)
         page.add(speech)
         return page
+
+    def _keys_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup(
+            title="Keys",
+            description="Kept in your GNOME Keyring, encrypted with your login. A key set "
+            "here replaces one in a .env file.",
+        )
+        self._key_states: dict[str, Gtk.Label] = {}
+        for key in KEYS:
+            row = Adw.PasswordEntryRow(title=key.title, show_apply_button=True)
+            row.set_tooltip_text(key.purpose)
+            state = Gtk.Label(valign=Gtk.Align.CENTER)
+            state.add_css_class("dim-label")
+            link = Gtk.LinkButton(uri=key.get_url, label="Get a key", valign=Gtk.Align.CENTER)
+            row.add_suffix(state)
+            row.add_suffix(link)
+            row.connect("apply", self._on_key, key.env)
+            group.add(row)
+            self._key_states[key.env] = state
+        self._show_key_states()
+        return group
+
+    def _show_key_states(self) -> None:
+        words = {
+            "keyring": "in your keyring",
+            "file": "from a .env file",
+            "environment": "from the environment",
+            "missing": "not set",
+        }
+        for env, label in self._key_states.items():
+            label.set_text(words[source(env, self._from_keyring)])
+
+    def _on_key(self, row: Adw.PasswordEntryRow, env: str) -> None:
+        ring = keyring()
+        if ring is None:
+            self._toast("No keyring here: put the key in ~/.config/arcee/env instead.")
+            return
+        value = row.get_text().strip()
+        try:
+            if value:
+                ring.store(env, value)
+                os.environ[env] = value
+                self._from_keyring.add(env)
+            else:
+                ring.clear(env)
+                self._from_keyring.discard(env)
+        except Exception as exc:  # a locked keyring the user declined to unlock
+            self._toast(f"Could not save the key: {exc}")
+            return
+        row.set_text("")
+        self._show_key_states()
+        restart_daemon_when_idle(self._background, self._toast)
 
     def _on_core(self, check: Gtk.CheckButton, key: str) -> None:
         if check.get_active() and self._settings.core != key:
@@ -339,26 +396,50 @@ class ArceeWindow(Adw.ApplicationWindow):
         always = Adw.PreferencesGroup(
             title="Always ask before", description="Actions that otherwise run without asking."
         )
+        self._ask_all = Adw.SwitchRow(
+            title="All of these",
+            active=all(tool in self._settings.always_ask for tool, _ in ASKABLE),
+        )
+        self._ask_all.connect("notify::active", self._on_ask_all)
+        always.add(self._ask_all)
+        self._ask_rows: dict[str, Adw.SwitchRow] = {}
         for tool, title in ASKABLE:
             row = Adw.SwitchRow(
                 title=title, subtitle=tool, active=tool in self._settings.always_ask
             )
             row.connect("notify::active", self._on_always_ask, tool)
             always.add(row)
+            self._ask_rows[tool] = row
         page.add(always)
         return page
+
+    def _on_ask_all(self, row: Adw.SwitchRow, _param: Any) -> None:
+        if self._syncing:
+            return
+        on = row.get_active()
+        self._syncing = True
+        for each in self._ask_rows.values():
+            each.set_active(on)
+        self._syncing = False
+        self._settings.always_ask = sorted(self._ask_rows) if on else []
+        self._saved()
 
     def _on_confirm_all(self, row: Adw.SwitchRow, _param: Any) -> None:
         self._settings.confirm_all = row.get_active()
         self._saved()
 
     def _on_always_ask(self, row: Adw.SwitchRow, _param: Any, tool: str) -> None:
+        if self._syncing:
+            return
         asks = set(self._settings.always_ask)
         if row.get_active():
             asks.add(tool)
         else:
             asks.discard(tool)
         self._settings.always_ask = sorted(asks)
+        self._syncing = True
+        self._ask_all.set_active(all(r.get_active() for r in self._ask_rows.values()))
+        self._syncing = False
         self._saved()
 
     # --- Diagnostics ----------------------------------------------------------------
@@ -401,8 +482,9 @@ class ArceeWindow(Adw.ApplicationWindow):
 
 
 class ArceeApp(Adw.Application):
-    def __init__(self) -> None:
+    def __init__(self, from_keyring: set[str]) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        self.from_keyring = from_keyring
         about = Gio.SimpleAction(name="about")
         about.connect("activate", lambda *_: self._about())
         self.add_action(about)
@@ -423,12 +505,11 @@ class ArceeApp(Adw.Application):
         ).present(self.get_active_window())
 
     def do_activate(self) -> None:
-        window = self.get_active_window() or ArceeWindow(self)
+        window = self.get_active_window() or ArceeWindow(self, self.from_keyring)
         window.present()
 
 
 def main() -> None:
     from arcee.config import load_env
 
-    load_env()
-    ArceeApp().run(None)
+    ArceeApp(load_env()).run(None)
