@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import json
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -17,9 +16,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Final, Literal, TextIO
 
+from arcee import install
 from arcee.browser.client import BrowserClient, BrowserError
-from arcee.browser.host import EXTENSION_ID
-from arcee.browser.setup import EXTENSION_DIR, install
 from arcee.config import load_env
 from arcee.context.examples import ExampleLibrary
 from arcee.context.store import Store, data_dir
@@ -39,6 +37,7 @@ from arcee.core.routing import start_tier
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
 from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
+from arcee.install import SHELL_EXTENSION
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
@@ -409,14 +408,18 @@ async def evaluate_tasks(
     return 0
 
 
-def browser_setup() -> int:
-    launcher, manifest = install(data_dir())
-    print(f"Registered the Arcee browser host with Chrome:\n  {manifest}\n  {launcher}\n")
-    print("Now load the extension once:")
-    print("  1. Open chrome://extensions and turn on Developer mode (top right).")
-    print(f"  2. Click 'Load unpacked' and choose {EXTENSION_DIR}")
-    print(f"  3. Check that its ID is {EXTENSION_ID}, then run: arcee-cli browser-check")
+def _print_report(report: install.Report) -> int:
+    for line in report.lines:
+        print(line)
+    if report.next:
+        print()
+        for line in report.next:
+            print(line)
     return 0
+
+
+def browser_setup() -> int:
+    return _print_report(install.browser_bridge())
 
 
 STOP_SHORTCUT: Final = "Super+Shift+Escape"
@@ -424,21 +427,7 @@ STOP_SHORTCUT: Final = "Super+Shift+Escape"
 
 def shell_extension() -> int:
     """Link the Arcee GNOME Shell extension into the user's extensions folder."""
-    source = EXTENSION_DIR.parent / "extension" / SHELL_EXTENSION
-    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    target = Path(data) / "gnome-shell" / "extensions" / SHELL_EXTENSION
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # The stop shortcut lives in the extension's settings schema, compiled in place.
-    subprocess.run(["glib-compile-schemas", "--strict", str(source / "schemas")], check=True)
-    if target.is_symlink() or target.exists():
-        print(f"already installed: {target}")
-    else:
-        target.symlink_to(source, target_is_directory=True)
-        print(f"linked {target} -> {source}")
-    print("\nOn Wayland GNOME loads new extensions at login. Log out and back in, then run:")
-    print(f"  gnome-extensions enable {SHELL_EXTENSION}")
-    print("  arcee-cli shell-check")
-    return 0
+    return _print_report(install.shell_extension())
 
 
 async def shell_check() -> int:
@@ -455,53 +444,8 @@ async def shell_check() -> int:
 
 
 def daemon_install() -> int:
-    """Write the systemd user unit and the D-Bus activation file for arceed.
-
-    The panel calls org.arcee.Agent; D-Bus starts arceed through systemd on the first
-    call, and its log goes to the journal (journalctl --user -u arceed).
-    """
-    arceed = Path(sys.executable).parent / "arceed"
-    if not arceed.exists():
-        print(f"{arceed} is missing; run `uv sync` first")
-        return 1
-    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    unit = config / "systemd" / "user" / "arceed.service"
-    activation = data / "dbus-1" / "services" / "org.arcee.Agent.service"
-    unit.parent.mkdir(parents=True, exist_ok=True)
-    activation.parent.mkdir(parents=True, exist_ok=True)
-    unit.write_text(
-        "[Unit]\n"
-        "Description=Arcee agent\n"
-        "PartOf=graphical-session.target\n\n"
-        "[Service]\n"
-        "Type=dbus\n"
-        "BusName=org.arcee.Agent\n"
-        f"ExecStart={arceed}\n"
-        f"WorkingDirectory={Path(__file__).resolve().parents[1]}\n"
-        "TimeoutStopSec=2\n"
-        "Restart=on-failure\n"
-    )
-    activation.write_text(
-        f"[D-BUS Service]\nName=org.arcee.Agent\nExec={arceed}\nSystemdService=arceed.service\n"
-    )
-    launcher = data / "applications" / "org.arcee.App.desktop"
-    launcher.parent.mkdir(parents=True, exist_ok=True)
-    icon = Path(__file__).resolve().parents[1] / "extension" / SHELL_EXTENSION / "icons"
-    launcher.write_text(
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=Arcee\n"
-        "Comment=Models, history, permissions and diagnostics for the Arcee agent\n"
-        f"Exec={arceed.parent / 'arcee-app'}\n"
-        f"Icon={icon / 'arcee-symbolic.svg'}\n"
-        "Categories=Utility;\n"
-        "StartupWMClass=org.arcee.App\n"
-    )
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    print(f"wrote {unit}\nwrote {activation}\nwrote {launcher}")
-    print("arceed starts on the panel's first request; its log: journalctl --user -u arceed")
-    return 0
+    """The systemd user unit, D-Bus activation and app launcher for arceed and the app."""
+    return _print_report(install.daemon())
 
 
 async def screen_check(seconds: int) -> int:
@@ -718,7 +662,6 @@ CORE_HELP = (
     "groq (default: gpt-oss-20b, gpt-oss-120b for hard requests), local (the Ollama ladder), "
     "or <provider>:<model id>"
 )
-SHELL_EXTENSION = "arcee@arcee.dev"
 EXAMPLES_HELP = "add the closest worked examples to prompts (off by default; decision 0006)"
 
 

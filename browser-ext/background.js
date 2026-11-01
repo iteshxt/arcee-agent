@@ -1,11 +1,11 @@
 // Arcee browser bridge (spec section 9, level 1, in the user's own Chrome).
 //
-// Chrome starts the native host `org.arcee.browser` for this extension; the host
+// Chrome starts the native host `me.iteshxt.arcee.browser` for this extension; the host
 // forwards requests from Arcee. Each request is {id, method, params}; each reply is
 // {id, ok, result} or {id, ok: false, error}. Page work runs as small functions
 // injected into the tab, so nothing stays resident in pages between requests.
 
-const HOST = "org.arcee.browser";
+const HOST = "me.iteshxt.arcee.browser";
 const NAV_TIMEOUT_MS = 15000;
 let port = null;
 

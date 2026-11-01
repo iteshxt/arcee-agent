@@ -1,4 +1,4 @@
-"""Native messaging host `org.arcee.browser`: the bridge between Chrome and Arcee.
+"""Native messaging host `me.iteshxt.arcee.browser`: the bridge between Chrome and Arcee.
 
 Chrome starts this process for the Arcee extension and talks to it over stdin
 and stdout (4-byte little-endian length, then JSON). The host listens on a Unix
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Final
 
-HOST_NAME: Final = "org.arcee.browser"
+HOST_NAME: Final = "me.iteshxt.arcee.browser"
 EXTENSION_ID: Final = "hgefhfepecjjabmnbjoikomoplpffjae"
 MAX_MESSAGE: Final = 64 * 1024 * 1024
 

@@ -1,6 +1,6 @@
 // Arcee's icon in the top bar and its menu (phase 4): ask Arcee something, follow what
 // it is doing and stop it, answer its questions and confirmations, see recent tasks
-// and today's model budget. It talks to arceed (org.arcee.Agent), which D-Bus starts
+// and today's model budget. It talks to arceed (me.iteshxt.Arcee.Agent), which D-Bus starts
 // on the first request.
 
 import Clutter from 'gi://Clutter';
@@ -14,7 +14,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const AGENT_INTERFACE = `
 <node>
-  <interface name="org.arcee.Agent">
+  <interface name="me.iteshxt.Arcee.Agent">
     <method name="Run"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
     <method name="Cancel"/>
     <method name="Quit"/>
@@ -61,7 +61,7 @@ class ArceeIndicator extends PanelMenu.Button {
         this._progress = [];
         this._buildMenu();
         this._agent = new AgentProxy(
-            Gio.DBus.session, 'org.arcee.Agent', '/org/arcee/Agent', null, null,
+            Gio.DBus.session, 'me.iteshxt.Arcee.Agent', '/me/iteshxt/Arcee/Agent', null, null,
             Gio.DBusProxyFlags.DO_NOT_AUTO_START_AT_CONSTRUCTION);
         this._signals = [
             this._agent.connectSignal('Started', (_p, _s, [request]) => this._onStarted(request)),
