@@ -33,7 +33,6 @@ from arcee.core.agent import (
 )
 from arcee.core.presence import NoPresence, Presence
 from arcee.core.protocol import ConfirmRequest
-from arcee.core.routing import start_tier
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
 from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
@@ -391,7 +390,6 @@ async def evaluate_tasks(
                 planner_model=planner_model,
                 plan=plan,
                 examples=library,
-                start_tier=start_tier if core == "groq" else lambda request: 0,
             )
             results.append(result)
             mark = style.green("PASS") if result.passed else style.red("FAIL")

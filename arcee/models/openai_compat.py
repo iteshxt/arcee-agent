@@ -7,6 +7,7 @@ profile's thinking flag (OpenRouter's unified field; other servers ignore it).
 """
 
 import json
+import math
 import os
 from collections.abc import Sequence
 from typing import Any, Final, NoReturn, cast
@@ -19,10 +20,13 @@ from arcee.models.base import (
     Message,
     ModelAdapter,
     ModelProfile,
+    ModelRequest,
     RawRequest,
     TokenUsage,
+    ToolRequest,
     WireCall,
     estimate_input_tokens,
+    provider_schema,
 )
 from arcee.models.budget import HeaderBudget, describe_wait, parse_refusal
 from arcee.models.errors import (
@@ -123,6 +127,32 @@ class OpenAICompatAdapter(ModelAdapter):
             self.budget.note_output(self.profile.model, usage.output_tokens)
             self.budget.use(self.profile.model, usage.input_tokens + usage.output_tokens)
         return completion
+
+    def expected_wait(self, request: ToolRequest | ModelRequest[Any]) -> float:
+        if self.budget is None:
+            return 0.0
+        if isinstance(request, ToolRequest):
+            raw = RawRequest(
+                request.system,
+                request.messages,
+                None,
+                request.max_tokens,
+                request.temperature,
+                tuple(request.tools),
+            )
+        else:
+            raw = RawRequest(
+                request.system,
+                request.messages,
+                provider_schema(request.schema),
+                request.max_tokens,
+                request.temperature,
+            )
+        tokens = estimate_input_tokens(raw) + self.budget.expected_output(self.profile.model)
+        try:
+            return self.budget.wait_s(self.profile.model, tokens)
+        except QuotaExhaustedError:
+            return math.inf
 
     async def health(self) -> bool:
         try:

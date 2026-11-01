@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -9,6 +9,7 @@ from arcee.models.base import Message, ModelProfile, ModelRequest, ToolRequest, 
 from arcee.models.errors import ModelUnavailableError, QuotaExhaustedError, TruncatedReplyError
 from arcee.models.openai_compat import OpenAICompatAdapter
 from arcee.models.presets import cloud_profile, core_ladder, planner_for, share_budget
+from arcee.models.rotation import RotatingAdapter
 from tests.fakes import FakeClock
 
 NATIVE = cloud_profile("google/gemma-4-31b-it")
@@ -163,10 +164,12 @@ def test_core_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     [groq] = core_ladder("groq:openai/gpt-oss-20b")
     assert groq.profile.model == "openai/gpt-oss-20b"
     small, large = core_ladder("groq")
-    assert (small.profile.model, large.profile.model) == (
+    assert [m.profile.model for m in cast(RotatingAdapter, small).members] == [
         "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
-    )
+    ]
+    assert large.profile.model == "openai/gpt-oss-120b"
 
 
 def test_planner_shares_the_large_models_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,11 +180,12 @@ def test_planner_shares_the_large_models_budget(monkeypatch: pytest.MonkeyPatch)
     share_budget(ladder, planner)
 
     assert planner.profile.model == "openai/gpt-oss-120b"
-    assert isinstance(planner, OpenAICompatAdapter)
-    assert all(isinstance(m, OpenAICompatAdapter) for m in ladder)
+    assert isinstance(planner, RotatingAdapter)
+    members = [m for rank in [*ladder, planner] for m in cast(RotatingAdapter, rank).members]
+    assert all(isinstance(m, OpenAICompatAdapter) for m in members)
     # One budget object tracks every Groq model, each by its own name.
-    assert planner.budget is not None
-    assert all(m.budget is planner.budget for m in ladder if isinstance(m, OpenAICompatAdapter))
+    budgets = {id(cast(OpenAICompatAdapter, m).budget) for m in members}
+    assert len(budgets) == 1
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     [model] = core_ladder("openrouter:google/gemma-4-31b-it")
     assert (model.profile.model, model.profile.rpm) == ("google/gemma-4-31b-it", 20)
