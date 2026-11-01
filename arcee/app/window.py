@@ -9,6 +9,7 @@ restarted when it is idle, so the next request uses them.
 
 import asyncio
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable, Coroutine
@@ -22,6 +23,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from arcee import install  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
+from arcee.app.agent_page import AgentPage  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
@@ -112,7 +114,7 @@ def restart_daemon_when_idle(background: Background, told: Callable[[str], None]
 
 class ArceeWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application, from_keyring: set[str]) -> None:
-        super().__init__(application=app, title="Arcee", default_width=760, default_height=640)
+        super().__init__(application=app, title="Arcee", default_width=880, default_height=800)
         self._from_keyring = from_keyring
         self._syncing = False  # switches being set together, not by the user
         self._background = Background()
@@ -120,6 +122,7 @@ class ArceeWindow(Adw.ApplicationWindow):
         self._toasts = Adw.ToastOverlay()
 
         stack = self._stack = Adw.ViewStack()
+        stack.add_titled_with_icon(AgentPage(), "agent", "Agent", "starred-symbolic")
         stack.add_titled_with_icon(
             self._models_page(), "models", "Models", "applications-science-symbolic"
         )
@@ -151,6 +154,10 @@ class ArceeWindow(Adw.ApplicationWindow):
     @property
     def settings(self) -> Any:
         return self._settings
+
+    def show_page(self, name: str) -> None:
+        if self._stack.get_child_by_name(name) is not None:
+            self._stack.set_visible_child_name(name)
 
     def show_setup(self) -> None:
         def done() -> None:
@@ -213,42 +220,65 @@ class ArceeWindow(Adw.ApplicationWindow):
         return page
 
     def _keys_group(self) -> Adw.PreferencesGroup:
-        group = Adw.PreferencesGroup(
-            title="Keys",
-            description="Kept in your GNOME Keyring, encrypted with your login. A key set "
-            "here replaces one in a .env file.",
+        self._keys = Adw.PreferencesGroup(
+            title="Keys", description="Kept in your GNOME Keyring, encrypted with your login."
         )
-        self._key_states: dict[str, Gtk.Label] = {}
-        for key in KEYS:
-            row = Adw.PasswordEntryRow(title=key.title, show_apply_button=True)
-            row.set_tooltip_text(key.purpose)
-            state = Gtk.Label(valign=Gtk.Align.CENTER)
-            state.add_css_class("dim-label")
-            link = Gtk.LinkButton(uri=key.get_url, label="Get a key", valign=Gtk.Align.CENTER)
-            row.add_suffix(state)
-            row.add_suffix(link)
-            row.connect("apply", self._on_key, key.env)
-            group.add(row)
-            self._key_states[key.env] = state
+        self._key_rows: list[Gtk.Widget] = []
         self._show_key_states()
-        return group
+        return self._keys
 
     def _show_key_states(self) -> None:
-        words = {
-            "keyring": "in your keyring",
-            "file": "from a .env file",
-            "environment": "from the environment",
-            "missing": "not set",
-        }
-        for env, label in self._key_states.items():
-            label.set_text(words[source(env, self._from_keyring)])
+        """A set key shows as set, with Change and Remove; a missing one asks for it."""
+        for row in self._key_rows:
+            self._keys.remove(row)
+        self._key_rows = []
+        for key in KEYS:
+            where = source(key.env, self._from_keyring)
+            if where == "missing":
+                self._add_key_entry(key.title, key.env, key.get_url)
+                continue
+            row = Adw.ActionRow(title=key.title, subtitle="Set", tooltip_text=key.purpose)
+            done = Gtk.Image(icon_name="object-select-symbolic")
+            done.add_css_class("success")
+            row.add_prefix(done)
+            change = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
+            change.add_css_class("flat")
+            change.connect("clicked", lambda _b, k=key: self._change_key(k))
+            row.add_suffix(change)
+            if where == "keyring":
+                remove = Gtk.Button(label="Remove", valign=Gtk.Align.CENTER)
+                remove.add_css_class("flat")
+                remove.connect("clicked", lambda _b, env=key.env: self._save_key(env, ""))
+                row.add_suffix(remove)
+            self._keys.add(row)
+            self._key_rows.append(row)
 
-    def _on_key(self, row: Adw.PasswordEntryRow, env: str) -> None:
+    def _add_key_entry(self, title: str, env: str, url: str) -> None:
+        entry = Adw.PasswordEntryRow(title=title, show_apply_button=True)
+        link = Gtk.LinkButton(uri=url, label="Get a key", valign=Gtk.Align.CENTER)
+        entry.add_suffix(link)
+        entry.connect("apply", lambda row: self._save_key(env, row.get_text().strip()))
+        self._keys.add(entry)
+        self._key_rows.append(entry)
+
+    def _change_key(self, key: Any) -> None:
+        """Swap the key's row for a field to enter a new one."""
+        self._show_key_states()
+        index = next(i for i, k in enumerate(KEYS) if k.env == key.env)
+        for row in self._key_rows[index:]:
+            self._keys.remove(row)
+        rest = self._key_rows[index + 1 :]
+        self._key_rows = self._key_rows[:index]
+        self._add_key_entry(f"New {key.title.lower()}", key.env, key.get_url)
+        for row in rest:
+            self._keys.add(row)
+            self._key_rows.append(row)
+
+    def _save_key(self, env: str, value: str) -> None:
         ring = keyring()
         if ring is None:
             self._toast("No keyring here: put the key in ~/.config/arcee/env instead.")
             return
-        value = row.get_text().strip()
         try:
             if value:
                 ring.store(env, value)
@@ -257,12 +287,13 @@ class ArceeWindow(Adw.ApplicationWindow):
             else:
                 ring.clear(env)
                 self._from_keyring.discard(env)
+                os.environ.pop(env, None)
         except Exception as exc:  # a locked keyring the user declined to unlock
             self._toast(f"Could not save the key: {exc}")
             return
-        row.set_text("")
         self._show_key_states()
-        restart_daemon_when_idle(self._background, self._toast)
+        self._toast("Key saved." if value else "Key removed.")
+        restart_daemon_when_idle(self._background, lambda _text: None)
 
     def _on_core(self, check: Gtk.CheckButton, key: str) -> None:
         if check.get_active() and self._settings.core != key:
@@ -529,7 +560,11 @@ class ArceeWindow(Adw.ApplicationWindow):
 
 class ArceeApp(Adw.Application):
     def __init__(self, from_keyring: set[str]) -> None:
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        # `arcee-app --page=history` opens on that page; a second launch reaches the first.
+        self.add_main_option(
+            "page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING, "Page to open", "PAGE"
+        )
         self.from_keyring = from_keyring
         about = Gio.SimpleAction(name="about")
         about.connect("activate", lambda *_: self._about())
@@ -563,8 +598,15 @@ class ArceeApp(Adw.Application):
         if not window.settings.setup_done:  # first run
             window.show_setup()
 
+    def do_command_line(self, command_line: Gio.ApplicationCommandLine) -> int:
+        options = command_line.get_options_dict().end().unpack()
+        self.activate()
+        if page := options.get("page"):
+            self._window().show_page(page)
+        return 0
+
 
 def main() -> None:
     from arcee.config import load_env
 
-    ArceeApp(load_env()).run(None)
+    ArceeApp(load_env()).run(sys.argv)

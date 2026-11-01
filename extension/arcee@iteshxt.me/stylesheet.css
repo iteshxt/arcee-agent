@@ -65,72 +65,146 @@
   background-color: #e74c3c;
 }
 
-/* The panel menu. */
+/* The panel menu: sunrise orange for Arcee's own actions. */
+.arcee-menu {
+  min-width: 380px;
+}
+
+.arcee-ask {
+  spacing: 8px;
+}
+
 .arcee-entry {
-  min-width: 300px;
   border-radius: 999px;
-  padding: 6px 12px;
+  padding: 7px 14px;
 }
 
-.arcee-round-button {
+.arcee-mic {
   border-radius: 999px;
-  padding: 8px;
-  margin-left: 6px;
-  background-color: rgba(255, 255, 255, 0.1);
+  padding: 9px;
+  background-color: #ff7a1a;
+  color: #ffffff;
 }
 
-.arcee-round-button:hover {
-  background-color: rgba(255, 255, 255, 0.2);
+.arcee-mic:hover {
+  background-color: #ff8f3d;
 }
 
-.arcee-status {
-  spacing: 6px;
-  max-width: 360px;
-}
-
-.arcee-status-title {
-  font-weight: bold;
-}
-
-.arcee-progress {
-  font-size: 90%;
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.arcee-question {
-  spacing: 8px;
-  max-width: 360px;
-  padding: 8px;
-  border-radius: 12px;
-  background-color: rgba(96, 156, 255, 0.15);
-}
-
-.arcee-question-text {
-  font-weight: bold;
-}
-
-.arcee-question-buttons {
-  spacing: 8px;
-}
-
-.arcee-allow {
-  background-color: #2f7d4f;
-}
-
-/* The mic while recording, and its waveform. */
-.arcee-round-button.arcee-mic-on,
-.arcee-round-button.arcee-mic-on:hover {
-  background-color: #c0392b;
+.arcee-mic.listening,
+.arcee-mic.listening:hover {
+  background-color: #d93a2b;
 }
 
 .arcee-wave {
   spacing: 3px;
-  min-height: 30px;
-  padding: 0 4px;
+  min-height: 32px;
 }
 
 .arcee-wave-bar {
-  width: 5px;
+  width: 4px;
+  border-radius: 2px;
+  background-gradient-direction: vertical;
+  background-gradient-start: #ffc94d;
+  background-gradient-end: #ff6a00;
+}
+
+.arcee-card {
+  spacing: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.06);
+  max-width: 360px;
+}
+
+.arcee-question {
+  background-color: rgba(255, 122, 26, 0.14);
+}
+
+.arcee-card-title {
+  font-weight: bold;
+  /* Menu rows that are not clickable are dimmed by GNOME; these are content. */
+  color: #ffffff;
+}
+
+.arcee-card-body {
+  font-size: 90%;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.arcee-buttons {
+  spacing: 8px;
+}
+
+.arcee-button {
+  border-radius: 999px;
+  padding: 5px 16px;
+  background-color: rgba(255, 255, 255, 0.10);
+  color: #f2f2f2;
+}
+
+.arcee-button:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.arcee-primary {
+  background-color: #ff7a1a;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.arcee-primary:hover {
+  background-color: #ff8f3d;
+}
+
+.arcee-budget {
+  spacing: 6px;
+}
+
+.arcee-budget-title {
+  font-weight: bold;
+  font-size: 90%;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.arcee-budget-row {
+  spacing: 10px;
+}
+
+.arcee-budget-name,
+.arcee-budget-left {
+  font-size: 90%;
+}
+
+.arcee-budget-left {
+  min-width: 40px;
+  text-align: right;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.arcee-bar-track {
+  height: 6px;
   border-radius: 3px;
-  background-color: rgba(96, 156, 255, 0.9);
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.arcee-bar-fill {
+  height: 6px;
+  border-radius: 3px;
+  background-color: #ffb13b;
+}
+
+.arcee-bar-fill.low {
+  background-color: #d93a2b;
+}
+
+.arcee-footer {
+  spacing: 8px;
+}
+
+.arcee-stop {
+  background-color: #c0392b;
+}
+
+.arcee-stop:hover {
+  background-color: #e74c3c;
 }

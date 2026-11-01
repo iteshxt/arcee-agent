@@ -157,10 +157,10 @@ class FakeTranscriber:
         return "open chrome and run youtube"
 
 
-async def test_speaking_streams_levels_then_the_text(bus_address: str) -> None:
+async def test_speaking_streams_levels_then_the_text_and_runs_it(bus_address: str) -> None:
     service_bus = await connect(bus_address)
     service = AgentService(
-        FakeRunner(),  # pyright: ignore[reportArgumentType]
+        FakeRunner(hang=True),  # pyright: ignore[reportArgumentType]
         recorder=FakeRecorder,  # pyright: ignore[reportArgumentType]
         transcriber=FakeTranscriber(),  # pyright: ignore[reportArgumentType]
     )
@@ -169,13 +169,18 @@ async def test_speaking_streams_levels_then_the_text(bus_address: str) -> None:
     bus, agent = await client(bus_address)
     levels: list[float] = []
     heard: asyncio.Future[dict[str, str]] = asyncio.get_running_loop().create_future()
+    started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
     agent.on_level(levels.append)
     agent.on_heard(lambda payload: heard.set_result(json.loads(payload)))
+    agent.on_started(started.set_result)
 
     await agent.call_start_listening()
     result = await asyncio.wait_for(heard, 5)
 
     assert result == {"text": "open chrome and run youtube"}
     assert levels == [0.1, 0.4, 0.2]
+    # The service runs what it heard itself, so the panel and the app need not.
+    assert await asyncio.wait_for(started, 5) == "open chrome and run youtube"
+    await agent.call_cancel()
     bus.disconnect()
     service_bus.disconnect()
