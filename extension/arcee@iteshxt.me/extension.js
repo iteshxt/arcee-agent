@@ -84,6 +84,7 @@ const GLIDE_STEPS = 18;
 const GLIDE_STEP_MS = 16;
 const GLIDE_MIN_PX = 4;
 const OVERVIEW_CLOSE_MS = 500;
+const FOCUS_CHECK_MS = 150;
 const SCREENSHOT_HIDE_MS = 50;
 
 function windows() {
@@ -93,10 +94,19 @@ function windows() {
 }
 
 function activate(window) {
-    // From the overview, a focused window would sit behind it: leave it first.
-    if (Main.overview.visible)
-        Main.overview.hide();
-    window.activate(global.get_current_time());
+    // A request over D-Bus carries no input event, so global.get_current_time() gave
+    // a stale time and GNOME's focus-stealing prevention kept the window the user last
+    // typed in on top (Chrome opened behind it). A fresh server time is newer than that
+    // input. Main.activateWindow also switches workspace and leaves the overview.
+    Main.activateWindow(window, global.display.get_current_time_roundtrip());
+    // If GNOME still kept focus elsewhere, raise it and hand it the focus directly.
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, FOCUS_CHECK_MS, () => {
+        if (!window.has_focus()) {
+            window.raise();
+            window.focus(global.display.get_current_time_roundtrip());
+        }
+        return GLib.SOURCE_REMOVE;
+    });
 }
 
 function sleep(ms) {
