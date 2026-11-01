@@ -3,6 +3,7 @@ import io
 import struct
 import sys
 import wave
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from arcee.voice import (
     MODEL,
     EndPointer,
     Recorder,
+    SpeechUsage,
     Transcriber,
     VoiceError,
     level,
@@ -66,7 +68,7 @@ async def test_recorder_reads_the_stream_and_reports_levels() -> None:
 
 
 async def test_transcription_uses_whisper_with_the_speech_key(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("GROQ_API_KEY_TTS", "speech-key")
     seen: list[httpx.Request] = []
@@ -77,7 +79,7 @@ async def test_transcription_uses_whisper_with_the_speech_key(
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(server))
 
-    text = await Transcriber(client).transcribe(tone(100))
+    text = await Transcriber(client, SpeechUsage(tmp_path / "speech.json")).transcribe(tone(100))
 
     assert text == "open chrome and run youtube"
     assert seen[0].headers["authorization"] == "Bearer speech-key"
@@ -91,3 +93,34 @@ async def test_no_speech_key_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(VoiceError, match="set GROQ_API_KEY_TTS"):
         await Transcriber().transcribe(tone(100))
+
+
+def test_speech_usage_counts_the_last_day_and_hour(tmp_path: Path) -> None:
+    clock = [1_000_000.0]
+    usage = SpeechUsage(tmp_path / "speech.json", now=lambda: clock[0])
+
+    usage.record(3.0)  # a short clip counts as 10 s
+    clock[0] += 2 * 3600
+    usage.record(42.0)
+    clock[0] += 23 * 3600  # the first clip is now over a day old
+
+    assert usage.snapshot() == {
+        "audio_s_day": 42,
+        "audio_s_day_limit": 28_800,
+        "audio_s_hour": 0,
+        "audio_s_hour_limit": 7_200,
+        "requests_day": 1,
+        "requests_day_limit": 2_000,
+    }
+
+
+async def test_a_transcription_is_counted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GROQ_API_KEY_TTS", "k")
+    usage = SpeechUsage(tmp_path / "speech.json")
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"text": "hi"}))
+    )
+
+    await Transcriber(client, usage).transcribe(tone(100, chunks=400))  # 20 s of audio
+
+    assert usage.snapshot()["audio_s_day"] == 20
