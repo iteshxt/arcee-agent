@@ -122,11 +122,11 @@ class AgentService(ServiceInterface):
             self._recorder.stop()
 
     @method()
-    def ShowApp(self) -> None:
-        """Open the Arcee app (the panel's Open Arcee): arceed knows where it is installed."""
+    def ShowApp(self, page: DBusStr) -> None:
+        """Open the Arcee app on `page` (agent, models, history...; empty for its first)."""
         app = Path(sys.executable).parent / "arcee-app"
         subprocess.Popen(
-            [str(app)],
+            [str(app), *([f"--page={page}"] if page else [])],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -189,7 +189,7 @@ class AgentService(ServiceInterface):
         self.Level(loudness)
 
     async def _listen(self, recorder: Recorder) -> None:
-        """Record, transcribe, and tell the panel the text (or what went wrong)."""
+        """Record, transcribe, tell the panel and the app the text, and run it."""
         self.Listening(True)
         heard: dict[str, str]
         try:
@@ -204,6 +204,11 @@ class AgentService(ServiceInterface):
             self.Listening(False)
             self._recorder = None
         self.Heard(json.dumps(heard))
+        # What was heard runs here, once, whether the panel or the app is open.
+        text = heard.get("text", "").strip()
+        if text and not self.busy:
+            self._request = text
+            self._task = asyncio.ensure_future(self._run(text))
 
     # --- the agent's user: questions go to the panel ----------------------------------
 
