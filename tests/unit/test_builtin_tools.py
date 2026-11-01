@@ -316,6 +316,8 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "ui.tree",
         "ui.act",
         "screen.read",
+        "screen.look",
+        "screen.find",
         "screen.click",
         "screen.scroll",
         "kbd.type",
