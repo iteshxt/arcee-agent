@@ -24,6 +24,18 @@ NARRATION_NUDGE: Final = (
     "or reply to the user with the answer only."
 )
 
+REASONING_NUDGE: Final = (
+    "That was your reasoning about the request, not an answer to the user. Reply to "
+    "the user directly with the answer itself."
+)
+# gpt-oss at times returns its analysis as the reply: it talks about "the user" and
+# plans the answer ("User asks ... We can answer from knowledge. Provide brief answer").
+_REASONING: Final = re.compile(
+    r"^\W*(the )?user (asks|asked|wants|is asking|said|says|requests)\b"
+    r"|\b(we|i) (can|should|need to|will) (answer|respond|reply|provide)\b"
+    r"|\bprovide (a |the )?(brief |short |concise )?(answer|response|reply)\b",
+    re.IGNORECASE,
+)
 _IPV4: Final = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _PATH: Final = re.compile(r"(?:~|/home/\w+)(?:/[\w.\-]+)+")
 # name.ext with a letter-led extension, minus the abbreviations that look like one.
@@ -98,6 +110,8 @@ def review_reply(
     """
     if narration and (named := narrated_tool(reply, wire_names)) is not None:
         return Review("narration", f"reply was narration naming {named}", NARRATION_NUDGE)
+    if narration and _REASONING.search(reply):
+        return Review("narration", "reply was the model's own reasoning", REASONING_NUDGE)
     if not grounding:
         return None
     evidence = "\n".join(m.text for m in messages if m.role != "assistant")

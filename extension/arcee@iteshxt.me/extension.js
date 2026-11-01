@@ -180,8 +180,14 @@ class ShellBridge {
             window.unminimize();
             window.maximize();
             break;
+        case 'fullscreen':
+            window.unminimize();
+            window.make_fullscreen();
+            break;
         case 'restore':
             window.unminimize();
+            if (window.is_fullscreen())
+                window.unmake_fullscreen();
             window.unmaximize();
             break;
         case 'close':

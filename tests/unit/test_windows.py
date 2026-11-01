@@ -99,3 +99,29 @@ def test_closing_a_tab_stays_in_the_browser() -> None:
 
     assert "browser.*" in filters
     assert "window.*" not in filters
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    ["who is jason born tell me", "how do tides work?", "tell me about the Eiffel Tower"],
+)
+def test_questions_about_the_world_get_web_search_and_nothing_local(request_text: str) -> None:
+    filters = filters_for([Message("user", request_text)])
+
+    assert "web.*" in filters
+    assert not {"fs.*", "shell.*", "browser.*"} & set(filters)
+
+
+@pytest.mark.parametrize(
+    ("request_text", "expected"),
+    [
+        ("what is my ip address", "system.*"),
+        ("what's in my downloads folder", "fs.*"),
+        ("open chrome and search for james bond", "browser.*"),
+        ("full screen the chrome window and search youtube", "window.*"),
+    ],
+)
+def test_local_questions_and_chrome_requests_keep_their_tools(
+    request_text: str, expected: str
+) -> None:
+    assert expected in filters_for([Message("user", request_text)])

@@ -66,7 +66,7 @@ _GROUPS: Final = (
             r"screen|keyboard|shortcuts?|press(es|ing)?|typ(e|ing) (it )?in(to)?|"
             r"(the|its|that|this) app|in (the )?(files|nautilus|settings|text editor|"
             r"calculator|calendar)( app)?|files app|settings app|calendar app|text editor|"
-            r"calculator|nautilus|minimi[sz]e|maximi[sz]e|close|quit)\b"
+            r"calculator|nautilus|minimi[sz]e|maximi[sz]e|full ?screen|close|quit)\b"
         ),
     ),
     (
@@ -90,6 +90,13 @@ _CHAT: Final = _words(
     r"^\W*(hi|hello|hey|thanks|thank you|thx|ok|okay|cool|great|bye|good (morning|night|"
     r"evening)|what can you do|who are you|how are you)\b[^?]{0,40}[.!?]*\s*$"
 )
+# A question about the world ("who is Jason Bourne", "how do tides work") that names
+# nothing on this computer: answered from knowledge or a web search, never by
+# improvising with files and shell commands (it once ran five curl scripts).
+_QUESTION: Final = _words(
+    r"^\W*(who|what|whats|what's|when|where|why|how|which|whose|is|are|was|were|does|did|"
+    r"can|could)\b|\b(tell me (about|who|what|why|how)|explain|define|meaning of)\b"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # "Open X" may mean a file or an app: it brings in both.
 _OPEN: Final = _words(r"\bopen\b")
@@ -98,7 +105,7 @@ _OPEN: Final = _words(r"\bopen\b")
 _CLEARLY_LOCAL: Final = _words(
     r"\b(save|write|files?|folders?|documents|downloads|desktop|my computer|this computer)\b|~/"
     # Window verbs ("close chrome", "minimise it"); closing a tab stays in the browser.
-    r"|\b(minimi[sz]e|maximi[sz]e|quit)\b|\bclose\b(?![^.,;]{0,30}\btabs?\b)"
+    r"|\b(minimi[sz]e|maximi[sz]e|full ?screen|quit)\b|\bclose\b(?![^.,;]{0,30}\btabs?\b)"
 )
 _ADDRESS: Final = _words(r"https?://\S+|\bwww\.\S+|\b[\w-]+\.(com|org|net|io|in|dev|ai)\b\S*")
 _NAMESPACE_GROUP: Final = {
@@ -136,7 +143,10 @@ def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
     if not local and not (browser or web) and not used:
         if _CHAT.search(request):
             return CONTROL
-        local = [FILES, APPS, SYSTEM, SHELL]  # nothing recognised: offer everything local
+        if _QUESTION.search(request):
+            web = True  # a question about the world: knowledge, then a web search
+        else:
+            local = [FILES, APPS, SYSTEM, SHELL]  # nothing recognised: everything local
     filters: tuple[str, ...] = tuple(f for group in local for f in group) + CONTROL
     if _REMEMBER.search(request) or "control_note" in _called(messages):
         filters += NOTE
