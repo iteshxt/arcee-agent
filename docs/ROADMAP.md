@@ -144,7 +144,7 @@ Prerequisites on the machine:
 - [x] Control sessions (decision 0010): screen and input only inside a session owned by one D-Bus connection, with a glow on every monitor and a Stop pill; the user's input pauses Arcee (Resume or Stop)
 - [x] GNOME extension: indicator and menu (ask, live progress, Stop, questions and confirmations with buttons, recent tasks, today's tokens, Quit), stop keybinding, glow and Stop pill, `org.arcee.Shell`. Mic with a live waveform: pw-record, transcribed by Groq `whisper-large-v3-turbo` on its own key (`GROQ_API_KEY_TTS`)
 - [ ] Real `window.*` and `app.close` tools over the extension
-- [ ] GTK4 app: Models, Tools, History, Diagnostics pages; the Models page shows each cloud model's tokens and requests left (from `rate-limits.json`) and lets the user choose local or API inference
+- [x] GTK4 app (`arcee-app`, libadwaita): Models (Groq or local, today's tokens and requests per model, live), History (tasks and their steps), Permissions (ask before everything, or always before chosen actions), Diagnostics (every part with its fix). Opened from the panel's Open Arcee or the app grid; settings in `~/.config/arcee/settings.json`, read by arceed and arcee-cli
 - [ ] First-run wizard
 - [ ] Local dev deb (`dpkg-buildpackage`)
 

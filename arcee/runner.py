@@ -59,6 +59,7 @@ class TaskRunner:
         examples: bool = False,
         presence: Presence | None = None,
         store: Store | None = None,
+        policy: Policy | None = None,
     ) -> None:
         self.core = core
         self.host = host
@@ -70,6 +71,7 @@ class TaskRunner:
         self.presence = presence or NoPresence()
         self._limits = limits
         self._plan = plan
+        self._policy = policy or Policy()
         self._examples = ExampleLibrary.load() if examples else None
         self._usable: list[ModelAdapter] = []
         # Set by whoever cancels a run because the user pressed Stop.
@@ -118,7 +120,7 @@ class TaskRunner:
         agent = Agent(
             self._usable,
             self.registry,
-            Executor(Gate(Policy(), user), record=self.store.record_action),
+            Executor(Gate(self._policy, user), record=self.store.record_action),
             user,
             home=Path.home(),
             limits=self._limits,

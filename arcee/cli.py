@@ -52,6 +52,7 @@ from arcee.models.presets import (
 from arcee.platform.screen import GnomeScreen
 from arcee.platform.shell import ShellBridge, ShellPresence, ShellUnavailableError, StopWatcher
 from arcee.runner import TaskRunner
+from arcee.settings import load as load_settings
 from arcee.tools.builtin import builtin_registry
 
 
@@ -191,12 +192,19 @@ async def run(
     verbose: bool,
     plan: Literal["auto", "always", "never"],
     examples: bool = False,
-    core: str = DEFAULT_CORE,
+    core: str | None = None,
 ) -> int:
     terminal = Terminal(verbose=verbose)
     presence = terminal.presence = ShellPresence()
+    settings = load_settings()
     runner = TaskRunner(
-        core=core, host=host, limits=limits, plan=plan, examples=examples, presence=presence
+        core=core or settings.core,
+        host=host,
+        limits=limits,
+        plan=plan,
+        examples=examples,
+        presence=presence,
+        policy=settings.policy(),
     )
     try:
         notes, problem = await runner.check()
@@ -477,8 +485,21 @@ def daemon_install() -> int:
     activation.write_text(
         f"[D-BUS Service]\nName=org.arcee.Agent\nExec={arceed}\nSystemdService=arceed.service\n"
     )
+    launcher = data / "applications" / "org.arcee.App.desktop"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    icon = Path(__file__).resolve().parents[1] / "extension" / SHELL_EXTENSION / "icons"
+    launcher.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Arcee\n"
+        "Comment=Models, history, permissions and diagnostics for the Arcee agent\n"
+        f"Exec={arceed.parent / 'arcee-app'}\n"
+        f"Icon={icon / 'arcee-symbolic.svg'}\n"
+        "Categories=Utility;\n"
+        "StartupWMClass=org.arcee.App\n"
+    )
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    print(f"wrote {unit}\nwrote {activation}")
+    print(f"wrote {unit}\nwrote {activation}\nwrote {launcher}")
     print("arceed starts on the panel's first request; its log: journalctl --user -u arceed")
     return 0
 
@@ -581,7 +602,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_cmd.add_argument("--host", default=host)
     run_cmd.add_argument("-v", "--verbose", action="store_true", help="show model reasoning")
     run_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
-    run_cmd.add_argument("--core", default=DEFAULT_CORE, help=CORE_HELP)
+    run_cmd.add_argument("--core", default=None, help=CORE_HELP + " (default: the app's choice)")
     run_cmd.add_argument(
         "--plan",
         choices=("auto", "always", "never"),
