@@ -241,9 +241,16 @@ function scrollPage(direction, amount) {
   return { scroll_y: Math.round(scrollY), page_height: document.documentElement.scrollHeight };
 }
 
-// Chrome runs this worker at browser start only for a listener on onStartup: without
-// one, when Arcee started Chrome the bridge stayed down until something else woke the
-// worker. The open native port then keeps the worker alive.
+// An MV3 worker runs only while something wakes it. Chrome runs it at browser start
+// only for a listener on onStartup: without one, after every login the bridge stayed
+// down until the extension was reloaded by hand. The open native port then keeps the
+// worker alive. If the port drops and Chrome puts the worker to sleep, the retry timer
+// above dies with it, so an alarm (which wakes the worker) checks every 30 s.
+const RECONNECT_ALARM = "arcee-reconnect";
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) connect();
+});
+chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
 connect();
