@@ -18,6 +18,7 @@ const AGENT_INTERFACE = `
     <method name="Run"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
     <method name="Cancel"/>
     <method name="Quit"/>
+    <method name="ShowApp"/>
     <method name="Answer"><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
     <method name="Status"><arg type="s" direction="out"/></method>
     <method name="Recent"><arg type="u" direction="in"/><arg type="s" direction="out"/></method>
@@ -157,6 +158,7 @@ class ArceeIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._budget);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.addAction('Open Arcee', () => this._agent.ShowAppAsync().catch(logError));
         this.menu.addAction('Quit Arcee', () => this._agent.QuitAsync().catch(() => {}));
     }
 

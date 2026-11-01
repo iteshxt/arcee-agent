@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 arcee-cli = "arcee.cli:main"
 arceed = "arcee.daemon:main"
+arcee-app = "arcee.app.window:main"
 
 [dependency-groups]
 dev = [

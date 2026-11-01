@@ -86,6 +86,11 @@ GROQ_DAILY_TOKENS: Final = 200_000
 @cache
 def rate_budget() -> HeaderBudget:
     """Groq's own counts, kept per model and saved between runs; one per process."""
+    return read_budget()
+
+
+def read_budget() -> HeaderBudget:
+    """The counts as saved now, for a reader in another process (the app)."""
     daily: dict[str, int] = dict.fromkeys((GROQ_SMALL, GROQ_LARGE), GROQ_DAILY_TOKENS)
     return HeaderBudget(data_dir() / "rate-limits.json", daily_tokens=daily)
 

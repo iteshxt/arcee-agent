@@ -14,8 +14,10 @@ import contextlib
 import itertools
 import json
 import logging
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, Final
 
 from dbus_fast import BusType, DBusError, RequestNameReply
@@ -28,6 +30,7 @@ from arcee.core.agent import Escalated, Event, Guarded, ModelTurn, Planned, Step
 from arcee.core.protocol import ConfirmRequest
 from arcee.models.errors import ModelUnavailableError
 from arcee.runner import TaskRunner
+from arcee.settings import load as load_settings
 from arcee.voice import Recorder, Transcriber, VoiceError
 
 BUS_NAME: Final = "org.arcee.Agent"
@@ -117,6 +120,18 @@ class AgentService(ServiceInterface):
     def StopListening(self) -> None:
         if self._recorder is not None:
             self._recorder.stop()
+
+    @method()
+    def ShowApp(self) -> None:
+        """Open the Arcee app (the panel's Open Arcee): arceed knows where it is installed."""
+        app = Path(sys.executable).parent / "arcee-app"
+        subprocess.Popen(
+            [str(app)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
     @method()
     def Status(self) -> DBusStr:
@@ -271,7 +286,8 @@ async def _main() -> None:
     from arcee.platform.shell import ShellPresence
 
     load_env()
-    runner = TaskRunner(presence=ShellPresence())
+    settings = load_settings()
+    runner = TaskRunner(core=settings.core, policy=settings.policy(), presence=ShellPresence())
     bus = await MessageBus(bus_type=BusType.SESSION).connect()
     try:
         await serve(runner, bus)
