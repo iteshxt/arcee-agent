@@ -20,7 +20,7 @@ from typing import Any, Final
 
 from dbus_fast import BusType, DBusError, RequestNameReply
 from dbus_fast.aio import MessageBus
-from dbus_fast.annotations import DBusStr, DBusUInt32
+from dbus_fast.annotations import DBusBool, DBusDouble, DBusStr, DBusUInt32
 from dbus_fast.service import ServiceInterface, method, signal
 
 from arcee.config import load_env
@@ -28,6 +28,7 @@ from arcee.core.agent import Escalated, Event, Guarded, ModelTurn, Planned, Step
 from arcee.core.protocol import ConfirmRequest
 from arcee.models.errors import ModelUnavailableError
 from arcee.runner import TaskRunner
+from arcee.voice import Recorder, Transcriber, VoiceError
 
 BUS_NAME: Final = "org.arcee.Agent"
 OBJECT_PATH: Final = "/org/arcee/Agent"
@@ -57,9 +58,19 @@ def describe(event: Event) -> str | None:
 
 
 class AgentService(ServiceInterface):
-    def __init__(self, runner: TaskRunner) -> None:
+    def __init__(
+        self,
+        runner: TaskRunner,
+        *,
+        recorder: Callable[[Callable[[float], None]], Recorder] = Recorder,
+        transcriber: Transcriber | None = None,
+    ) -> None:
         super().__init__(BUS_NAME)
         self._runner = runner
+        self._make_recorder = recorder
+        self._transcriber = transcriber or Transcriber()
+        self._recorder: Recorder | None = None
+        self._listening: asyncio.Task[None] | None = None
         self._task: asyncio.Task[None] | None = None
         self._request = ""
         self._questions: dict[str, asyncio.Future[str]] = {}
@@ -93,6 +104,19 @@ class AgentService(ServiceInterface):
         future = self._questions.pop(question_id, None)
         if future is not None and not future.done():
             future.set_result(answer)
+
+    @method()
+    def StartListening(self) -> None:
+        """Record a spoken request; Heard carries its text when it ends."""
+        if self._listening is not None and not self._listening.done():
+            return
+        self._recorder = self._make_recorder(self._level)
+        self._listening = asyncio.ensure_future(self._listen(self._recorder))
+
+    @method()
+    def StopListening(self) -> None:
+        if self._recorder is not None:
+            self._recorder.stop()
 
     @method()
     def Status(self) -> DBusStr:
@@ -131,6 +155,40 @@ class AgentService(ServiceInterface):
     @signal()
     def Finished(self, payload: str) -> DBusStr:
         return payload
+
+    @signal()
+    def Listening(self, on: bool) -> DBusBool:
+        return on
+
+    @signal()
+    def Level(self, loudness: float) -> DBusDouble:
+        return loudness
+
+    @signal()
+    def Heard(self, payload: str) -> DBusStr:
+        return payload
+
+    # --- voice ------------------------------------------------------------------------
+
+    def _level(self, loudness: float) -> None:
+        self.Level(loudness)
+
+    async def _listen(self, recorder: Recorder) -> None:
+        """Record, transcribe, and tell the panel the text (or what went wrong)."""
+        self.Listening(True)
+        heard: dict[str, str]
+        try:
+            audio, spoke = await recorder.record()
+            if not spoke:
+                heard = {"error": "I did not hear anything"}
+            else:
+                heard = {"text": await self._transcriber.transcribe(audio)}
+        except VoiceError as exc:
+            heard = {"error": str(exc)}
+        finally:
+            self.Listening(False)
+            self._recorder = None
+        self.Heard(json.dumps(heard))
 
     # --- the agent's user: questions go to the panel ----------------------------------
 

@@ -116,3 +116,21 @@
 .arcee-allow {
   background-color: #2f7d4f;
 }
+
+/* The mic while recording, and its waveform. */
+.arcee-round-button.arcee-mic-on,
+.arcee-round-button.arcee-mic-on:hover {
+  background-color: #c0392b;
+}
+
+.arcee-wave {
+  spacing: 3px;
+  min-height: 30px;
+  padding: 0 4px;
+}
+
+.arcee-wave-bar {
+  width: 5px;
+  border-radius: 3px;
+  background-color: rgba(96, 156, 255, 0.9);
+}

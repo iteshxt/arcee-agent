@@ -136,3 +136,46 @@ async def test_cancel_stops_the_request(bus_address: str) -> None:
 def test_progress_lines_are_plain() -> None:
     result = ExecutorResult.model_construct(status="error", summary="no such file")
     assert describe(ToolRan(2, result)) == "✗ no such file"
+
+
+class FakeRecorder:
+    def __init__(self, on_level: Callable[[float], None]) -> None:
+        self.on_level = on_level
+
+    def stop(self) -> None:
+        return None
+
+    async def record(self) -> tuple[bytes, bool]:
+        for loudness in (0.1, 0.4, 0.2):
+            self.on_level(loudness)
+        return b"pcm", True
+
+
+class FakeTranscriber:
+    async def transcribe(self, pcm: bytes) -> str:
+        assert pcm == b"pcm"
+        return "open chrome and run youtube"
+
+
+async def test_speaking_streams_levels_then_the_text(bus_address: str) -> None:
+    service_bus = await connect(bus_address)
+    service = AgentService(
+        FakeRunner(),  # pyright: ignore[reportArgumentType]
+        recorder=FakeRecorder,  # pyright: ignore[reportArgumentType]
+        transcriber=FakeTranscriber(),  # pyright: ignore[reportArgumentType]
+    )
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    bus, agent = await client(bus_address)
+    levels: list[float] = []
+    heard: asyncio.Future[dict[str, str]] = asyncio.get_running_loop().create_future()
+    agent.on_level(levels.append)
+    agent.on_heard(lambda payload: heard.set_result(json.loads(payload)))
+
+    await agent.call_start_listening()
+    result = await asyncio.wait_for(heard, 5)
+
+    assert result == {"text": "open chrome and run youtube"}
+    assert levels == [0.1, 0.4, 0.2]
+    bus.disconnect()
+    service_bus.disconnect()
