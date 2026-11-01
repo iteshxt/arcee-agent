@@ -21,7 +21,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from arcee.app import diagnostics  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
-from arcee.models.presets import GROQ_LARGE, GROQ_SMALL, read_budget  # noqa: E402
+from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
 from arcee.settings import Core, load, save  # noqa: E402
 
 APP_ID: Final = "me.iteshxt.Arcee"  # under the developer's own domain, iteshxt.me
@@ -44,8 +44,9 @@ CORE_CHOICES: Final = (
     (
         "groq",
         "Groq",
-        f"{GROQ_SMALL.split('/')[-1]} for easy requests, "
-        f"{GROQ_LARGE.split('/')[-1]} for hard ones. Fast; what Arcee reads goes to Groq.",
+        "gpt-oss-20b does most of the work; qwen3.8-27b and gpt-oss-120b take turns when "
+        "it is busy, and 120b takes over when it struggles. Fast; what Arcee reads goes "
+        "to Groq.",
     ),
     ("local", "Local (Ollama)", "LFM models on this computer. Private; slower and less able."),
 )
@@ -167,7 +168,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             title="Today", description="Groq's free allowance per model; it refills over the day."
         )
         self._budget_rows: dict[str, tuple[Adw.ActionRow, Gtk.LevelBar]] = {}
-        for model in (GROQ_SMALL, GROQ_LARGE):
+        for model in GROQ_MODELS:
             bar = Gtk.LevelBar(min_value=0, max_value=1, valign=Gtk.Align.CENTER, width_request=140)
             row = Adw.ActionRow(title=model.split("/")[-1], subtitle="No use recorded yet")
             row.add_suffix(bar)

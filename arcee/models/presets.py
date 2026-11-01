@@ -8,6 +8,7 @@ from arcee.models.base import ModelAdapter, ModelProfile
 from arcee.models.budget import HeaderBudget
 from arcee.models.ollama import ALL_LAYERS, DEFAULT_HOST, OllamaAdapter
 from arcee.models.openai_compat import OpenAICompatAdapter
+from arcee.models.rotation import RotatingAdapter
 
 # The base model: LFM3 1.7B with image, audio and speech, for the later screenshot and
 # voice phases. It has no thinking mode, so `thinking` stays unset.
@@ -77,7 +78,11 @@ def cloud_profile(model: str, *, schema: bool = False, tpm: int | None = None) -
 # and as the escalation tier, both on Groq. Groq limits tokens per model, so each model
 # has its own budget.
 GROQ_SMALL: Final = "openai/gpt-oss-20b"
+GROQ_MID: Final = "qwen/qwen3.8-27b"
 GROQ_LARGE: Final = "openai/gpt-oss-120b"
+# Each has its own Groq allowance: 8,000 tokens a minute, 1,000 requests and 200,000
+# tokens a day. They take turns (decision 0012).
+GROQ_MODELS: Final = (GROQ_SMALL, GROQ_MID, GROQ_LARGE)
 DEFAULT_CORE: Final = "groq"
 # Groq's free tier also allows 200,000 tokens a day per model, which no header reports.
 GROQ_DAILY_TOKENS: Final = 200_000
@@ -91,17 +96,19 @@ def rate_budget() -> HeaderBudget:
 
 def read_budget() -> HeaderBudget:
     """The counts as saved now, for a reader in another process (the app)."""
-    daily: dict[str, int] = dict.fromkeys((GROQ_SMALL, GROQ_LARGE), GROQ_DAILY_TOKENS)
+    daily: dict[str, int] = dict.fromkeys(GROQ_MODELS, GROQ_DAILY_TOKENS)
     return HeaderBudget(data_dir() / "rate-limits.json", daily_tokens=daily)
 
 
 def groq_ladder() -> list[ModelAdapter]:
-    """Tier 1: gpt-oss-20b. Tier 2: gpt-oss-120b. Paced by Groq's own rate headers."""
+    """Tier 1 led by gpt-oss-20b, tier 2 (escalation) led by gpt-oss-120b; in each, the
+    other models take a call when the leader would make the user wait (decision 0012)."""
     budget = rate_budget()
-    return [
-        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_SMALL), budget=budget),
-        OpenAICompatAdapter.provider("groq", cloud_profile(GROQ_LARGE), budget=budget),
-    ]
+    small, mid, large = (
+        OpenAICompatAdapter.provider("groq", cloud_profile(model), budget=budget)
+        for model in GROQ_MODELS
+    )
+    return [RotatingAdapter([small, mid, large]), RotatingAdapter([large, mid, small])]
 
 
 def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
@@ -118,8 +125,14 @@ def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
 
 def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     if choice == "groq":
-        return OpenAICompatAdapter.provider(
-            "groq", cloud_profile(GROQ_LARGE, schema=True), budget=rate_budget()
+        # Plans are worth the large model; the others plan when it is busy.
+        return RotatingAdapter(
+            [
+                OpenAICompatAdapter.provider(
+                    "groq", cloud_profile(model, schema=True), budget=rate_budget()
+                )
+                for model in (GROQ_LARGE, GROQ_MID, GROQ_SMALL)
+            ]
         )
     if choice == "local":
         return local_planner(host)

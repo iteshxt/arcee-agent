@@ -21,7 +21,6 @@ from arcee.core.planner import Planner, needs_plan
 from arcee.core.policy import Policy
 from arcee.core.presence import NoPresence, Presence
 from arcee.core.protocol import ConfirmRequest, PlannerOutput
-from arcee.core.routing import start_tier
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
 from arcee.models.ollama import DEFAULT_HOST
@@ -128,7 +127,6 @@ class TaskRunner:
             notes=self.store,
             examples=self._examples,
             plan_if=needs_plan if self._plan == "auto" else lambda request: True,
-            start_tier=start_tier if self.core == "groq" else lambda request: 0,
             on_event=record,
             presence=self.presence,
         )

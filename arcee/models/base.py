@@ -181,6 +181,11 @@ class ModelAdapter(ABC):
     async def health(self) -> bool:
         """Cheap reachability check for the Models page and fallback decisions."""
 
+    def expected_wait(self, request: ToolRequest | ModelRequest[Any]) -> float:
+        """Seconds a rate budget would hold `request` back now; 0 when nothing is known,
+        inf when the model's day is spent. Used to pick among models that take turns."""
+        return 0.0
+
     async def unload(self) -> None:  # noqa: B027 - optional hook, no-op by default
         """Free the model's memory now; the next request loads it again. Best effort."""
 
