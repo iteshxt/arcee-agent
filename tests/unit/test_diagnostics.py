@@ -14,7 +14,7 @@ async def test_keys_say_which_is_missing_and_where_to_put_it(
 
     assert chat.ok
     assert not speech.ok
-    assert "GROQ_API_KEY_TTS" in speech.fix
+    assert (speech.fix, speech.fix_action) == ("add it on the Models page", "keys")
 
 
 async def test_missing_programs_come_with_the_install_command(
