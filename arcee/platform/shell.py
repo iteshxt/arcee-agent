@@ -9,6 +9,7 @@ and input calls raise ShellUnavailableError.
 """
 
 import json
+import re
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any, Final
@@ -61,6 +62,12 @@ class ShellBridge:
     def windows(self) -> list[dict[str, Any]]:
         result = self._call("ListWindows", None)
         return json.loads(result[0]) if result else []
+
+    def window_action(self, window_id: int, action: str) -> bool:
+        """focus, minimize, maximize, restore or close; False when the window is gone."""
+        from gi.repository import GLib
+
+        return bool(self._must("WindowAction", GLib.Variant("(ts)", (window_id, action)))[0])
 
     def focus_window(self, window_id: int) -> bool:
         from gi.repository import GLib
@@ -130,8 +137,9 @@ class ShellBridge:
                 method, args, Gio.DBusCallFlags.NONE, timeout_ms, None
             )
         except GLib.Error as exc:
-            Gio.DBusError.strip_remote_error(exc)  # keep the extension's own words
-            raise ShellUnavailableError(f"{method} failed: {exc.message}") from exc
+            # Keep the extension's own words, without "GDBus.Error:<error name>: ".
+            message = re.sub(r"^GDBus\.Error:[\w.\-]+:\s*", "", exc.message)
+            raise ShellUnavailableError(f"{method} failed: {message}") from exc
         return reply.unpack()
 
     def _call(self, method: str, args: Any) -> Any:
