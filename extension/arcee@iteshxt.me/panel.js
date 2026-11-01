@@ -27,6 +27,7 @@ const AGENT_INTERFACE = `
     <method name="StopListening"/>
     <signal name="Started"><arg type="s"/></signal>
     <signal name="Progress"><arg type="s"/></signal>
+    <signal name="Step"><arg type="s"/></signal>
     <signal name="Question"><arg type="s"/></signal>
     <signal name="Finished"><arg type="s"/></signal>
     <signal name="Listening"><arg type="b"/></signal>
@@ -61,8 +62,10 @@ function section(child) {
 
 export const ArceeIndicator = GObject.registerClass(
 class ArceeIndicator extends PanelMenu.Button {
-    _init(path) {
+    // `onStep` hears what Arcee is doing now ('' when it is done), for the pill.
+    _init(path, onStep) {
         super._init(0.5, 'Arcee', false);
+        this._onStep = onStep;
         this.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(`${path}/icons/arcee-symbolic.svg`),
             style_class: 'system-status-icon',
@@ -77,6 +80,7 @@ class ArceeIndicator extends PanelMenu.Button {
         this._signals = [
             this._agent.connectSignal('Started', (_p, _s, [request]) => this._onStarted(request)),
             this._agent.connectSignal('Progress', (_p, _s, [line]) => this._onProgress(line)),
+            this._agent.connectSignal('Step', (_p, _s, [doing]) => this._onStepChanged(doing)),
             this._agent.connectSignal('Question', (_p, _s, [json]) => this._onQuestion(json)),
             this._agent.connectSignal('Finished', (_p, _s, [json]) => this._onFinished(json)),
             this._agent.connectSignal('Listening', (_p, _s, [on]) => this._onListening(on)),
@@ -248,12 +252,25 @@ class ArceeIndicator extends PanelMenu.Button {
 
     _onStarted(request) {
         this._progress = [];
+        this._step = '';
         this._say(request, 'Working…', true);
     }
 
     _onProgress(line) {
         this._progress.push(shorten(line, 80));
-        this._say(this._statusTitle.text, this._progress.slice(-PROGRESS_LINES).join('\n'), true);
+        this._showProgress();
+    }
+
+    _onStepChanged(doing) {
+        this._step = doing;
+        this._onStep(doing);
+        this._showProgress();
+    }
+
+    _showProgress() {
+        const lines = this._progress.slice(-PROGRESS_LINES);
+        this._say(this._statusTitle.text, [this._step ? `${this._step}` : '', ...lines]
+            .filter(Boolean).join('\n'), true);
     }
 
     _onQuestion(json) {
@@ -297,6 +314,8 @@ class ArceeIndicator extends PanelMenu.Button {
     _onFinished(json) {
         const done = JSON.parse(json);
         this._question.visible = false;
+        this._step = '';
+        this._onStep('');
         const reply = done.reply || (done.status === 'stopped' ? 'Stopped.' : `Ended: ${done.status}.`);
         this._say(this._statusTitle.text, shorten(reply, 400));
         if (!this.menu.isOpen)

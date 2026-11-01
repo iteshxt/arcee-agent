@@ -1,49 +1,54 @@
-/* The screen edges while Arcee holds control: blue when working, amber when paused.
-   Each edge is a strip whose gradient fades towards the middle of the screen. */
+/* The screen edges while Arcee holds control: sunrise orange while it works, blue
+   (the user's colour) while it is paused for the user. Each edge is a strip whose
+   gradient fades towards the middle of the screen. */
 .arcee-glow-top {
   background-gradient-direction: vertical;
-  background-gradient-start: rgba(96, 156, 255, 0.7);
-  background-gradient-end: rgba(96, 156, 255, 0);
+  background-gradient-start: rgba(255, 122, 26, 0.75);
+  background-gradient-end: rgba(255, 122, 26, 0);
 }
 
 .arcee-glow-bottom {
   background-gradient-direction: vertical;
-  background-gradient-start: rgba(96, 156, 255, 0);
-  background-gradient-end: rgba(96, 156, 255, 0.7);
+  background-gradient-start: rgba(255, 122, 26, 0);
+  background-gradient-end: rgba(255, 122, 26, 0.75);
 }
 
 .arcee-glow-left {
   background-gradient-direction: horizontal;
-  background-gradient-start: rgba(96, 156, 255, 0.7);
-  background-gradient-end: rgba(96, 156, 255, 0);
+  background-gradient-start: rgba(255, 122, 26, 0.75);
+  background-gradient-end: rgba(255, 122, 26, 0);
 }
 
 .arcee-glow-right {
   background-gradient-direction: horizontal;
-  background-gradient-start: rgba(96, 156, 255, 0);
-  background-gradient-end: rgba(96, 156, 255, 0.7);
+  background-gradient-start: rgba(255, 122, 26, 0);
+  background-gradient-end: rgba(255, 122, 26, 0.75);
 }
 
 .arcee-glow-top.paused,
 .arcee-glow-left.paused {
-  background-gradient-start: rgba(255, 176, 64, 0.75);
-  background-gradient-end: rgba(255, 176, 64, 0);
+  background-gradient-start: rgba(96, 156, 255, 0.7);
+  background-gradient-end: rgba(96, 156, 255, 0);
 }
 
 .arcee-glow-bottom.paused,
 .arcee-glow-right.paused {
-  background-gradient-start: rgba(255, 176, 64, 0);
-  background-gradient-end: rgba(255, 176, 64, 0.75);
+  background-gradient-start: rgba(96, 156, 255, 0);
+  background-gradient-end: rgba(96, 156, 255, 0.7);
 }
 
 .arcee-pill {
   background-color: rgba(28, 28, 32, 0.92);
-  border: 1px solid rgba(96, 156, 255, 0.7);
+  border: 1px solid rgba(255, 122, 26, 0.8);
   border-radius: 999px;
   padding: 6px 8px 6px 16px;
   spacing: 10px;
   color: #f2f2f2;
   font-weight: bold;
+}
+
+.arcee-pill.paused {
+  border-color: rgba(96, 156, 255, 0.8);
 }
 
 .arcee-pill-button {

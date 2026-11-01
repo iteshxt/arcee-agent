@@ -1,8 +1,10 @@
 // While Arcee drives the screen it holds a control session: the screen edges glow,
 // a pill at the top centre says so and offers Stop, and the screen and input methods
 // work only inside it, so nothing reads or drives the desktop unseen (decision 0010).
+// The glow is Arcee's sunrise orange; the pill says what Arcee is doing right now.
 // The user's own mouse or keyboard pauses the session at once: their input always
-// goes through, the glow turns amber, and the pill offers Resume or Stop.
+// goes through, the glow turns blue (the user's colour), and the pill offers Resume
+// or Stop.
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -32,6 +34,7 @@ export class ControlSession {
         this.owner = null;
         this._glows = [];
         this._pill = null;
+        this._step = '';
     }
 
     begin(owner, reason) {
@@ -63,6 +66,12 @@ export class ControlSession {
         if (this.state === 'paused')
             throw new Error('paused: the user took control');
         this.touch();
+    }
+
+    setStep(doing) {
+        this._step = doing;
+        if (this._pill)
+            this._restyle();
     }
 
     touch() {
@@ -184,7 +193,11 @@ export class ControlSession {
                 glow.remove_style_class_name('paused');
         }
         this._resume.visible = paused;
-        this._label.text = paused ? 'Arcee paused: you have control' : this._reason;
+        this._label.text = paused ? 'Arcee paused: you have control' : this._step || this._reason;
+        if (paused)
+            this._pill.add_style_class_name('paused');
+        else
+            this._pill.remove_style_class_name('paused');
         // Centred below the top bar of the primary monitor, once its size is known.
         const monitor = Main.layoutManager.primaryMonitor;
         const [, width] = this._pill.get_preferred_width(-1);

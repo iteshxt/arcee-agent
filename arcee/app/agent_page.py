@@ -3,8 +3,10 @@
 
 A circle of glowing particles in sunrise colours breathes while Arcee waits, pulses
 with the voice while the mic listens, and swirls while it works. Below it: the mic,
-a button to type instead, and the conversation (requests, steps, questions with their
-answers, replies). It talks to arceed over D-Bus on the GTK main loop, like the panel;
+a button to type instead, a button to start a new conversation, and the conversation
+(requests, steps, questions with their answers, replies). While Arcee works the mic
+becomes Stop and the line under the ring says what it is doing right now.
+It talks to arceed over D-Bus on the GTK main loop, like the panel;
 what the user says is run by arceed itself, so the panel and the app never both run it.
 """
 
@@ -19,7 +21,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk, Pango  # noqa: E402
 
 BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
@@ -29,11 +31,13 @@ SUN_OUTER: Final = (1.0, 0.80, 0.30)
 RIBBONS: Final = 5
 POINTS: Final = 220
 WAVE_SIZE: Final = 300
+IDLE_TEXT: Final = "Ask me anything"
 # The app's own touches: the mic in sunrise orange, red while it listens.
 CSS: Final = b"""
 .arcee-mic { background: #ff7a1a; color: white; min-width: 64px; min-height: 64px; }
 .arcee-mic:hover { background: #ff8f3d; }
-.arcee-mic.listening, .arcee-mic.listening:hover { background: #d93a2b; color: white; }
+.arcee-mic.listening, .arcee-mic.listening:hover,
+.arcee-mic.working, .arcee-mic.working:hover { background: #d93a2b; color: white; }
 .arcee-you { background: alpha(#ff7a1a, 0.16); border-radius: 14px; padding: 8px 12px; }
 """
 
@@ -111,10 +115,17 @@ class AgentPage(Gtk.Box):
         self.set_margin_top(18)
         self.set_margin_bottom(12)
         self._listening = False
+        self._working = False
+        self._open_questions: list[Gtk.Widget] = []
         self.wave = SunWave()
         self.append(self.wave)
 
-        self._status = Gtk.Label(label="Ask me anything", halign=Gtk.Align.CENTER)
+        self._status = Gtk.Label(
+            label=IDLE_TEXT,
+            halign=Gtk.Align.CENTER,
+            ellipsize=Pango.EllipsizeMode.END,
+            max_width_chars=60,
+        )
         self._status.add_css_class("dim-label")
         self.append(self._status)
 
@@ -122,13 +133,19 @@ class AgentPage(Gtk.Box):
         self._mic = Gtk.Button(icon_name="audio-input-microphone-symbolic", tooltip_text="Speak")
         self._mic.add_css_class("circular")
         self._mic.add_css_class("arcee-mic")
-        self._mic.connect("clicked", lambda _b: self._toggle_listening())
+        self._mic.connect("clicked", lambda _b: self._on_mic())
         typing = Gtk.ToggleButton(icon_name="input-keyboard-symbolic", tooltip_text="Type")
         typing.add_css_class("circular")
         typing.set_size_request(48, 48)
         typing.set_valign(Gtk.Align.CENTER)
+        self._new = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="New conversation")
+        self._new.add_css_class("circular")
+        self._new.set_size_request(48, 48)
+        self._new.set_valign(Gtk.Align.CENTER)
+        self._new.connect("clicked", lambda _b: self._new_conversation())
         controls.append(typing)
         controls.append(self._mic)
+        controls.append(self._new)
         self.append(controls)
 
         self._entry = Gtk.Entry(placeholder_text="Ask Arcee…", hexpand=True)
@@ -160,6 +177,7 @@ class AgentPage(Gtk.Box):
             None,
         )
         self._agent.connect("g-signal", self._on_signal)
+        self._agent.call("Status", None, Gio.DBusCallFlags.NONE, -1, None, self._on_status)
 
     # --- talking to arceed ----------------------------------------------------------
 
@@ -178,8 +196,41 @@ class AgentPage(Gtk.Box):
             self._entry.set_text("")
             self._call("Run", GLib.Variant("(s)", (text,)))
 
-    def _toggle_listening(self) -> None:
-        self._call("StopListening" if self._listening else "StartListening")
+    def _on_mic(self) -> None:
+        if self._working:
+            self._call("Cancel")
+        else:
+            self._call("StopListening" if self._listening else "StartListening")
+
+    def _on_status(self, proxy: Any, result: Any) -> None:
+        # Opened while Arcee works on something: show that, with Stop.
+        try:
+            status = json.loads(proxy.call_finish(result).unpack()[0])
+        except GLib.Error:
+            return  # arceed is not running yet; it starts on the first request
+        if status.get("state") == "running":
+            self._set_working(True, status.get("step") or "Working…")
+            self._add(status.get("request", ""), "arcee-you", halign=Gtk.Align.END)
+
+    def _set_working(self, working: bool, status: str) -> None:
+        self._working = working
+        self.wave.state = "working" if working else "idle"
+        self._status.set_label(status)
+        self._new.set_sensitive(not working)
+        self._mic.set_icon_name(
+            "media-playback-stop-symbolic" if working else "audio-input-microphone-symbolic"
+        )
+        self._mic.set_tooltip_text("Stop" if working else "Speak")
+        if working:
+            self._mic.add_css_class("working")
+        else:
+            self._mic.remove_css_class("working")
+
+    def _new_conversation(self) -> None:
+        while (child := self._log.get_first_child()) is not None:
+            self._log.remove(child)
+        self._open_questions.clear()
+        self._entry.grab_focus()
 
     def _on_typing(self, button: Gtk.ToggleButton) -> None:
         self._typing.set_reveal_child(button.get_active())
@@ -191,8 +242,10 @@ class AgentPage(Gtk.Box):
         match signal:
             case "Listening":
                 self._listening = bool(value)
-                self.wave.state = "listening" if value else "idle"
-                self._status.set_label("Listening…" if value else "Ask me anything")
+                # While Arcee works the ring and the line belong to the work.
+                if not self._working:
+                    self.wave.state = "listening" if value else "idle"
+                    self._status.set_label("Listening…" if value else IDLE_TEXT)
                 if value:
                     self._mic.add_css_class("listening")
                 else:
@@ -204,17 +257,22 @@ class AgentPage(Gtk.Box):
                 if heard.get("error"):
                     self._add(heard["error"], "dim-label")
             case "Started":
-                self.wave.state = "working"
-                self._status.set_label("Working…")
+                self._set_working(True, "Working…")
                 self._add(value, "arcee-you", halign=Gtk.Align.END)
             case "Progress":
                 self._add(value, "dim-label")
+            case "Step":
+                if self._working:
+                    self._status.set_label(value)
             case "Question":
                 self._ask(json.loads(value))
             case "Finished":
                 done = json.loads(value)
-                self.wave.state = "idle"
-                self._status.set_label("Ask me anything")
+                self._set_working(False, IDLE_TEXT)
+                # A question left unanswered can no longer be answered.
+                for card in self._open_questions:
+                    card.set_sensitive(False)
+                self._open_questions.clear()
                 reply = done.get("reply") or (
                     "Stopped." if done.get("status") == "stopped" else done.get("status", "")
                 )
@@ -251,6 +309,8 @@ class AgentPage(Gtk.Box):
 
         def answer(value: str) -> None:
             buttons.set_sensitive(False)
+            if buttons in self._open_questions:
+                self._open_questions.remove(buttons)
             self._call("Answer", GLib.Variant("(ss)", (question["id"], value)))
 
         if question.get("kind") == "confirm":
@@ -270,5 +330,6 @@ class AgentPage(Gtk.Box):
             entry.connect("activate", lambda e: answer(e.get_text()))
             buttons.append(entry)
         card.append(buttons)
+        self._open_questions.append(buttons)
         self._log.append(card)
         GLib.idle_add(self._scroll_to_end)

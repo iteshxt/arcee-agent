@@ -60,6 +60,75 @@ def describe(event: Event) -> str | None:
             return None
 
 
+# What each tool is doing, in words a person watching would use. The wire names are
+# the tool names with "." as "_". `{}` takes the tool's main argument when it has one.
+DOING: Final = {
+    "app_open": "Opening {}",
+    "app_close": "Closing {}",
+    "app_list": "Looking at the open apps",
+    "browser_tabs": "Looking at Chrome's tabs",
+    "browser_navigate": "Going to {}",
+    "browser_click": "Clicking in Chrome",
+    "browser_fill": "Typing in Chrome",
+    "browser_back": "Going back in Chrome",
+    "browser_scroll": "Scrolling in Chrome",
+    "browser_read_text": "Reading the page",
+    "browser_get_elements": "Looking over the page",
+    "control_ask_user": "Waiting for your answer",
+    "control_wait": "Waiting a moment",
+    "fs_read": "Reading {}",
+    "fs_write": "Writing {}",
+    "fs_list": "Looking in {}",
+    "fs_search": "Searching your files for {}",
+    "fs_copy": "Copying files",
+    "fs_move": "Moving files",
+    "fs_trash": "Moving files to the bin",
+    "fs_open_with_default": "Opening {}",
+    "kbd_type": "Typing",
+    "kbd_key": "Pressing keys",
+    "screen_read": "Reading the screen",
+    "screen_look": "Looking at the screen",
+    "screen_find": "Finding {} on screen",
+    "screen_click": "Clicking",
+    "screen_scroll": "Scrolling",
+    "shell_run": "Running a command",
+    "shell_script": "Running a script",
+    "web_search": "Searching the web for {}",
+    "web_fetch": "Reading {}",
+    "window_list": "Looking at the open windows",
+    "window_act": "Arranging windows",
+    "ui_windows": "Looking at the open windows",
+    "ui_tree": "Looking over the window",
+    "ui_act": "Clicking in the window",
+    "system_status": "Checking the system",
+    "network_status": "Checking the network",
+}
+THINKING: Final = "Thinking…"
+SUBJECT_ARGS: Final = ("name", "app", "url", "query", "path", "what", "target")
+SUBJECT_CHARS: Final = 40
+
+
+def doing(event: Event) -> str | None:
+    """What Arcee is doing right now, for the pill and the app; None to keep the last."""
+    match event:
+        case ModelTurn(call=call) if call is not None:
+            template = DOING.get(call.name)
+            if template is None:
+                return f"Using {call.name.replace('_', ' ')}"
+            subject = next((str(call.args[k]) for k in SUBJECT_ARGS if call.args.get(k)), "")
+            if len(subject) > SUBJECT_CHARS:
+                subject = subject[: SUBJECT_CHARS - 1] + "…"
+            if "{}" in template and not subject:
+                return template.replace(" {}", "").replace("{} ", "").replace("{}", "")
+            return template.format(subject)
+        case ToolRan() | Escalated():
+            return THINKING
+        case StepStarted(do=do) if do:
+            return do
+        case _:
+            return None
+
+
 class AgentService(ServiceInterface):
     def __init__(
         self,
@@ -76,6 +145,7 @@ class AgentService(ServiceInterface):
         self._listening: asyncio.Task[None] | None = None
         self._task: asyncio.Task[None] | None = None
         self._request = ""
+        self._step = ""
         self._questions: dict[str, asyncio.Future[str]] = {}
         self._ids = itertools.count(1)
         # Ends the service (set by `serve` to disconnect its bus).
@@ -135,7 +205,13 @@ class AgentService(ServiceInterface):
 
     @method()
     def Status(self) -> DBusStr:
-        return json.dumps({"state": "running" if self.busy else "idle", "request": self._request})
+        return json.dumps(
+            {
+                "state": "running" if self.busy else "idle",
+                "request": self._request,
+                "step": self._step if self.busy else "",
+            }
+        )
 
     @method()
     async def Recent(self, limit: DBusUInt32) -> DBusStr:
@@ -162,6 +238,10 @@ class AgentService(ServiceInterface):
     @signal()
     def Progress(self, line: str) -> DBusStr:
         return line
+
+    @signal()
+    def Step(self, doing: str) -> DBusStr:
+        return doing
 
     @signal()
     def Question(self, payload: str) -> DBusStr:
@@ -229,6 +309,7 @@ class AgentService(ServiceInterface):
         presence = self._runner.presence
         held = presence.held
         await presence.release()
+        self._set_step("Waiting for your answer")
         self.Question(json.dumps({"id": question_id, **payload}))
         try:
             return await future
@@ -245,6 +326,7 @@ class AgentService(ServiceInterface):
 
     async def _run(self, request: str) -> None:
         self.Started(request)
+        self._set_step(THINKING)
         payload: dict[str, Any]
         try:
             result = await self._runner.run(request, self, self._progress)
@@ -273,6 +355,13 @@ class AgentService(ServiceInterface):
     def _progress(self, event: Event) -> None:
         if (line := describe(event)) is not None:
             self.Progress(line)
+        if (step := doing(event)) is not None:
+            self._set_step(step)
+
+    def _set_step(self, step: str) -> None:
+        if step != self._step:
+            self._step = step
+            self.Step(step)
 
 
 async def serve(runner: TaskRunner, bus: MessageBus) -> None:
