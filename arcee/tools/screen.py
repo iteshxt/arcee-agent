@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Literal, Protocol
 
+from PIL import Image
 from pydantic import Field, model_validator
 
 from arcee.core.policy import Policy, Tier
@@ -18,8 +19,10 @@ from arcee.platform.screen import Shot, TextLine, keyvals
 from arcee.platform.shell import ShellUnavailableError
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 from arcee.tools.desktop import RISKY
+from arcee.vision import VisionError
 
 MAX_LINES: Final = 150
+NO_VISION: Final = "no vision model is set up (it needs GROQ_API_KEY)"
 BUTTONS: Final = {"left": 1, "middle": 2, "right": 3}
 # Keys whose press can submit, delete or close something.
 RISKY_KEYS: Final = frozenset({"return", "enter", "delete"})
@@ -40,12 +43,21 @@ class Screen(Protocol):
     async def type(self, text: str) -> None: ...
 
 
+class Looker(Protocol):
+    """A vision model (qwen on Groq; a fake in tests)."""
+
+    async def ask(self, image: Image.Image, question: str, max_tokens: int = 400) -> str: ...
+    async def locate(self, image: Image.Image, what: str) -> tuple[int, int] | None: ...
+
+
 @dataclass
 class ScreenSession:
     screen: Screen
-    # The last reading: t_N -> its line. Cleared by anything that may move the text.
+    # The last reading: t_N (OCR) and v_N (found by looking) -> where it is. Cleared by
+    # anything that may move what is on screen.
     lines: dict[str, TextLine] = field(default_factory=dict[str, TextLine])
     size: tuple[int, int] = (0, 0)
+    vision: Looker | None = None
 
 
 class _ScreenTool[A: ToolArgs](Tool[A]):
@@ -103,7 +115,9 @@ class ScreenRead(_ScreenTool[ReadArgs]):
 
 class ClickArgs(ToolArgs):
     target: str | None = Field(
-        default=None, pattern=r"^t_\d+$", description="A t_N from screen.read"
+        default=None,
+        pattern=r"^[tv]_\d+$",
+        description="A t_N from screen.read or a v_N from screen.find",
     )
     x: int | None = Field(default=None, ge=0, description="Or a point: x in screen pixels")
     y: int | None = Field(default=None, ge=0)
@@ -258,14 +272,115 @@ def _text(session: ScreenSession, target: str) -> str:
     return line.text[:80] if line else ""
 
 
-def screen_tools(screen: Screen | None = None) -> list[Tool[Any]]:
+class LookArgs(ToolArgs):
+    question: str = Field(min_length=3, description="What to find out from the screen")
+    window: str = Field(
+        default="", description="Bring the window with this title forward first; empty: as is"
+    )
+
+
+class ScreenLook(_ScreenTool[LookArgs]):
+    name = "screen.look"
+    read_only = True
+    untrusted: ClassVar[bool] = True
+    description = (
+        "Look at the screen with a vision model and answer a question about it: what is "
+        "shown, which state a control is in, whether a dialog or error is up."
+    )
+    usage = Usage(
+        when="The answer is in pictures, colours, icons or layout that screen.read's text "
+        "cannot give.",
+        avoid="Plain text on screen: screen.read is faster and free.",
+        example='screen.look(question="Is the microphone muted in the top bar?")',
+    )
+    args_model = LookArgs
+
+    def changes_things(self, args: LookArgs) -> bool:
+        return bool(args.window)
+
+    async def run(self, args: LookArgs, ctx: ToolContext) -> ToolResult:
+        if self.session.vision is None:
+            return ToolResult.fail(NO_VISION)
+        try:
+            image = await _screenshot(self.session, args.window)
+            answer = await self.session.vision.ask(image, args.question)
+        except (ShellUnavailableError, VisionError) as exc:
+            return ToolResult.fail(str(exc))
+        return ToolResult.ok("Looked at the screen", data={"answer": answer})
+
+
+class FindArgs(ToolArgs):
+    what: str = Field(
+        min_length=3, description="What to find, as you would point it out to a person"
+    )
+    window: str = Field(
+        default="", description="Bring the window with this title forward first; empty: as is"
+    )
+
+
+class ScreenFind(_ScreenTool[FindArgs]):
+    name = "screen.find"
+    read_only = True
+    description = (
+        "Find something on the screen by how it looks (an icon, a button, a field) and get a "
+        "v_N target for screen.click. For things without text that screen.read cannot name."
+    )
+    usage = Usage(
+        when="You must click something screen.read did not list: an icon, a toggle, a picture.",
+        avoid="Text that screen.read lists: click its t_N.",
+        mistakes="A vague description; say what it looks like and where, e.g. 'the gear "
+        "icon at the top right of the Files window'.",
+        example='screen.find(what="the gear icon in the top right of the Files window")',
+    )
+    args_model = FindArgs
+
+    def changes_things(self, args: FindArgs) -> bool:
+        return bool(args.window)
+
+    async def run(self, args: FindArgs, ctx: ToolContext) -> ToolResult:
+        if self.session.vision is None:
+            return ToolResult.fail(NO_VISION)
+        try:
+            image = await _screenshot(self.session, args.window)
+            point = await self.session.vision.locate(image, args.what)
+        except (ShellUnavailableError, VisionError) as exc:
+            return ToolResult.fail(str(exc))
+        if point is None:
+            return ToolResult.fail(f"{args.what!r} is not on the screen")
+        width, _ = self.session.size
+        scale = width / image.width if image.width else 1.0
+        x, y = round(point[0] * scale), round(point[1] * scale)
+        target = f"v_{sum(1 for t in self.session.lines if t.startswith('v_')) + 1}"
+        self.session.lines[target] = TextLine(args.what[:80], x - 1, y - 1, 2, 2)
+        return ToolResult.ok(
+            f"Found {args.what} at ({x}, {y})", data={"target": target, "at": [x, y]}
+        )
+
+
+async def _screenshot(session: ScreenSession, window: str) -> Image.Image:
+    if window and not await session.screen.focus(window):
+        raise ShellUnavailableError(f"no window titled {window!r}; see window.list")
+    shot = await session.screen.capture()
+    session.size = (shot.screen_width, shot.screen_height)
+    with Image.open(shot.path) as image:
+        return image.convert("RGB")
+
+
+def screen_tools(screen: Screen | None = None, vision: Looker | None = None) -> list[Tool[Any]]:
     if screen is None:
         from arcee.platform.screen import GnomeScreen
 
         screen = GnomeScreen()
-    session = ScreenSession(screen)
+    if vision is None:
+        from arcee.models.presets import rate_budget
+        from arcee.vision import Vision
+
+        vision = Vision(rate_budget())
+    session = ScreenSession(screen, vision=vision)
     return [
         ScreenRead(session),
+        ScreenLook(session),
+        ScreenFind(session),
         ScreenClick(session),
         ScreenScroll(session),
         KbdType(session),

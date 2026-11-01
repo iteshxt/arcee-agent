@@ -132,7 +132,7 @@ Prerequisites on the machine:
 - [x] Input through the extension's Clutter virtual pointer and keyboard (decision 0009); RemoteDesktop portal kept as the route without the extension
 - [ ] ydotool fallback; pressed set mirrored to `$XDG_RUNTIME_DIR/arcee/pressed.json`
 - [ ] `ScreenMap`: scaling, fractional scale, multi-monitor offsets
-- [x] Set-of-marks as text: OCR lines numbered `t_N` with centres (`screen.read`), raw coordinates with confirmation (level 4); marks drawn on images wait for a vision Core
+- [x] Set-of-marks as text: OCR lines numbered `t_N` with centres (`screen.read`), raw coordinates with confirmation (level 4); `screen.find` and `screen.look` with qwen3.8-27b by grid cells (decision 0013); pointer glides to targets
 - [x] `screen.read`, `screen.click`, `screen.scroll`, `kbd.type`, `kbd.key`; pointer moves verified and retried. Level escalation still to do
 - [x] Kill switch Super+Shift+Escape: releases input and cancels `arcee-cli run`; every input call is whole, so no watchdog is needed yet. `arceed --release-input` comes with the daemon
 
@@ -211,3 +211,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-11-01** — Names under the developer's domain (decision 0011): extension `arcee@iteshxt.me`, app `me.iteshxt.Arcee`, D-Bus `me.iteshxt.Arcee.Shell` and `.Agent`, Chrome host `me.iteshxt.arcee.browser`; credit to Itesh Tomar (iteshxt.me) in metadata, README and the app's About. Installers moved to `arcee/install.py` and clean up the old names.
 - **2026-11-01** — Models take turns (decision 0012): gpt-oss-20b, qwen3.8-27b and gpt-oss-120b each have their own Groq allowance; a call goes to the first that need not wait, every request starts on the 20b-led rank, and 120b leads the escalation rank.
 - **2026-11-01** — The app gains keys (GNOME Keyring), a Whisper usage bar, an all-of-these permission switch, first-run setup screens and Fix buttons in Diagnostics, all on `arcee/install.py`. Tested in a headless GNOME Shell: every setup step, saving a permission set, the keys and the About dialog.
+- **2026-11-01** — Vision (decision 0013): `screen.find` locates icons and buttons with qwen3.8-27b in two grid rounds and a local snap (9 px and 21 px from the centre on a test desktop); `screen.look` answers questions about the screen. The pointer glides to its target.

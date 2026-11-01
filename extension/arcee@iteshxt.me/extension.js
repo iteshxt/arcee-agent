@@ -79,6 +79,10 @@ const INTERFACE = `
 // Shortest gap between synthetic events, so apps see a press before its release.
 const EVENT_GAP_US = 8000;
 const MOVE_ATTEMPTS = 3;
+// The pointer glides to a target in about 0.3 s instead of jumping there.
+const GLIDE_STEPS = 18;
+const GLIDE_STEP_MS = 16;
+const GLIDE_MIN_PX = 4;
 const OVERVIEW_CLOSE_MS = 500;
 const SCREENSHOT_HIDE_MS = 50;
 
@@ -344,6 +348,7 @@ class ShellBridge {
         // lose one axis ((706, 500) landed at (0, 500)) and open the overview. So move,
         // look where the pointer is and try again, and close an overview it opened.
         const overview = Main.overview.visible;
+        await this._glide(x, y);
         for (let attempt = 0; attempt < MOVE_ATTEMPTS; attempt++) {
             this._pointer.notify_absolute_motion(this._now(), x, y);
             await sleep(30); // the input thread applies it; the window sees it arrive
@@ -357,6 +362,20 @@ class ShellBridge {
             return true;
         }
         return false;
+    }
+
+    // Slide the pointer to (x, y) so the user can follow where Arcee is going.
+    async _glide(x, y) {
+        const [fromX, fromY] = global.get_pointer();
+        if (Math.hypot(x - fromX, y - fromY) < GLIDE_MIN_PX)
+            return;
+        for (let step = 1; step <= GLIDE_STEPS; step++) {
+            const t = step / GLIDE_STEPS;
+            const eased = 1 - (1 - t) ** 3; // fast start, gentle landing
+            this._pointer.notify_absolute_motion(
+                this._now(), fromX + (x - fromX) * eased, fromY + (y - fromY) * eased);
+            await sleep(GLIDE_STEP_MS);
+        }
     }
 
     _fail(invocation, message) {

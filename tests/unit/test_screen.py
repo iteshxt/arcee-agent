@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 
 from arcee.core.policy import Policy, Tier
@@ -17,11 +18,15 @@ from arcee.platform.shell import ShellUnavailableError
 from arcee.tools.base import ToolContext
 from arcee.tools.screen import (
     ClickArgs,
+    FindArgs,
     KbdKey,
     KbdType,
     KeyArgs,
+    LookArgs,
     ReadArgs,
     ScreenClick,
+    ScreenFind,
+    ScreenLook,
     ScreenRead,
     ScreenScroll,
     ScreenSession,
@@ -277,3 +282,72 @@ def test_lines_read_twice_are_kept_once() -> None:
     ]
 
     assert merge_lines(lines) == [lines[2], lines[1]]
+
+
+class ShotScreen(FakeScreen):
+    """A screen whose screenshot is a real file, twice the screen's size (HiDPI)."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__([])
+        Image.new("RGB", (2560, 1600), "white").save(path)
+        self.path = path
+
+    async def capture(self) -> Shot:
+        return Shot(self.path, 1280, 800)
+
+
+class Eyes:
+    def __init__(self, point: tuple[int, int] | None, answer: str = "") -> None:
+        self.point = point
+        self.answer = answer
+        self.asked: list[str] = []
+
+    async def ask(self, image: Image.Image, question: str, max_tokens: int = 400) -> str:
+        self.asked.append(question)
+        return self.answer
+
+    async def locate(self, image: Image.Image, what: str) -> tuple[int, int] | None:
+        self.asked.append(what)
+        return self.point
+
+
+async def test_find_returns_a_target_that_clicks_where_it_was_seen(tmp_path: Path) -> None:
+    screen = ShotScreen(tmp_path / "shot.png")
+    session = ScreenSession(screen, vision=Eyes((2000, 300)))  # pyright: ignore[reportArgumentType]
+
+    found = await ScreenFind(session).run(FindArgs(what="the gear icon"), CTX)
+    clicked = await ScreenClick(session).run(ClickArgs(target="v_1"), CTX)
+
+    assert found.data == {"target": "v_1", "at": [1000, 150]}  # image pixels to screen
+    assert clicked.summary == "Clicked the gear icon"
+    assert screen.calls[-1] == ("click", (1000, 150, 1, 1))
+
+
+async def test_a_risky_find_asks_before_the_click(tmp_path: Path) -> None:
+    session = ScreenSession(ShotScreen(tmp_path / "s.png"), vision=Eyes((10, 10)))  # pyright: ignore[reportArgumentType]
+
+    await ScreenFind(session).run(FindArgs(what="the red Delete button"), CTX)
+
+    assert ScreenClick(session).tier_for(ClickArgs(target="v_1"), Policy()) is Tier.CONFIRM
+
+
+async def test_find_says_when_it_is_not_there(tmp_path: Path) -> None:
+    session = ScreenSession(ShotScreen(tmp_path / "s.png"), vision=Eyes(None))  # pyright: ignore[reportArgumentType]
+
+    result = await ScreenFind(session).run(FindArgs(what="a unicorn"), CTX)
+
+    assert result.error == "'a unicorn' is not on the screen"
+
+
+async def test_look_answers_and_without_a_model_says_why(tmp_path: Path) -> None:
+    eyes = Eyes(None, answer="The microphone is muted.")
+    session = ScreenSession(ShotScreen(tmp_path / "s.png"), vision=eyes)  # pyright: ignore[reportArgumentType]
+
+    looked = await ScreenLook(session).run(LookArgs(question="Is the mic muted?"), CTX)
+    blind = await ScreenLook(ScreenSession(ShotScreen(tmp_path / "t.png"))).run(  # pyright: ignore[reportArgumentType]
+        LookArgs(question="Is the mic muted?"), CTX
+    )
+
+    assert looked.data == {"answer": "The microphone is muted."}
+    assert ScreenLook.untrusted
+    assert "no vision model" in str(blind.error)
