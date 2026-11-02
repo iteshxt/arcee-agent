@@ -19,6 +19,8 @@ from arcee.models.base import Message
 # only when the request calls for them.
 CONTROL: Final = ("control.done", "control.ask_user", "control.replan")
 NOTE: Final = ("control.note",)
+# Looking up and forgetting what Arcee remembers (recall already brings what matters).
+MEMORY: Final = ("memory.*", "control.note")
 WAIT: Final = ("control.wait",)
 SYSTEM: Final = ("system.*", "network.*")
 FILES: Final = ("fs.*",)
@@ -98,6 +100,11 @@ _QUESTION: Final = _words(
     r"can|could)\b|\b(tell me (about|who|what|why|how)|explain|define|meaning of)\b"
 )
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
+# Asking about memory, not adding to it ("remember that ..." is a note).
+_MEMORY: Final = _words(
+    r"\b(do you remember|what do you remember|you remembered|recall|forget|memor(y|ies)|"
+    r"do you know|what do you know|know about me)\b"
+)
 # "Open X" may mean a file or an app: it brings in both.
 _OPEN: Final = _words(r"\bopen\b")
 # In a request about the web, only words that clearly involve this computer add local
@@ -148,7 +155,9 @@ def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
         else:
             local = [FILES, APPS, SYSTEM, SHELL]  # nothing recognised: everything local
     filters: tuple[str, ...] = tuple(f for group in local for f in group) + CONTROL
-    if _REMEMBER.search(request) or "control_note" in _called(messages):
+    if _MEMORY.search(request) or any(c.startswith("memory_") for c in _called(messages)):
+        filters += MEMORY
+    elif _REMEMBER.search(request) or "control_note" in _called(messages):
         filters += NOTE
     if browser or APPS in local:
         filters += WAIT  # pages and apps take a moment to load

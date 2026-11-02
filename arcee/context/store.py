@@ -297,19 +297,7 @@ class Store:
 
     async def save_note(self, task_id: str, text: str, importance: float) -> str:
         """`control.note`: a durable memory the user can see and delete (spec section 8)."""
-        note_id = f"m_{secrets.token_hex(4)}"
-
-        def write() -> None:
-            with self._db:
-                now = time.time()
-                self._db.execute(
-                    "INSERT INTO memories (id, task_id, text, importance, created, source, "
-                    "updated) VALUES (?, ?, ?, ?, ?, 'note', ?)",
-                    (note_id, task_id, redact(text), importance, now, now),
-                )
-
-        await self._run(write)
-        return note_id
+        return await self.save_memory(text, importance, task_id=task_id, source="note")
 
     # --- memory (decision 0014) ------------------------------------------------------
 
@@ -436,6 +424,22 @@ class Store:
             return [(MemoryRow(*row[:7]), float(row[7])) for row in rows]
 
         return await self._run(read)
+
+    async def recall_items(
+        self, query: str, exclude_task: str | None
+    ) -> list[tuple[str, str, str]]:
+        """`memory.recall`: what recall finds for `query`, as (id, text, date)."""
+        from datetime import datetime
+
+        from arcee.context.recall import pack, rank
+
+        facts = await self.search_memories(query, 20)
+        summaries = await self.search_summaries(query, 20, exclude=exclude_task)
+        items = pack(rank(facts, summaries, [], time.time()))
+        return [
+            (item.id, item.text, datetime.fromtimestamp(item.when).strftime("%Y-%m-%d"))
+            for item in items
+        ]
 
     async def save_summary(self, task_id: str, text: str) -> None:
         def write() -> None:

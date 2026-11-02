@@ -88,7 +88,7 @@ class TaskRunner:
         # Digests still running: aclose waits for them before closing the store.
         self._digests: set[asyncio.Task[None]] = set()
         self.store = store or Store(data_dir())
-        self.registry = builtin_registry()
+        self.registry = builtin_registry(memory=self.store)
         self.presence = presence or NoPresence()
         self._limits = limits
         self._plan = plan
