@@ -22,9 +22,10 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from arcee import install  # noqa: E402
+from arcee import install, local_models  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
 from arcee.app.agent_page import AgentPage  # noqa: E402
+from arcee.app.local_setup import LocalSetupDialog  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
@@ -219,9 +220,11 @@ class ArceeWindow(Adw.ApplicationWindow):
             title="Thinking", description="Which models read your requests and decide."
         )
         first: Gtk.CheckButton | None = None
+        self._core_checks: dict[str, Gtk.CheckButton] = {}
         for key, title, about in CORE_CHOICES:
             check = Gtk.CheckButton(active=self._settings.core == key, group=first)
             first = first or check
+            self._core_checks[key] = check
             check.connect("toggled", self._on_core, key)
             row = Adw.ActionRow(title=title, subtitle=about, activatable_widget=check)
             row.add_prefix(check)
@@ -347,9 +350,29 @@ class ArceeWindow(Adw.ApplicationWindow):
         restart_daemon_when_idle(self._background, lambda _text: None)
 
     def _on_core(self, check: Gtk.CheckButton, key: str) -> None:
-        if check.get_active() and self._settings.core != key:
-            self._settings.core = cast(Core, key)
-            self._saved()
+        if not check.get_active() or self._settings.core == key:
+            return
+        if key != "local":
+            self._use_core(key)
+            return
+
+        # Local needs Ollama and the model: if either is missing, set them up first.
+        def checked(status: local_models.LocalStatus) -> None:
+            if status.ready:
+                self._use_core("local")
+                return
+            LocalSetupDialog(
+                self._background.run,
+                on_ready=lambda: self._use_core("local"),
+                on_cancel=lambda: self._core_checks[self._settings.core].set_active(True),
+            ).present(self)
+
+        self._background.run(local_models.status(), checked)
+
+    def _use_core(self, key: str) -> None:
+        self._settings.core = cast(Core, key)
+        self._core_checks[key].set_active(True)
+        self._saved()
 
     def _refresh_budget(self) -> bool:
         self._refresh_speech()
