@@ -661,6 +661,25 @@ class ArceeApp(Adw.Application):
 
 
 def main() -> None:
+    import faulthandler
+    import logging
+
     from arcee.config import load_env
 
+    # What went wrong, kept for a report: warnings and errors, and the stack of every
+    # thread if Python itself crashes (GTK or a C library underneath).
+    logs = data_dir() / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=logs / "app.log",
+        level=logging.WARNING,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    def report(kind: Any, value: Any, trace: Any) -> None:
+        logging.getLogger("arcee-app").error("uncaught", exc_info=(kind, value, trace))
+        sys.__excepthook__(kind, value, trace)
+
+    sys.excepthook = report
+    faulthandler.enable(open(logs / "app-crash.log", "a"))  # noqa: SIM115 - open for life
     ArceeApp(load_env()).run(sys.argv)
