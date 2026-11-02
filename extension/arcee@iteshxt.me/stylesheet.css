@@ -224,3 +224,86 @@
 .arcee-stop:hover {
   background-color: #e74c3c;
 }
+
+/* A light menu (GNOME's light style): the same parts, dark ink instead of light. The
+   panel adds .arcee-light when the menu's own background is light. */
+.arcee-menu.arcee-light .arcee-card {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.arcee-menu.arcee-light .arcee-question {
+  background-color: rgba(255, 122, 26, 0.16);
+}
+
+.arcee-menu.arcee-light .arcee-card-title {
+  color: #1d1d1f;
+}
+
+.arcee-menu.arcee-light .arcee-card-body {
+  color: rgba(0, 0, 0, 0.72);
+}
+
+.arcee-menu.arcee-light .arcee-button {
+  background-color: rgba(0, 0, 0, 0.07);
+  color: #1d1d1f;
+}
+
+.arcee-menu.arcee-light .arcee-button:hover {
+  background-color: rgba(0, 0, 0, 0.13);
+}
+
+.arcee-menu.arcee-light .arcee-primary,
+.arcee-menu.arcee-light .arcee-primary:hover {
+  color: #ffffff;
+}
+
+.arcee-menu.arcee-light .arcee-primary {
+  background-color: #f26a00;
+}
+
+.arcee-menu.arcee-light .arcee-primary:hover {
+  background-color: #ff7a1a;
+}
+
+.arcee-menu.arcee-light .arcee-icon-button {
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.arcee-menu.arcee-light .arcee-icon-button:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+  color: #1d1d1f;
+}
+
+.arcee-menu.arcee-light .arcee-budget-title {
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.arcee-menu.arcee-light .arcee-budget-name {
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.arcee-menu.arcee-light .arcee-budget-left {
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.arcee-menu.arcee-light .arcee-bar-track {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+.arcee-menu.arcee-light .arcee-bar-fill {
+  background-color: #f28c00;
+}
+
+.arcee-menu.arcee-light .arcee-wave-bar {
+  background-gradient-start: #ffb02e;
+  background-gradient-end: #e65c00;
+}
+
+.arcee-menu.arcee-light .arcee-stop {
+  background-color: #c0392b;
+  color: #ffffff;
+}
+
+.arcee-menu.arcee-light .arcee-stop:hover {
+  background-color: #e74c3c;
+}

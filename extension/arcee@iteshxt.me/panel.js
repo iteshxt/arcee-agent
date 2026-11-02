@@ -90,6 +90,7 @@ class ArceeIndicator extends PanelMenu.Button {
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (!open)
                 return;
+            this._matchMenuShade();
             this._refresh();
             // Open the menu and type: the field takes the keyboard (unless a question waits).
             if (!this._question.visible) {
@@ -320,6 +321,22 @@ class ArceeIndicator extends PanelMenu.Button {
         this._say(this._statusTitle.text, shorten(reply, 400));
         if (!this.menu.isOpen)
             Main.notify('Arcee', shorten(reply, 200));
+    }
+
+    // GNOME's light style draws menus light; the panel's colours were made for a dark one.
+    // Read the menu's own background (whatever theme or setting chose it) and match it.
+    _matchMenuShade() {
+        let light = false;
+        try {
+            const c = this.menu.box.get_theme_node().get_background_color();
+            light = 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue > 140;
+        } catch (e) {
+            logError(e, 'Arcee: could not read the menu colour');
+        }
+        if (light)
+            this.menu.actor.add_style_class_name('arcee-light');
+        else
+            this.menu.actor.remove_style_class_name('arcee-light');
     }
 
     // --- recent and budget -------------------------------------------------------------
