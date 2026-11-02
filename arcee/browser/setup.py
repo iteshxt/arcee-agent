@@ -14,7 +14,12 @@ from typing import Final
 
 from arcee.browser.host import EXTENSION_ID, HOST_NAME
 
-EXTENSION_DIR: Final = Path(__file__).resolve().parents[2] / "browser-ext"
+# Where Chrome loads the extension from: the checkout, or where the .deb puts it.
+PACKAGED_EXTENSION_DIR: Final = Path("/usr/share/arcee/browser-ext")
+_CHECKOUT_EXTENSION_DIR: Final = Path(__file__).resolve().parents[2] / "browser-ext"
+EXTENSION_DIR: Final = (
+    _CHECKOUT_EXTENSION_DIR if _CHECKOUT_EXTENSION_DIR.is_dir() else PACKAGED_EXTENSION_DIR
+)
 
 
 def chrome_hosts_dir() -> Path:

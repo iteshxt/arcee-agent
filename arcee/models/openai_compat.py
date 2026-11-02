@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import re
 from collections.abc import Sequence
 from typing import Any, Final, NoReturn, cast
 
@@ -31,6 +32,7 @@ from arcee.models.base import (
 )
 from arcee.models.budget import HeaderBudget, describe_wait, parse_refusal
 from arcee.models.errors import (
+    MalformedReplyError,
     ModelUnavailableError,
     QuotaExhaustedError,
     RateLimitedError,
@@ -218,9 +220,18 @@ class OpenAICompatAdapter(ModelAdapter):
             self._refused(message, _retry_after(response))
         if status in (402, 403):
             raise QuotaExhaustedError(f"{self.profile.model}: {message}")
+        if status == 400 and _MODEL_FAILED.search(message):
+            # Groq could not parse what the model wrote (a broken tool call) and sent
+            # nothing back to repair: the model failed, not the request. Ending the task
+            # here lost runs that were nearly done; the step loop asks again instead.
+            raise MalformedReplyError(f"{self.profile.model}: {message}")
         if status >= 500 or status == 200:
             raise ServerBusyError(f"HTTP {status}: {message}")
         raise ModelUnavailableError(f"HTTP {status}: {message}")
+
+
+# Groq's words for a reply it could not turn into a tool call.
+_MODEL_FAILED: Final = re.compile(r"parsing failed|failed to call a function|tool_use_failed", re.I)
 
 
 def _messages(messages: Sequence[Message]) -> list[dict[str, Any]]:

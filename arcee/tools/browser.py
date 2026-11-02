@@ -442,11 +442,14 @@ class FillArgs(ToolArgs):
 class BrowserFill(_BrowserTool[FillArgs]):
     name = "browser.fill"
     description = (
-        "Type text into a numbered field on the current Chrome page, replacing its contents."
+        "Type text into a numbered field on the current Chrome page, replacing its contents; "
+        "for a dropdown, the option to choose; for a checkbox, true or false."
     )
     usage = Usage(
-        when="A form field, search box or message body needs text.",
-        mistakes="Filling the wrong field: check the name in browser.get_elements first.",
+        when="A form field, search box or message body needs text, a dropdown needs an "
+        "option chosen, or a checkbox needs ticking.",
+        mistakes="Filling the wrong field: check the name in browser.get_elements first. "
+        "Clicking a dropdown to choose: fill it with the option's words instead.",
         example='browser.fill(target="el_4", text="Lunch on Friday?")',
     )
     args_model = FillArgs

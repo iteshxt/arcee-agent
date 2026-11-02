@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Protocol
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from arcee.core.policy import Policy, Tier
 from arcee.platform.atspi import Snapshot
@@ -132,6 +132,19 @@ class ActArgs(ToolArgs):
     )
     value: str | None = Field(default=None, description="Text for set_value")
 
+    @field_validator("action")
+    @classmethod
+    def _plain_set_value(cls, action: str) -> str:
+        # Models write set-text, set_text, type...: all mean set_value. Left as they were,
+        # set-text reached an element as an action name it did not have.
+        return SET_VALUE_ALIASES.get(action.strip().lower(), action.strip())
+
+
+# Names models use for setting an element's text or value.
+SET_VALUE_ALIASES: Final[dict[str, str]] = dict.fromkeys(
+    ("set-text", "set_text", "settext", "set-value", "setvalue", "type", "fill"), "set_value"
+)
+
 
 class UiAct(_DesktopTool[ActArgs]):
     name = "ui.act"
@@ -141,8 +154,11 @@ class UiAct(_DesktopTool[ActArgs]):
     )
     usage = Usage(
         when="You read the window with ui.tree and know what to press, pick or type.",
-        mistakes="Clicking a list entry to select it: use select; typing with click: use "
-        "set_value.",
+        mistakes="Clicking a list entry to select it: use select; typing with click or "
+        "kbd.type: use set_value on the editable element, then click the button that "
+        "confirms (Rename, OK, Save) instead of pressing Enter; opening a context menu "
+        "before a window action: run the window action (view.rename) on the selected item "
+        "directly.",
         example='ui.act(target="el_5", action="select")',
     )
     args_model = ActArgs

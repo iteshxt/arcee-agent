@@ -1,5 +1,10 @@
 """Putting Arcee's parts in place for this user: no sudo, nothing outside the home folder.
 
+Installed from the .deb (packaging/build-deb.sh), the package already holds the
+extension, the service, D-Bus activation, the launcher and the Chrome host for every
+user, so each step only says so and does what is left for this user (turn the
+extension on, restart the service).
+
 Used by `arcee-cli` (shell-extension, daemon-install, browser-setup) and by the
 app's first-run setup and Diagnostics buttons. Each step returns what it did, in
 lines for the user, and removes what an older Arcee left under its old names
@@ -20,6 +25,9 @@ from arcee.browser.setup import install as install_host
 from arcee.context.store import data_dir
 
 PROJECT: Final = Path(__file__).resolve().parents[1]
+# Where the .deb installs the arcee package; a checkout runs from anywhere else.
+PACKAGE_ROOT: Final = Path("/usr/lib/arcee")
+PACKAGED: Final = PROJECT == PACKAGE_ROOT
 SHELL_EXTENSION: Final = "arcee@iteshxt.me"
 APP_ID: Final = "me.iteshxt.Arcee"
 AGENT_BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
@@ -51,6 +59,13 @@ def _config() -> Path:
 def shell_extension() -> Report:
     """Link the GNOME Shell extension into the user's extensions and compile its settings."""
     report = Report()
+    if PACKAGED:
+        report.lines.append(f"installed for every user by the package: {SHELL_EXTENSION}")
+        report.next += [
+            "GNOME loads new extensions at login: log out and back in,",
+            f"then turn it on: gnome-extensions enable {SHELL_EXTENSION}",
+        ]
+        return report
     source = PROJECT / "extension" / SHELL_EXTENSION
     extensions = _data() / "gnome-shell" / "extensions"
     target = extensions / SHELL_EXTENSION
@@ -87,6 +102,13 @@ def enable_shell_extension() -> bool:
 def daemon() -> Report:
     """The systemd user unit, D-Bus activation and app launcher for arceed and the app."""
     report = Report()
+    if PACKAGED:
+        report.lines.append("the service and the app launcher are installed by the package")
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False, capture_output=True)
+        report.next.append(
+            "arceed starts on the panel's first request (log: journalctl --user -u arceed)"
+        )
+        return report
     bin_dir = Path(sys.executable).parent
     arceed = bin_dir / "arceed"
     if not arceed.exists():
@@ -147,8 +169,11 @@ def daemon() -> Report:
 def browser_bridge() -> Report:
     """Register the native messaging host with Chrome; the extension is loaded by hand."""
     report = Report()
-    launcher, manifest = install_host(data_dir())
-    report.lines += [f"registered the Chrome host: {manifest}", f"launcher: {launcher}"]
+    if PACKAGED:
+        report.lines.append("the Chrome host is registered for every user by the package")
+    else:
+        launcher, manifest = install_host(data_dir())
+        report.lines += [f"registered the Chrome host: {manifest}", f"launcher: {launcher}"]
     old = chrome_hosts_dir() / OLD_HOST
     with contextlib.suppress(FileNotFoundError):
         old.unlink()

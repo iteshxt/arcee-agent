@@ -10,12 +10,23 @@ from typing import Any
 import pytest
 from dbus_fast import DBusError
 from dbus_fast.aio import MessageBus
+from dbus_fast.service import ServiceInterface, signal
 
 from arcee.core.agent import Event, ModelTurn, ToolRan
 from arcee.core.presence import NoPresence
 from arcee.core.protocol import ConfirmRequest, ExecutorResult
-from arcee.daemon import BUS_NAME, OBJECT_PATH, THINKING, AgentService, describe, doing
+from arcee.daemon import (
+    BUS_NAME,
+    OBJECT_PATH,
+    THINKING,
+    AgentService,
+    describe,
+    doing,
+    watch_shell_stop,
+)
 from arcee.models.base import WireCall
+from arcee.platform.shell import BUS_NAME as SHELL_BUS_NAME
+from arcee.platform.shell import OBJECT_PATH as SHELL_OBJECT_PATH
 from arcee.runner import TaskResult, User
 
 pytestmark = pytest.mark.skipif(shutil.which("dbus-daemon") is None, reason="needs dbus-daemon")
@@ -62,6 +73,7 @@ def bus_address() -> Iterator[str]:
     yield address
     process.terminate()
     process.wait()
+    process.stdout.close()
 
 
 async def connect(address: str) -> MessageBus:
@@ -132,6 +144,37 @@ async def test_cancel_stops_the_request(bus_address: str) -> None:
     assert result == {"status": "stopped", "reply": ""}
     bus.disconnect()
     service_bus.disconnect()
+
+
+class FakeShell(ServiceInterface):
+    def __init__(self) -> None:
+        super().__init__(SHELL_BUS_NAME)
+
+    @signal()
+    def Stopped(self) -> None:
+        return None
+
+
+async def test_the_shell_stop_shortcut_stops_the_request(bus_address: str) -> None:
+    service_bus = await connect(bus_address)
+    service = AgentService(FakeRunner(hang=True))  # pyright: ignore[reportArgumentType]
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    await watch_shell_stop(service_bus, service)
+    shell_bus = await connect(bus_address)
+    shell = FakeShell()
+    shell_bus.export(SHELL_OBJECT_PATH, shell)
+    bus, agent = await client(bus_address)
+    finished: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    agent.on_finished(lambda payload: finished.set_result(json.loads(payload)))
+
+    await agent.call_run("wait forever")
+    shell.Stopped()
+    result = await asyncio.wait_for(finished, 5)
+
+    assert result == {"status": "stopped", "reply": ""}
+    for b in (bus, shell_bus, service_bus):
+        b.disconnect()
 
 
 def test_progress_lines_are_plain() -> None:

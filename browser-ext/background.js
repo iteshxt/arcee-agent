@@ -211,7 +211,20 @@ function fillElement(target, text, submit) {
   if (!el) throw new Error(`${target} is gone; get the elements again`);
   el.scrollIntoView({ block: "center" });
   el.focus();
-  if (el.isContentEditable) {
+  if (el.tagName === "SELECT") {
+    // A dropdown takes one of its options, by the words shown or by value.
+    const wanted = text.trim().toLowerCase();
+    const options = [...el.options];
+    const option = options.find((o) => o.text.trim().toLowerCase() === wanted || o.value.toLowerCase() === wanted)
+      || options.find((o) => o.text.toLowerCase().includes(wanted));
+    if (!option) throw new Error(`no option ${JSON.stringify(text)}; it has ${options.map((o) => o.text.trim()).join(", ")}`);
+    el.value = option.value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  } else if (el.type === "checkbox" || el.type === "radio") {
+    const on = !/^(false|no|off|0|unchecked)$/i.test(text.trim());
+    if (el.checked !== on) el.click();
+  } else if (el.isContentEditable) {
     document.execCommand("selectAll", false);
     document.execCommand("insertText", false, text);
   } else {
