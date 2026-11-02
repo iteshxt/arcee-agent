@@ -142,6 +142,21 @@ def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     )
 
 
+def digest_model_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
+    """The Context role (spec section 4): after each task, its summary and facts. The
+    cheap model first: a digest is short, and it runs after every task."""
+    if choice == "groq":
+        return RotatingAdapter(
+            [
+                OpenAICompatAdapter.provider(
+                    "groq", cloud_profile(model, schema=True), budget=rate_budget()
+                )
+                for model in (GROQ_SMALL, GROQ_MID, GROQ_LARGE)
+            ]
+        )
+    return planner_for(choice, host)  # locally the Planner's LFM3-Omni: no more VRAM
+
+
 def share_budget(ladder: list[ModelAdapter], planner: ModelAdapter) -> None:
     """The Planner draws from the budget of the ladder tier running the same model."""
     if planner.profile.tpm is None:

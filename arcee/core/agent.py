@@ -22,7 +22,7 @@ Without a Planner the whole request is one step with every tool.
 import asyncio
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -194,6 +194,8 @@ class _State:
     prelude: int = 1
     start: int = 1
     handoffs: list[Handoff] = field(default_factory=list[Handoff])
+    # What Arcee remembers that matters for the request or the current step.
+    memory: str = ""
 
 
 class Agent:
@@ -214,7 +216,9 @@ class Agent:
         on_event: Callable[[Event], None] = lambda event: None,
         clock: Callable[[], datetime] = datetime.now,
         presence: Presence | None = None,
+        recall: Callable[[str, str], Awaitable[str]] | None = None,
     ) -> None:
+        """`recall(query, task_id)` returns what Arcee remembers for a query (memory)."""
         if not ladder:
             raise ValueError("the escalation ladder needs at least one model")
         self._ladder = list(ladder)
@@ -231,6 +235,17 @@ class Agent:
         self._emit = on_event
         self._clock = clock
         self._presence = presence or NoPresence()
+        self._recall = recall
+
+    async def _remember(self, state: _State, query: str, task_id: str) -> None:
+        """Memory is an aid: when recall fails the request goes on without it."""
+        if self._recall is None:
+            return
+        try:
+            state.memory = await self._recall(query, task_id)
+        except Exception as error:  # a damaged history.db must not stop a request
+            self._emit(Guarded(state.steps, f"memory unavailable ({error})"))
+            state.memory = ""
 
     async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
         state = _State([Message("user", request)])
@@ -239,6 +254,7 @@ class Agent:
         ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
+                await self._remember(state, request, task_id)
                 planned = self._planner is not None and self._plan_if(request)
                 if planned and (failed := await self._plan(state, request)):
                     return failed
@@ -257,7 +273,9 @@ class Agent:
         while True:
             started = time.monotonic()
             try:
-                plan = await self._planner.plan(request, answers=answers, replan=replan)
+                plan = await self._planner.plan(
+                    request, answers=answers, replan=replan, memory=state.memory
+                )
             except ModelError as error:
                 # Planning is an aid: without a plan the whole request is one step.
                 self._emit(Guarded(state.steps, f"planner failed ({error}); running unplanned"))
@@ -292,6 +310,7 @@ class Agent:
                 )
                 state.index += 1
                 upcoming = state.plan.steps[state.index]
+                await self._remember(state, f"{request} {upcoming.do}", ctx.task_id)
                 state.start = len(state.messages)
                 state.messages.append(Message("user", f"Now step {upcoming.id}: {upcoming.do}"))
                 continue
@@ -417,11 +436,14 @@ class Agent:
         *,
         plan: PlannerOutput | None = None,
         index: int = 0,
+        memory: str = "",
     ) -> ToolRequest:
         """The exact request the Core gets for `messages`; the eval suite uses it too."""
         tools = self._registry.select(filters_for(messages)) if offered is None else offered
         guidance = "\n\n".join(
-            block for block in (plan_brief(plan, index), self._examples_for(messages)) if block
+            block
+            for block in (memory, plan_brief(plan, index), self._examples_for(messages))
+            if block
         )
         return ToolRequest(
             core_system(home=self._home, now=self._clock(), plan=guidance),
@@ -469,7 +491,9 @@ class Agent:
             asked=state.asked,
         )
         completion = await model.respond(
-            self.core_request(view, offered, plan=state.plan, index=state.index)
+            self.core_request(
+                view, offered, plan=state.plan, index=state.index, memory=state.memory
+            )
         )
         self._emit(
             ModelTurn(

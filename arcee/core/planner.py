@@ -106,8 +106,10 @@ class Planner:
         *,
         answers: Sequence[tuple[str, str]] = (),
         replan: ReplanContext | None = None,
+        memory: str = "",
     ) -> PlannerOutput:
-        """Plan `request`. `answers` are earlier clarify questions with the user's replies."""
+        """Plan `request`. `answers` are earlier clarify questions with the user's replies;
+        `memory` what Arcee remembers that bears on it (spec: the Planner pulls memory)."""
         text = f"Request: {request}"
         for question, answer in answers:
             text += f"\nYou asked: {question}\nThe user answered: {answer}"
@@ -119,6 +121,8 @@ class Planner:
                 f"Already tried: {tried}. Make a different plan."
             )
         system = planner_system(list(self._registry), home=self._home, now=self._clock())
+        if memory:
+            system += f"\n\n{memory}"
         response = await self.model.complete(
             ModelRequest(
                 system=system,

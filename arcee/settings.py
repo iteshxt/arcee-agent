@@ -32,6 +32,9 @@ class Settings:
     always_ask: list[str] = field(default_factory=list[str])
     # The first-run setup was finished (or skipped) once.
     setup_done: bool = False
+    # Learn from finished tasks (their summaries and facts) and bring back what matters
+    # (decision 0014). Off: nothing new is remembered and nothing is recalled.
+    memory: bool = True
     # Arcee turned its GNOME Shell extension on once (after the login that loaded it).
     # Never again after that: an extension the user turns off stays off.
     extension_turned_on: bool = False
@@ -58,6 +61,7 @@ def load(path: Path | None = None) -> Settings:
         always_ask=[str(name) for name in cast(list[Any], asks)] if isinstance(asks, list) else [],
         setup_done=raw.get("setup_done") is True,
         extension_turned_on=raw.get("extension_turned_on") is True,
+        memory=raw.get("memory") is not False,
     )
 
 

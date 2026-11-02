@@ -56,6 +56,6 @@ DEV="$REPO/.venv/bin/arcee-app"
 case_run fresh setup_fresh $DEV
 case_run corrupt setup_corrupt $DEV
 case_run readonly setup_readonly $DEV
-for page in agent models history permissions diagnostics; do case_run page-$page setup_done $DEV --page=$page; done
+for page in agent models history memory permissions diagnostics; do case_run page-$page setup_done $DEV --page=$page; done
 case_run packaged setup_fresh /usr/bin/python3 -I -c "import sys; sys.path[:0]=['$PKG/usr/lib/arcee','$PKG/usr/lib/arcee/vendor']; sys.argv=['arcee-app']; from arcee.app.window import main; main()"
 chmod -R u+w $T/robust 2>/dev/null

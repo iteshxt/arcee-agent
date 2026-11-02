@@ -191,6 +191,7 @@ async def run(
     plan: Literal["auto", "always", "never"],
     examples: bool = False,
     core: str | None = None,
+    memory: bool = True,
 ) -> int:
     terminal = Terminal(verbose=verbose)
     presence = terminal.presence = ShellPresence()
@@ -203,6 +204,7 @@ async def run(
         examples=examples,
         presence=presence,
         policy=settings.policy(),
+        memory=memory and settings.memory,
     )
     try:
         notes, problem = await runner.check()
@@ -567,6 +569,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="auto",
         help="plan the task first: auto plans multi-step requests only",
     )
+    run_cmd.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="neither recall memory nor remember this task (tests, throwaway runs)",
+    )
 
     history_cmd = sub.add_parser("history", help="list recent tasks, or show one")
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
@@ -665,6 +672,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plan=args.plan,
                 examples=args.examples,
                 core=args.core,
+                memory=not args.no_memory,
             )
         )
     except KeyboardInterrupt:

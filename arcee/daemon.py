@@ -412,7 +412,12 @@ async def _main() -> None:
 
     load_env()
     settings = load_settings()
-    runner = TaskRunner(core=settings.core, policy=settings.policy(), presence=ShellPresence())
+    runner = TaskRunner(
+        core=settings.core,
+        policy=settings.policy(),
+        presence=ShellPresence(),
+        memory=settings.memory,
+    )
     bus = await MessageBus(bus_type=BusType.SESSION).connect()
     try:
         await serve(runner, bus)

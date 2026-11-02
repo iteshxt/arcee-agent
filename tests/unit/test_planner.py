@@ -372,3 +372,45 @@ def test_prompts_name_yesterday() -> None:
         core_system(home=Path("/h"), now=NOW),
     ):
         assert "Thursday 2026-10-29 09:30; yesterday was Wednesday 2026-10-28" in system
+
+
+class TestMemory:
+    """What Arcee remembers reaches the Planner and the Core, step by step."""
+
+    async def test_memory_for_the_request_and_each_step(self, tmp_path: Path) -> None:
+        agent, planner, core, _, _ = make(
+            [plan(("List the folder", ["fs.list"]), ("Report the count", ["control.done"]))],
+            [call("fs_list", path="~"), Completion("Found 0 files."), Completion("There are 0.")],
+            home=tmp_path,
+        )
+        asked: list[tuple[str, str]] = []
+
+        async def recall(query: str, task_id: str) -> str:
+            asked.append((query, task_id))
+            return f"What you remember:\n- memory for {query}"
+
+        agent._recall = recall  # pyright: ignore[reportPrivateUsage]
+
+        await agent.run("how many files in ~?", task_id="t_now")
+
+        assert asked == [
+            ("how many files in ~?", "t_now"),
+            ("how many files in ~? Report the count", "t_now"),
+        ]
+        assert "- memory for how many files in ~?" in planner.requests[0].system
+        assert "- memory for how many files in ~?\n" in core.requests[0].system + "\n"
+        assert "- memory for how many files in ~? Report the count" in core.requests[2].system
+
+    async def test_a_broken_memory_does_not_stop_the_request(self) -> None:
+        agent, _, core, events, _ = make([], [Completion("Hello!")], plan_if=lambda r: False)
+
+        async def recall(query: str, task_id: str) -> str:
+            raise RuntimeError("database disk image is malformed")
+
+        agent._recall = recall  # pyright: ignore[reportPrivateUsage]
+
+        outcome = await agent.run("hello")
+
+        assert outcome.reply == "Hello!"
+        assert "What you remember" not in core.requests[0].system
+        assert any(isinstance(e, Guarded) and "memory unavailable" in e.what for e in events)

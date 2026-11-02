@@ -37,3 +37,12 @@ def test_arcee_remembers_it_turned_the_extension_on(tmp_path: Path) -> None:
 
     assert load(path).extension_turned_on is True
     assert Settings().extension_turned_on is False
+
+
+def test_memory_is_on_unless_turned_off(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    assert Settings().memory is True
+    save(Settings(memory=False), path)
+    assert load(path).memory is False
+    path.write_text("{}")
+    assert load(path).memory is True
