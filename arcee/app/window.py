@@ -22,9 +22,10 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from arcee import install  # noqa: E402
+from arcee import install, local_models  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
 from arcee.app.agent_page import AgentPage  # noqa: E402
+from arcee.app.local_setup import LocalSetupDialog  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
@@ -160,6 +161,40 @@ class ArceeWindow(Adw.ApplicationWindow):
         if self._stack.get_child_by_name(name) is not None:
             self._stack.set_visible_child_name(name)
 
+    def turn_on_extension_once(self) -> None:
+        """After the login that loaded the extension, turn it on (once) by ourselves.
+
+        The .deb installs it for every user, but GNOME loads new extensions only at
+        login and starts them off; people did not know to turn it on.
+        """
+        if self._settings.extension_turned_on:
+            return
+
+        async def turn_on() -> str:
+            import asyncio
+
+            info = await diagnostics.extension_info()
+            if diagnostics.is_on(info):
+                return "on"
+            if diagnostics.is_off(info):
+                return (
+                    "turned on" if await asyncio.to_thread(install.enable_shell_extension) else ""
+                )
+            return ""
+
+        def done(result: str) -> None:
+            if not result:
+                return  # not loaded yet (no login since installing): next time
+            self._settings.extension_turned_on = True
+            save(self._settings)
+            if result == "turned on":
+                self._toast(
+                    "Turned on Arcee's GNOME Shell extension: look for its icon in the top bar."
+                )
+                self._run_checks()
+
+        self._background.run(turn_on(), done)
+
     def show_setup(self) -> None:
         def done() -> None:
             self._settings.setup_done = True
@@ -185,9 +220,11 @@ class ArceeWindow(Adw.ApplicationWindow):
             title="Thinking", description="Which models read your requests and decide."
         )
         first: Gtk.CheckButton | None = None
+        self._core_checks: dict[str, Gtk.CheckButton] = {}
         for key, title, about in CORE_CHOICES:
             check = Gtk.CheckButton(active=self._settings.core == key, group=first)
             first = first or check
+            self._core_checks[key] = check
             check.connect("toggled", self._on_core, key)
             row = Adw.ActionRow(title=title, subtitle=about, activatable_widget=check)
             row.add_prefix(check)
@@ -313,9 +350,29 @@ class ArceeWindow(Adw.ApplicationWindow):
         restart_daemon_when_idle(self._background, lambda _text: None)
 
     def _on_core(self, check: Gtk.CheckButton, key: str) -> None:
-        if check.get_active() and self._settings.core != key:
-            self._settings.core = cast(Core, key)
-            self._saved()
+        if not check.get_active() or self._settings.core == key:
+            return
+        if key != "local":
+            self._use_core(key)
+            return
+
+        # Local needs Ollama and the model: if either is missing, set them up first.
+        def checked(status: local_models.LocalStatus) -> None:
+            if status.ready:
+                self._use_core("local")
+                return
+            LocalSetupDialog(
+                self._background.run,
+                on_ready=lambda: self._use_core("local"),
+                on_cancel=lambda: self._core_checks[self._settings.core].set_active(True),
+            ).present(self)
+
+        self._background.run(local_models.status(), checked)
+
+    def _use_core(self, key: str) -> None:
+        self._settings.core = cast(Core, key)
+        self._core_checks[key].set_active(True)
+        self._saved()
 
     def _refresh_budget(self) -> bool:
         self._refresh_speech()
@@ -651,6 +708,8 @@ class ArceeApp(Adw.Application):
         window.present()
         if not window.settings.setup_done:  # first run
             window.show_setup()
+        else:
+            window.turn_on_extension_once()
 
     def do_command_line(self, command_line: Gio.ApplicationCommandLine) -> int:
         options = command_line.get_options_dict().end().unpack()
@@ -661,6 +720,25 @@ class ArceeApp(Adw.Application):
 
 
 def main() -> None:
+    import faulthandler
+    import logging
+
     from arcee.config import load_env
 
+    # What went wrong, kept for a report: warnings and errors, and the stack of every
+    # thread if Python itself crashes (GTK or a C library underneath).
+    logs = data_dir() / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=logs / "app.log",
+        level=logging.WARNING,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    def report(kind: Any, value: Any, trace: Any) -> None:
+        logging.getLogger("arcee-app").error("uncaught", exc_info=(kind, value, trace))
+        sys.__excepthook__(kind, value, trace)
+
+    sys.excepthook = report
+    faulthandler.enable(open(logs / "app-crash.log", "a"))  # noqa: SIM115 - open for life
     ArceeApp(load_env()).run(sys.argv)

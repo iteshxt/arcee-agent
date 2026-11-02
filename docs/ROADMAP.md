@@ -16,7 +16,7 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phases 0-1 done (license still to choose). Phase 2: built; the web form half of the gate needs a rerun with extension 0.3.3, and the GUI rename half renames correctly from the tree alone but not yet in one clean pass (the models type the new name on the keyboard, which doubles the extension, then repair it). Phase 3: gate passed in a headless GNOME Shell. Phase 4: everything built including the dev deb; its gate needs a fresh user account. Next: the phase 2 and 4 gates, then phase 5.
+**Now:** Phases 0-1 done (license still to choose). Phase 2: built; the web form gate still has to pass on a model with tokens left (on LFM3-Omni it skipped a field; a refused submit is now reported). Phase 3: passed, `v0.3.0`. Phase 4: everything built, including the .deb (GitHub pre-release `v0.3.1`) and guided setup for the GNOME extension and for local models; the gate is a fresh account installing and finishing a task in 10 minutes. Next: the phase 2 and 4 gates, then phase 5.
 **Last updated:** 2026-11-02
 
 ## Target machine
@@ -148,6 +148,7 @@ Prerequisites on the machine:
 - [x] `window.list`, `window.act` (focus, minimize, maximize, restore, close) and `app.close` over the extension, inside control sessions; closing asks first, and windows GNOME will not minimize or maximize are reported, not pretended
 - [x] GTK4 app (`arcee-app`, libadwaita): Models (Groq or local, today's tokens and requests per model, live), History (tasks and their steps), Permissions (ask before everything, or always before chosen actions), Diagnostics (every part with its fix). Opened from the panel's Open Arcee or the app grid; settings in `~/.config/arcee/settings.json`, read by arceed and arcee-cli
 - [x] First-run setup in the app: welcome (by Itesh Tomar), Groq keys into the keyring, desktop control, background service and Chrome each installed with a button (no sudo); Diagnostics has Fix buttons for the same installers
+- [x] Guided setup on a fresh install: setup says what the GNOME extension still needs (log out and back in, then Arcee turns it on once by itself), Diagnostics reads GNOME's own state of it, and choosing Local (Ollama) installs Ollama (in a terminal, with the user's password) and downloads the models (with their size, after a yes)
 - [x] Local dev deb: `sh packaging/build-deb.sh` (dpkg-deb, no debhelper or sudo), system Python with vendored dependencies; extension, service, D-Bus activation, launcher and Chrome host for every user
 
 **Gate:** on a fresh user account on the reference machine, install the dev deb, finish the wizard and complete a first task within 10 minutes. Tag `v0.4.0`.
@@ -168,11 +169,13 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 ## Phase 6 — Packaging and release
 
 - [ ] Release deb: AppArmor profile loaded in postinst, sandbox helper, models
-- [ ] APT repository
 - [ ] MCP client
 - [ ] Full eval suite (40 tasks) and report
 - [ ] User docs
 - [ ] Extension submitted to extensions.gnome.org
+- [ ] Chrome extension on the Chrome Web Store, once it stops changing; setup's Chrome step then opens its store page
+- [ ] `sudo apt install` from an APT repository (until then: the .deb on GitHub releases)
+- [ ] Links to the documentation site (iteshxt.me) in About, setup and help text
 
 **Gate:** 75% eval pass rate on the local preset; 20 external testers each complete a task. Tag `v1.0.0`.
 
@@ -217,3 +220,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-11-01** — The app's first page is Agent: a sunrise particle ring that breathes, follows the voice and swirls while Arcee works, a mic and a type button, and the conversation with questions answered in place. The panel menu is redone: ask, status card with Stop, question card, Recent folded to three with More in Arcee (opens History), today's budget as bars, Open Arcee and Quit. arceed runs what it hears itself; keys that are set show as set. Windows are raised with a fresh timestamp, so GNOME's focus-stealing prevention no longer keeps Chrome behind.
 - **2026-11-01** — Arcee says what it is doing: arceed sends a `Step` line ("Opening Google Chrome", "Searching the web for james bond", "Thinking…"), shown on the pill in place of "Arcee is working", in the panel and under the app's ring. The glow is sunrise orange while Arcee works and blue while the user has control. The Agent page's mic becomes Stop while Arcee works, a New button clears the conversation, and unanswered questions close when the request ends. The Chrome extension now connects at browser start (`runtime.onStartup`): when Arcee started Chrome, the bridge had stayed down and the request gave up after 30 s. After every login the extension had to be reloaded by hand for the same reason; an alarm every 30 s now also wakes the worker to reconnect if the bridge drops (extension 0.3.2).
 - **2026-11-02** — Phase gates. Phase 3 passed (clicks within 1.41 px at mixed fractional scales; stop in 4-6 ms) after a fix found on the way: arceed never heard the shell's Stopped signal, so the stop shortcut and the pill's Stop took the glow away while the request went on. Phase 2's GUI rename, seven runs in a headless session, zero screenshots in all but one, found and fixed: `ui.act` ran an element's first action for names it lacked (set-text ran activate and kept the old name); window actions asked on an item now select it first; apps are found by their .desktop names ("Files"); Groq's 400 "Parsing failed" now asks the model again instead of ending the task. Still open: the models type new names on the keyboard, and Files selects the name without its extension, so name.txt becomes name.txt.txt before they repair it. `browser.fill` now chooses dropdown options and ticks boxes (extension 0.3.3). Dev deb: `packaging/build-deb.sh`.
+- **2026-11-02** — A fresh device. The app froze and lagged there: the Agent page's ring drew 1,100 points one fill at a time, 60 times a second, even when idle (a fifth of a fast core); now four fills per ribbon at 12-30 frames a second (3-4% idle), and saving a key no longer waits on the keyring's first-use password prompt on the GTK thread. The app logs errors and hard crashes to ~/.local/share/arcee/logs. Setup now says exactly what the GNOME extension needs, and Arcee turns it on once after the login that loads it. Choosing Local (Ollama) checks for Ollama and LFM3-Omni and sets up what is missing, asking first. Every process re-reads the shared rate limits (the panel had shown full bars for models arcee-cli had used up), with a refresh button in the panel and the app. A slow GNOME Shell (Chrome cold-starting) no longer fails a request. Release assets: `packaging/build-release.sh` and `publish-release.sh`; `v0.3.1` is a GitHub pre-release.

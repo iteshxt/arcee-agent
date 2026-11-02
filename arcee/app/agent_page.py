@@ -29,7 +29,13 @@ OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
 SUN_INNER: Final = (1.0, 0.42, 0.05)
 SUN_OUTER: Final = (1.0, 0.80, 0.30)
 RIBBONS: Final = 5
-POINTS: Final = 220
+POINTS: Final = 180
+# Points are drawn in this many brightness bands, one fill each: one fill per point
+# (1,100 a frame, 60 frames a second) kept a fifth of a fast core busy while Arcee
+# sat idle, and froze the app on slower machines.
+BANDS: Final = 4
+# Frames a second: the idle ring only breathes; voice and work move faster.
+FPS: Final = {"idle": 12, "listening": 30, "working": 30}
 WAVE_SIZE: Final = 300
 IDLE_TEXT: Final = "Ask me anything"
 # The app's own touches: the mic in sunrise orange, red while it listens.
@@ -51,6 +57,7 @@ class SunWave(Gtk.DrawingArea):
         self._level = 0.0
         self._target = 0.0
         self._start = time.monotonic()
+        self._drawn = 0.0
         # Each ribbon wobbles in its own way; each particle sits a little off the line.
         self._ribbons = [
             (random.uniform(0, math.tau), random.uniform(2, 5), random.uniform(0.3, 0.9))
@@ -64,9 +71,14 @@ class SunWave(Gtk.DrawingArea):
         # Speech sits around 0.02-0.2 RMS; stretch it so quiet talk still moves the ring.
         self._target = min(1.0, math.sqrt(max(level, 0.0)) * 2.5)
 
-    def _tick(self, _widget: Any, _clock: Any) -> bool:
+    def _tick(self, _widget: Any, clock: Any) -> bool:
+        now = clock.get_frame_time() / 1e6
+        if now - self._drawn < 1 / FPS[self.state]:
+            return GLib.SOURCE_CONTINUE
+        step = min(1.0, (now - self._drawn) * 15)  # the same easing at any frame rate
+        self._drawn = now
         target = self._target if self.state == "listening" else 0.0
-        self._level += (target - self._level) * 0.25
+        self._level += (target - self._level) * step
         self.queue_draw()
         return GLib.SOURCE_CONTINUE
 
@@ -81,21 +93,32 @@ class SunWave(Gtk.DrawingArea):
         speed = {"idle": 0.25, "listening": 0.6, "working": 1.4}[self.state]
         breathe = 0.04 * math.sin(t * 1.3)
         energy = 0.06 + breathe + self._level * 0.2 + (0.06 if self.state == "working" else 0)
+        turn = t * 0.05 * speed
         for r, (phase, waves, drift) in enumerate(self._ribbons):
             fraction = r / max(RIBBONS - 1, 1)
             red, green, blue = (
                 SUN_INNER[i] + (SUN_OUTER[i] - SUN_INNER[i]) * fraction for i in range(3)
             )
+            bands: list[list[tuple[float, float]]] = [[] for _ in range(BANDS)]
+            jitter = self._jitter[r]
+            a, b = t * speed * (1 + drift), t * speed * drift
             for i in range(POINTS):
                 angle = math.tau * i / POINTS
-                wobble = math.sin(angle * waves + phase + t * speed * (1 + drift))
-                wobble += 0.5 * math.sin(angle * (waves + 3) - t * speed * drift)
-                radius = base * (1 + energy * wobble + 0.012 * self._jitter[r][i])
-                x = cx + radius * math.cos(angle + t * 0.05 * speed)
-                y = cy + radius * math.sin(angle + t * 0.05 * speed)
-                alpha = 0.35 + 0.5 * (0.5 + 0.5 * wobble)
-                cr.set_source_rgba(red, green, blue, alpha)
-                cr.rectangle(x, y, 1.8, 1.8)
+                wobble = math.sin(angle * waves + phase + a) + 0.5 * math.sin(
+                    angle * (waves + 3) - b
+                )
+                radius = base * (1 + energy * wobble + 0.012 * jitter[i])
+                # wobble runs about -1.5..1.5; brighter where the ribbon swells.
+                band = min(BANDS - 1, max(0, int((wobble + 1.5) / 3 * BANDS)))
+                bands[band].append(
+                    (cx + radius * math.cos(angle + turn), cy + radius * math.sin(angle + turn))
+                )
+            for band, points in enumerate(bands):
+                if not points:
+                    continue
+                for x, y in points:
+                    cr.rectangle(x, y, 1.8, 1.8)
+                cr.set_source_rgba(red, green, blue, 0.3 + 0.6 * (band + 0.5) / BANDS)
                 cr.fill()
         # A soft core that brightens with the voice.
         glow = 0.12 + self._level * 0.3

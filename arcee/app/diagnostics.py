@@ -77,7 +77,7 @@ def extension_check(info: dict[str, Any] | None, installed: bool) -> Check:
         )
     if state == _OUT_OF_DATE:
         return Check(name, False, "not made for this GNOME version")
-    return Check(name, False, "starting", "wait a moment, then check again")
+    return Check(name, False, "starting", "wait a moment, then check again")  # enabling
 
 
 async def extension_info() -> dict[str, Any] | None:
@@ -110,6 +110,15 @@ async def extension_info() -> dict[str, Any] | None:
     if reply.message_type is not MessageType.METHOD_RETURN:
         return None
     return {key: variant.value for key, variant in reply.body[0].items()}
+
+
+def is_off(info: dict[str, Any] | None) -> bool:
+    """Loaded by GNOME (so a login has passed) but not turned on."""
+    return bool(info) and int((info or {}).get("state", 0)) in (_INACTIVE, _INITIALIZED)
+
+
+def is_on(info: dict[str, Any] | None) -> bool:
+    return bool(info) and int((info or {}).get("state", 0)) == _ACTIVE
 
 
 async def shell_extension() -> Check:
