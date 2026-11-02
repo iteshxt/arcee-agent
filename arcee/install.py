@@ -117,7 +117,7 @@ def daemon() -> Report:
     unit = _config() / "systemd" / "user" / "arceed.service"
     activation = _data() / "dbus-1" / "services" / f"{AGENT_BUS_NAME}.service"
     launcher = _data() / "applications" / f"{APP_ID}.desktop"
-    icon = PROJECT / "extension" / SHELL_EXTENSION / "icons" / "arcee-symbolic.svg"
+    icon = PROJECT / "art" / "arcee-256.png"
     files = {
         unit: (
             "[Unit]\n"

@@ -14,13 +14,14 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import Any, Final, cast
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from arcee import install, local_models  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
@@ -692,6 +693,7 @@ class ArceeApp(Adw.Application):
         from importlib.metadata import version
 
         Adw.AboutDialog(
+            application_icon=APP_ID,
             application_name="Arcee",
             developer_name="Itesh Tomar",
             developers=["Itesh Tomar https://iteshxt.me"],
@@ -702,6 +704,15 @@ class ArceeApp(Adw.Application):
             "in your apps, your Chrome and your files, asking before anything risky.",
             copyright="© 2026 Itesh Tomar",
         ).present(self.get_active_window())
+
+    def do_startup(self) -> None:
+        Adw.Application.do_startup(self)
+        # Run from a checkout the icon is not in the icon theme; art/ holds it by name.
+        art = Path(__file__).resolve().parents[2] / "art"
+        display = Gdk.Display.get_default()
+        if art.is_dir() and display is not None:
+            Gtk.IconTheme.get_for_display(display).add_search_path(str(art))
+        Gtk.Window.set_default_icon_name(APP_ID)
 
     def do_activate(self) -> None:
         window = self._window()

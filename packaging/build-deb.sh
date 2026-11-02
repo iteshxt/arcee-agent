@@ -18,7 +18,6 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)
 STAGE=build/deb
 LIB=$STAGE/usr/lib/arcee
 EXT=arcee@iteshxt.me
-ICON=extension/$EXT/icons/arcee-symbolic.svg
 
 rm -rf "$STAGE"
 mkdir -p "$LIB" "$STAGE/DEBIAN" "$STAGE/usr/bin" dist
@@ -116,7 +115,17 @@ Icon=me.iteshxt.Arcee
 Categories=Utility;
 StartupWMClass=me.iteshxt.Arcee
 EOF
-cp "$ICON" "$STAGE/usr/share/icons/hicolor/scalable/apps/me.iteshxt.Arcee.svg"
+# The icon (tools/make_art.py): the particle ring at 64 px and up, the simpler vector
+# ring below that and as the scalable fallback.
+cp art/arcee.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/me.iteshxt.Arcee.svg"
+for px in 64 128 256 512; do
+    mkdir -p "$STAGE/usr/share/icons/hicolor/${px}x${px}/apps"
+    cp "art/arcee-$px.png" "$STAGE/usr/share/icons/hicolor/${px}x${px}/apps/me.iteshxt.Arcee.png"
+done
+for px in 16 32 48; do
+    mkdir -p "$STAGE/usr/share/icons/hicolor/${px}x${px}/apps"
+    cp "browser-ext/icons/icon-$px.png" "$STAGE/usr/share/icons/hicolor/${px}x${px}/apps/me.iteshxt.Arcee.png"
+done
 
 mkdir -p "$STAGE/usr/share/doc/arcee"
 cp README.md "$STAGE/usr/share/doc/arcee/"

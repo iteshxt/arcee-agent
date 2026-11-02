@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Arcee",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Lets the Arcee desktop agent read and act on web pages, on request, through a local helper.",
   "author": "Itesh Tomar",
   "homepage_url": "https://iteshxt.me",
@@ -18,5 +18,11 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   }
 }

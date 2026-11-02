@@ -23,6 +23,7 @@ from arcee.keys import KEYS, keyring  # noqa: E402
 
 DEVELOPER: Final = "Itesh Tomar"
 WEBSITE: Final = "https://iteshxt.me"
+APP_ICON: Final = "me.iteshxt.Arcee"
 
 # Run work off the GTK thread; the callback gets its result back on it.
 Runner = Callable[..., None]  # (work, done[, failed]), as Background.run
@@ -79,7 +80,7 @@ class SetupDialog(Adw.Dialog):
 
     def _welcome(self) -> Any:
         status = Adw.StatusPage(
-            icon_name="starred-symbolic",
+            icon_name=APP_ICON,
             title="Welcome to Arcee",
             description=(
                 "Arcee is an agent for your desktop. Ask in words or by voice from the panel "

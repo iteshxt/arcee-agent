@@ -67,7 +67,7 @@ class ArceeIndicator extends PanelMenu.Button {
         super._init(0.5, 'Arcee', false);
         this._onStep = onStep;
         this.add_child(new St.Icon({
-            gicon: Gio.icon_new_for_string(`${path}/icons/arcee-symbolic.svg`),
+            gicon: Gio.icon_new_for_string(`${path}/icons/arcee.svg`),
             style_class: 'system-status-icon',
         }));
         this.menu.actor.add_style_class_name('arcee-menu');

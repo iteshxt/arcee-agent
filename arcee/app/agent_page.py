@@ -1,8 +1,9 @@
 # pyright: basic, reportMissingImports=false, reportMissingModuleSource=false
 """The app's Agent page: talk to Arcee from the app, as from the panel.
 
-A circle of glowing particles in sunrise colours breathes while Arcee waits, pulses
-with the voice while the mic listens, and swirls while it works. Below it: the mic,
+A ring of glowing particles in sunrise amber breathes while Arcee waits and pulses
+while the mic listens or Arcee works: two loops rendered once (tools/make_art.py) and
+played here, frame by frame. Below it: the mic,
 a button to type instead, a button to start a new conversation, and the conversation
 (requests, steps, questions with their answers, replies). While Arcee works the mic
 becomes Stop and the line under the ring says what it is doing right now.
@@ -12,31 +13,23 @@ what the user says is run by arceed itself, so the panel and the app never both 
 
 import json
 import math
-import random
 import re
-import time
+from pathlib import Path
 from typing import Any, Final
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
-# Sunrise: deep orange at the inside of the ring to gold at the outside.
-SUN_INNER: Final = (1.0, 0.42, 0.05)
-SUN_OUTER: Final = (1.0, 0.80, 0.30)
-RIBBONS: Final = 5
-POINTS: Final = 180
-# Points are drawn in this many brightness bands, one fill each: one fill per point
-# (1,100 a frame, 60 frames a second) kept a fifth of a fast core busy while Arcee
-# sat idle, and froze the app on slower machines.
-BANDS: Final = 4
-# Frames a second: the idle ring only breathes; voice and work move faster.
-FPS: Final = {"idle": 12, "listening": 30, "working": 30}
-WAVE_SIZE: Final = 300
+# The ring's two loops, rendered once by tools/make_art.py. Drawing it live (1,100
+# particles, up to 60 times a second) kept a fifth of a fast core busy and froze the
+# app on slower machines; playing frames costs next to nothing.
+ASSETS: Final = Path(__file__).parent / "assets"
+LOOPS: Final = {"idle": "wave-idle.gif", "active": "wave-active.gif"}
 IDLE_TEXT: Final = "Ask me anything"
 # The app's own touches: the mic in sunrise orange, red while it listens.
 CSS: Final = b"""
@@ -44,87 +37,84 @@ CSS: Final = b"""
 .arcee-mic:hover { background: #ff8f3d; }
 .arcee-mic.listening, .arcee-mic.listening:hover,
 .arcee-mic.working, .arcee-mic.working:hover { background: #d93a2b; color: white; }
+.arcee-wave { border-radius: 9999px; }
 .arcee-you { background: alpha(#ff7a1a, 0.16); border-radius: 14px; padding: 8px 12px; }
 """
 
 
-class SunWave(Gtk.DrawingArea):
-    """The ring of particles. `state` is idle, listening or working; `level` the voice."""
+class SunWave(Gtk.Picture):
+    """The ring. `state` is idle, listening or working; `level` the voice's loudness.
+
+    Each loop's frames are decoded once into textures and shown in turn, only while
+    the ring is on screen; the voice plays the active loop faster.
+    """
 
     def __init__(self) -> None:
-        super().__init__(content_width=WAVE_SIZE, content_height=WAVE_SIZE, halign=Gtk.Align.CENTER)
+        # At the loops' own size, centred: given more room, GTK would scale them up.
+        super().__init__(
+            can_shrink=False,
+            content_fit=Gtk.ContentFit.CONTAIN,
+            halign=Gtk.Align.CENTER,
+            valign=Gtk.Align.CENTER,
+            vexpand=False,
+        )
+        self.set_overflow(Gtk.Overflow.HIDDEN)  # round, with GTK's smooth edge
+        self.add_css_class("arcee-wave")
         self.state = "idle"
         self._level = 0.0
-        self._target = 0.0
-        self._start = time.monotonic()
-        self._drawn = 0.0
-        # Each ribbon wobbles in its own way; each particle sits a little off the line.
-        self._ribbons = [
-            (random.uniform(0, math.tau), random.uniform(2, 5), random.uniform(0.3, 0.9))
-            for _ in range(RIBBONS)
-        ]
-        self._jitter = [[random.gauss(0, 1) for _ in range(POINTS)] for _ in range(RIBBONS)]
-        self.set_draw_func(self._draw)
-        self.add_tick_callback(self._tick)
+        self._loops: dict[str, tuple[list[Gdk.Texture], int]] = {}
+        self._index = 0
+        self._timer = 0
+        # The first frame now, so GTK sizes the ring by it (not by an empty picture).
+        frames, _delay = self._loop()
+        self.set_paintable(frames[0])
+        self.connect("map", lambda _w: self._next())
+        self.connect("unmap", lambda _w: self._stop())
 
     def set_level(self, level: float) -> None:
-        # Speech sits around 0.02-0.2 RMS; stretch it so quiet talk still moves the ring.
-        self._target = min(1.0, math.sqrt(max(level, 0.0)) * 2.5)
+        # Speech sits around 0.02-0.2 RMS; stretch it so quiet talk still speeds the ring.
+        self._level = min(1.0, math.sqrt(max(level, 0.0)) * 2.5)
 
-    def _tick(self, _widget: Any, clock: Any) -> bool:
-        now = clock.get_frame_time() / 1e6
-        if now - self._drawn < 1 / FPS[self.state]:
-            return GLib.SOURCE_CONTINUE
-        step = min(1.0, (now - self._drawn) * 15)  # the same easing at any frame rate
-        self._drawn = now
-        target = self._target if self.state == "listening" else 0.0
-        self._level += (target - self._level) * step
-        self.queue_draw()
-        return GLib.SOURCE_CONTINUE
+    def _loop(self) -> tuple[list[Gdk.Texture], int]:
+        name = "idle" if self.state == "idle" else "active"
+        if name not in self._loops:  # the active loop loads the first time it plays
+            self._loops[name] = _decode(ASSETS / LOOPS[name])
+        return self._loops[name]
 
-    def _draw(self, _area: Any, cr: Any, width: int, height: int) -> None:
-        t = time.monotonic() - self._start
-        cx, cy = width / 2, height / 2
-        base = min(width, height) * 0.32
-        # A dark stage, so the light reads in a light or dark theme alike.
-        cr.set_source_rgb(0.04, 0.03, 0.03)
-        cr.arc(cx, cy, min(width, height) / 2, 0, math.tau)
-        cr.fill()
-        speed = {"idle": 0.25, "listening": 0.6, "working": 1.4}[self.state]
-        breathe = 0.04 * math.sin(t * 1.3)
-        energy = 0.06 + breathe + self._level * 0.2 + (0.06 if self.state == "working" else 0)
-        turn = t * 0.05 * speed
-        for r, (phase, waves, drift) in enumerate(self._ribbons):
-            fraction = r / max(RIBBONS - 1, 1)
-            red, green, blue = (
-                SUN_INNER[i] + (SUN_OUTER[i] - SUN_INNER[i]) * fraction for i in range(3)
+    def _next(self) -> bool:
+        frames, delay = self._loop()
+        self._index = (self._index + 1) % len(frames)
+        self.set_paintable(frames[self._index])
+        if self.state == "listening":
+            delay = round(delay / (1 + 1.5 * self._level))
+        self._timer = GLib.timeout_add(delay, self._next)
+        return GLib.SOURCE_REMOVE
+
+    def _stop(self) -> None:
+        if self._timer:
+            GLib.source_remove(self._timer)
+            self._timer = 0
+
+
+def _decode(path: Path) -> tuple[list[Gdk.Texture], int]:
+    """A GIF's frames as textures, and its frame delay in ms."""
+    from PIL import Image, ImageSequence
+
+    with Image.open(path) as image:
+        delay = int(image.info.get("duration", 60))
+        frames = []
+        for frame in ImageSequence.Iterator(image):
+            rgb = frame.convert("RGB")
+            frames.append(
+                Gdk.MemoryTexture.new(
+                    rgb.width,
+                    rgb.height,
+                    Gdk.MemoryFormat.R8G8B8,
+                    GLib.Bytes.new(rgb.tobytes()),
+                    rgb.width * 3,
+                )
             )
-            bands: list[list[tuple[float, float]]] = [[] for _ in range(BANDS)]
-            jitter = self._jitter[r]
-            a, b = t * speed * (1 + drift), t * speed * drift
-            for i in range(POINTS):
-                angle = math.tau * i / POINTS
-                wobble = math.sin(angle * waves + phase + a) + 0.5 * math.sin(
-                    angle * (waves + 3) - b
-                )
-                radius = base * (1 + energy * wobble + 0.012 * jitter[i])
-                # wobble runs about -1.5..1.5; brighter where the ribbon swells.
-                band = min(BANDS - 1, max(0, int((wobble + 1.5) / 3 * BANDS)))
-                bands[band].append(
-                    (cx + radius * math.cos(angle + turn), cy + radius * math.sin(angle + turn))
-                )
-            for band, points in enumerate(bands):
-                if not points:
-                    continue
-                for x, y in points:
-                    cr.rectangle(x, y, 1.8, 1.8)
-                cr.set_source_rgba(red, green, blue, 0.3 + 0.6 * (band + 0.5) / BANDS)
-                cr.fill()
-        # A soft core that brightens with the voice.
-        glow = 0.12 + self._level * 0.3
-        cr.set_source_rgba(*SUN_INNER, glow)
-        cr.arc(cx, cy, base * 0.14 * (1 + 0.4 * self._level), 0, math.tau)
-        cr.fill()
+    return frames, delay
 
 
 class AgentPage(Gtk.Box):
@@ -141,7 +131,11 @@ class AgentPage(Gtk.Box):
         self._working = False
         self._open_questions: list[Gtk.Widget] = []
         self.wave = SunWave()
-        self.append(self.wave)
+        # Held in its own centred box: asked its height at the page's full width, the
+        # ring answered in proportion and left a gap above and below.
+        holder = Gtk.Box(halign=Gtk.Align.CENTER)
+        holder.append(self.wave)
+        self.append(holder)
 
         self._status = Gtk.Label(
             label=IDLE_TEXT,
