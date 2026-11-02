@@ -1,7 +1,7 @@
 import pytest
 
 from arcee.app import diagnostics
-from arcee.app.diagnostics import Check, keys, programs, run_all
+from arcee.app.diagnostics import Check, extension_check, keys, programs, run_all
 
 
 async def test_keys_say_which_is_missing_and_where_to_put_it(
@@ -43,3 +43,24 @@ async def test_a_crashing_check_is_reported_not_raised(monkeypatch: pytest.Monke
         Check("broken", False, "check failed: boom"),
         Check("a", True, "ok"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("info", "installed", "detail", "fix_action"),
+    [
+        (None, False, "not installed", "shell_extension"),
+        # Just installed from the .deb: GNOME has not loaded it yet.
+        (None, True, "installed, but GNOME loads new extensions at login", "shell_extension"),
+        ({}, True, "installed, but GNOME loads new extensions at login", "shell_extension"),
+        ({"state": 2.0}, True, "installed but turned off", "shell_extension"),
+        ({"state": 3.0, "error": "SyntaxError"}, True, "failed to start: SyntaxError", ""),
+        ({"state": 4.0}, True, "not made for this GNOME version", ""),
+    ],
+)
+def test_the_extension_check_says_what_is_in_the_way(
+    info: dict[str, object] | None, installed: bool, detail: str, fix_action: str
+) -> None:
+    check = extension_check(info, installed)
+
+    assert not check.ok
+    assert (check.detail, check.fix_action) == (detail, fix_action)

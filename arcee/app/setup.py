@@ -24,7 +24,7 @@ DEVELOPER: Final = "Itesh Tomar"
 WEBSITE: Final = "https://iteshxt.me"
 
 # Run work off the GTK thread; the callback gets its result back on it.
-Runner = Callable[[Any, Callable[[Any], None]], None]
+Runner = Callable[..., None]  # (work, done[, failed]), as Background.run
 
 
 class SetupDialog(Adw.Dialog):
@@ -120,9 +120,19 @@ class SetupDialog(Adw.Dialog):
         value = row.get_text().strip()
         if ring is None or not value:
             return
-        ring.store(env, value)
-        row.set_text("")
-        row.set_title(f"{row.get_title()} ✓ saved")
+        row.set_sensitive(False)
+
+        def saved(_none: None) -> None:
+            row.set_text("")
+            row.set_title(f"{row.get_title()} ✓ saved")
+            row.set_sensitive(True)
+
+        def failed(exc: BaseException) -> None:
+            row.set_title(f"Could not save: {exc}")
+            row.set_sensitive(True)
+
+        # Off the GTK thread: a new keyring first asks for its password (see window.py).
+        self._run(_threaded(lambda: ring.store(env, value)), saved, failed)
 
     def _part(
         self,

@@ -9,6 +9,7 @@ restarted when it is idle, so the next request uses them.
 
 import asyncio
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -285,19 +286,29 @@ class ArceeWindow(Adw.ApplicationWindow):
         if ring is None:
             self._toast("No keyring here: put the key in ~/.config/arcee/env instead.")
             return
-        try:
+
+        async def write() -> None:
+            # Off the GTK thread: on a new account GNOME first asks for a password for the
+            # new keyring, and waiting for that here froze the app ("not responding").
+            import asyncio
+
             if value:
-                ring.store(env, value)
+                await asyncio.to_thread(ring.store, env, value)
+            else:
+                await asyncio.to_thread(ring.clear, env)
+
+        def saved(_none: None) -> None:
+            if value:
                 os.environ[env] = value
                 self._from_keyring.add(env)
             else:
-                ring.clear(env)
                 self._from_keyring.discard(env)
                 os.environ.pop(env, None)
-        except Exception as exc:  # a locked keyring the user declined to unlock
-            self._toast(f"Could not save the key: {exc}")
-            return
-        self._show_key_states()
+            self._show_key_states()
+
+        self._background.run(
+            write(), saved, lambda exc: self._toast(f"Could not save the key: {exc}")
+        )
         self._toast("Key saved." if value else "Key removed.")
         restart_daemon_when_idle(self._background, lambda _text: None)
 
@@ -558,10 +569,47 @@ class ArceeWindow(Adw.ApplicationWindow):
             return report
 
         def done(report: install.Report) -> None:
-            self._toast(report.next[0] if report.next else "Done.")
+            if action == "browser_bridge":
+                self._chrome_steps(report)
+            else:
+                self._toast(report.next[0] if report.next else "Done.")
             self._run_checks()
 
         self._background.run(run(), done, lambda exc: self._toast(f"Could not fix it: {exc}"))
+
+    def _chrome_steps(self, report: install.Report) -> None:
+        """Chrome loads an unpacked extension only by hand: show every step, not a toast
+        with the first line, and put the folder on the clipboard for its file picker."""
+        from arcee.browser.setup import EXTENSION_DIR
+
+        self.get_clipboard().set(str(EXTENSION_DIR))
+        dialog = Adw.AlertDialog(
+            heading="Load Arcee in Chrome",
+            body="\n".join(
+                [
+                    *report.lines,
+                    "",
+                    *report.next,
+                    "",
+                    "The folder is copied: in the picker press Ctrl+L and paste.",
+                ]
+            ),
+        )
+        dialog.add_response("close", "Close")
+        dialog.add_response("open", "Open Chrome's extensions")
+        dialog.set_response_appearance("open", Adw.ResponseAppearance.SUGGESTED)
+
+        def respond(_dialog: Any, response: str) -> None:
+            if response == "open":
+                subprocess.Popen(
+                    ["google-chrome", "chrome://extensions"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+
+        dialog.connect("response", respond)
+        dialog.present(self)
 
 
 class ArceeApp(Adw.Application):
