@@ -13,10 +13,10 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 2 | Browser and desktop tree | 🟨 | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
 | 3 | Wayland capture and input | ✅ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
 | 4 | Daemon, extension, app | 🟨 | Fresh account: install, wizard, first task < 10 min | `v0.4.0` |
-| 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
+| 5 | Context manager and voice | 🟨 | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phases 0-1 done (license still to choose). Phase 2: built; the web form gate still has to pass on a model with tokens left (on LFM3-Omni it skipped a field; a refused submit is now reported). Phase 3: passed, `v0.3.0`. Phase 4: everything built, including the .deb (GitHub pre-release `v0.3.1`) and guided setup for the GNOME extension and for local models; the gate is a fresh account installing and finishing a task in 10 minutes. Next: the phase 2 and 4 gates, then phase 5.
+**Now:** Phases 0-1 done (license still to choose). Phase 2: built; the web form gate still has to pass on a model with tokens left (on LFM3-Omni it skipped a field; a refused submit is now reported). Phase 3: passed, `v0.3.0`. Phase 4: everything built, including the .deb (GitHub pre-release `v0.3.1`) and guided setup for the GNOME extension and for local models; the gate is a fresh account installing and finishing a task in 10 minutes. Phase 5: memory built and its gate's memory half passed (a fact told in passing, aged 8 days, answered unprompted); voice (wake word, local speech) is next. Still open: the phase 2 and 4 gates.
 **Last updated:** 2026-11-02
 
 ## Target machine
@@ -155,12 +155,13 @@ Prerequisites on the machine:
 
 ## Phase 5 — Context manager and voice
 
-Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxruntime and lancedb; decide LanceDB vs ChromaDB.
+Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2 and onnxruntime. LanceDB vs ChromaDB: neither (decision 0014): both have 3.14 wheels but install at 416 and 368 MB.
 
-- [ ] Vector store and embeddings on top of the phase 1 SQLite store
-- [ ] Retrieval, re-ranking and token-budget packing
-- [ ] Summarizer queue and nightly timer
-- [ ] Memory page in the app
+- [x] Memory store on the phase 1 SQLite store (decision 0014): `memories` and `summaries` with FTS5 indexes, an in-place upgrade of older history.db files; embeddings deferred (an optional vector column when Ollama has an embedding model)
+- [x] Recall: important facts always, then BM25 matches over facts and past tasks, ranked 0.6 match / 0.25 recency (14-day half-life) / 0.15 importance, packed into 1,500 characters, into the Planner's and the Core's prompts per request and per plan step; `memory.recall` and `memory.forget` (asks first) for the Core
+- [x] Digest after every task, in the background, on the Core's cheap model: a summary and up to five lasting facts, updating known facts instead of repeating them
+- [ ] Nightly day and week summaries
+- [x] Memory page: each fact with its source and date, edit, forget with Undo, tell Arcee something, export JSON, and a switch to stop learning
 - [ ] Wake-word models `hey_arcee` and `arcee_stop` (trained offline), VAD, faster-whisper, Piper
 - [ ] Follow-up mode, optional per-user verifier
 
@@ -186,7 +187,6 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 | Decision | Needed by |
 | --- | --- |
 | License | Phase 0 |
-| LanceDB or ChromaDB | Phase 5 start |
 | Extension on extensions.gnome.org, or deb only | Phase 6 |
 | Animated mascot in the panel | After phase 4, with a prototype |
 | Multi-step confirmation batching | v1.1 |
@@ -224,3 +224,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-11-02** — Arcee's look. The Agent page's ring is no longer drawn live: `tools/make_art.py` renders two loops once (idle breathing, active pulsing; 410 and 520 KB GIFs of amber particle ribbons round a wireframe globe, after a reference the user chose), and the app decodes each once and shows its frames in turn, only while on screen: 1% of a core when idle, down from 20%. The same ring is the icon everywhere: the app (particle ring at 64 px and up, a simpler vector ring below), the top bar, the Chrome extension (0.3.5) and the package's icon theme. Then, at the user's word: the centre is a geodesic sphere inside a scalloped ring, as in the reference (not a latitude-longitude globe), and the active loop swings half as far, one wave, about 3 s a loop. A checkout installs the icon into the user's icon theme like the .deb; `arcee-cli browser-reload` reloads the Chrome extension (0.3.6+).
 - **2026-11-02** — Light style. The panel menu reads its own background and switches to dark ink on a light one (it was white on white). The ring is transparent, in a dark-window and a light-window look (animated WebP with alpha, 370-470 KB each), switching with the window's style. `tests/desktop/startup.sh` starts the app under nine bad cases (fresh, corrupt files, unwritable data, every page, the packaged files): all open in about a second and keep answering. Release 0.3.4.
 - **2026-11-03** — The app icon has the geodesic sphere too (one split of the icosahedron, so it reads at 64 px); every size is cut from the 256 px picture, which keeps it amber. Release 0.3.5.
+- **2026-11-03** — Memory (phase 5, decision 0014). Across 103 real tasks the Core had never saved a note, so memory is made after each task: a digest on the cheap model writes a summary and the lasting facts it showed. history.db gained `summaries`, FTS5 indexes and an in-place upgrade; recall ranks facts and past tasks into the Planner's and the Core's prompts; `memory.recall` and `memory.forget`; a Memory page with a switch to stop learning. End to end on Groq in a throwaway data folder: "my home station is Abu Road (ABR)" said in passing became three facts and a summary; aged 8 days, "which station should I book my train to Delhi from?" got "Abu Road (ABR)" in one call, and a third request added no duplicate facts.
