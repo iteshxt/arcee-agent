@@ -11,13 +11,13 @@ This file tracks what is planned, what is being worked on and what is done. The 
 | 0 | Repository foundation | 🟨 | Tooling and CI green | — |
 | 1 | Core loop (terminal agent) | ✅ | Valid action first try > 90% on LFM3 1.7B, 60% text-mode eval pass | `v0.1.0` |
 | 2 | Browser and desktop tree | 🟨 | Web form fill + GUI file rename, zero screenshots | `v0.2.0` |
-| 3 | Wayland capture and input | ⬜ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
-| 4 | Daemon, extension, app | ⬜ | Fresh account: install, wizard, first task < 10 min | `v0.4.0` |
+| 3 | Wayland capture and input | ✅ | Clicks within 5 px, kill switch < 100 ms | `v0.3.0` |
+| 4 | Daemon, extension, app | 🟨 | Fresh account: install, wizard, first task < 10 min | `v0.4.0` |
 | 5 | Context manager and voice | ⬜ | Wake → transcript < 1.5 s; week-old fact recalled | `v0.5.0` |
 | 6 | Packaging and release | ⬜ | 75% eval pass on the local preset; 20 external testers | `v1.0.0` |
 
-**Now:** Phase 0 done except the license. Phase 1: protocol, reply parsing, adapter base, limiter and 5xx retry merged (1.1-1.4). Models are local-first (decision 0003); the Gemini adapter is parked on `feat/models-gemini`. Tool registry, Ollama adapter, gate, file/shell/control tools, the native-mode step loop and `arcee-cli` merged: `uv run arcee-cli run "..."` runs real tasks on LFM3. Eval suite (LFM3 tier 1: 92%), Planner (long requests only) and task history merged. Base model is LFM3-Omni (decision 0005): eval 85% at the switch, 89% after the harness fixes. Phase 1 done and tagged `v0.1.0` (23 tools; single-decision eval 91%, whole tasks 15/15). Phase 2: web tools, untrusted-content handling and the Chrome extension done; reading Gmail works on `--core groq:openai/gpt-oss-120b`, not yet on LFM3-Omni. Default Core is now Groq gpt-oss-20b, with 120b for hard requests (decision 0008); local models remain as `--core local`. Next: the AT-SPI desktop tree for GNOME apps (`ui.tree`, `ui.act`) and the phase 2 gate.
-**Last updated:** 2026-10-29
+**Now:** Phases 0-1 done (license still to choose). Phase 2: built; the web form half of the gate needs a rerun with extension 0.3.3, and the GUI rename half renames correctly from the tree alone but not yet in one clean pass (the models type the new name on the keyboard, which doubles the extension, then repair it). Phase 3: gate passed in a headless GNOME Shell. Phase 4: everything built including the dev deb; its gate needs a fresh user account. Next: the phase 2 and 4 gates, then phase 5.
+**Last updated:** 2026-11-02
 
 ## Target machine
 
@@ -116,7 +116,7 @@ Prerequisites on the machine:
 - [x] Daily token limit (Groq: 200K per model, not in headers) counted per reply and corrected from 429 messages; a spent model hands the task to the other
 - [x] Plan steps marked `judgement`: mechanical steps start on gpt-oss-20b, reading and deciding on the routed tier
 - [x] Compact page elements (one line each) and tool results filled to the limit instead of halved
-- [ ] Window API stub (until the extension exists in phase 4)
+- [x] ~~Window API stub~~: the extension's `window.list`/`window.act` came first (phase 4)
 - [x] `web.search` (SearXNG or DuckDuckGo HTML), `web.fetch` (no local addresses); untrusted marking and injection detector that forces confirmation of the next action
 
 **Gate:** a web form fill and a GUI file rename both complete using trees only, with zero screenshots sent. Tag `v0.2.0`.
@@ -125,18 +125,20 @@ Prerequisites on the machine:
 
 Prerequisites on the machine:
 
-- [ ] `ydotool` installed, udev rule, user in `input` group
-- [ ] Second monitor, or a virtual one
+- [x] ~~`ydotool`~~: input goes through the extension (decision 0009)
+- [x] Second monitor: two virtual monitors in a headless GNOME Shell
 
 - [x] Screenshots through the Arcee shell extension (`Shell.Screenshot`), decision 0009; ScreenCast portal + PipeWire kept for sessions without the extension
 - [x] Input through the extension's Clutter virtual pointer and keyboard (decision 0009); RemoteDesktop portal kept as the route without the extension
-- [ ] ydotool fallback; pressed set mirrored to `$XDG_RUNTIME_DIR/arcee/pressed.json`
-- [ ] `ScreenMap`: scaling, fractional scale, multi-monitor offsets
+- [x] ~~ydotool fallback~~: not needed with the extension's virtual devices, which release what they press on stop
+- [x] Scaling: screenshots cover the whole stage at the highest monitor scale, so one image-to-stage ratio maps every monitor; checked at 100-200% and mixed scales (no `ScreenMap` needed)
 - [x] Set-of-marks as text: OCR lines numbered `t_N` with centres (`screen.read`), raw coordinates with confirmation (level 4); `screen.find` and `screen.look` with qwen3.8-27b by grid cells (decision 0013); pointer glides to targets
 - [x] `screen.read`, `screen.click`, `screen.scroll`, `kbd.type`, `kbd.key`; pointer moves verified and retried. Level escalation still to do
 - [x] Kill switch Super+Shift+Escape: releases input and cancels `arcee-cli run`; every input call is whole, so no watchdog is needed yet. `arceed --release-input` comes with the daemon
 
 **Gate:** clicks land within 5 px on two monitors with fractional scaling; kill switch returns in under 100 ms. Tag `v0.3.0`.
+
+**Gate result (2026-11-02, headless GNOME Shell 50, two virtual monitors):** 60 clicks through Arcee's screenshot-to-stage path at 100/100, 125/100, 166/125, 100/133 and 200/100 % scales: largest miss 1.41 px. Super+Shift+Escape to the request stopped in arceed: 4-6 ms over 10 tries (median 4), control released every time. Passed.
 
 ## Phase 4 — Daemon, extension, app
 
@@ -146,7 +148,7 @@ Prerequisites on the machine:
 - [x] `window.list`, `window.act` (focus, minimize, maximize, restore, close) and `app.close` over the extension, inside control sessions; closing asks first, and windows GNOME will not minimize or maximize are reported, not pretended
 - [x] GTK4 app (`arcee-app`, libadwaita): Models (Groq or local, today's tokens and requests per model, live), History (tasks and their steps), Permissions (ask before everything, or always before chosen actions), Diagnostics (every part with its fix). Opened from the panel's Open Arcee or the app grid; settings in `~/.config/arcee/settings.json`, read by arceed and arcee-cli
 - [x] First-run setup in the app: welcome (by Itesh Tomar), Groq keys into the keyring, desktop control, background service and Chrome each installed with a button (no sudo); Diagnostics has Fix buttons for the same installers
-- [ ] Local dev deb (`dpkg-buildpackage`)
+- [x] Local dev deb: `sh packaging/build-deb.sh` (dpkg-deb, no debhelper or sudo), system Python with vendored dependencies; extension, service, D-Bus activation, launcher and Chrome host for every user
 
 **Gate:** on a fresh user account on the reference machine, install the dev deb, finish the wizard and complete a first task within 10 minutes. Tag `v0.4.0`.
 
@@ -214,3 +216,4 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2, onnxru
 - **2026-11-01** — Vision (decision 0013): `screen.find` locates icons and buttons with qwen3.8-27b in two grid rounds and a local snap (9 px and 21 px from the centre on a test desktop); `screen.look` answers questions about the screen. The pointer glides to its target.
 - **2026-11-01** — The app's first page is Agent: a sunrise particle ring that breathes, follows the voice and swirls while Arcee works, a mic and a type button, and the conversation with questions answered in place. The panel menu is redone: ask, status card with Stop, question card, Recent folded to three with More in Arcee (opens History), today's budget as bars, Open Arcee and Quit. arceed runs what it hears itself; keys that are set show as set. Windows are raised with a fresh timestamp, so GNOME's focus-stealing prevention no longer keeps Chrome behind.
 - **2026-11-01** — Arcee says what it is doing: arceed sends a `Step` line ("Opening Google Chrome", "Searching the web for james bond", "Thinking…"), shown on the pill in place of "Arcee is working", in the panel and under the app's ring. The glow is sunrise orange while Arcee works and blue while the user has control. The Agent page's mic becomes Stop while Arcee works, a New button clears the conversation, and unanswered questions close when the request ends. The Chrome extension now connects at browser start (`runtime.onStartup`): when Arcee started Chrome, the bridge had stayed down and the request gave up after 30 s. After every login the extension had to be reloaded by hand for the same reason; an alarm every 30 s now also wakes the worker to reconnect if the bridge drops (extension 0.3.2).
+- **2026-11-02** — Phase gates. Phase 3 passed (clicks within 1.41 px at mixed fractional scales; stop in 4-6 ms) after a fix found on the way: arceed never heard the shell's Stopped signal, so the stop shortcut and the pill's Stop took the glow away while the request went on. Phase 2's GUI rename, seven runs in a headless session, zero screenshots in all but one, found and fixed: `ui.act` ran an element's first action for names it lacked (set-text ran activate and kept the old name); window actions asked on an item now select it first; apps are found by their .desktop names ("Files"); Groq's 400 "Parsing failed" now asks the model again instead of ending the task. Still open: the models type new names on the keyboard, and Files selects the name without its extension, so name.txt becomes name.txt.txt before they repair it. `browser.fill` now chooses dropdown options and ticks boxes (extension 0.3.3). Dev deb: `packaging/build-deb.sh`.
