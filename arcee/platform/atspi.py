@@ -9,6 +9,7 @@ must not block Arcee's event loop (spec section 12).
 
 import asyncio
 import concurrent.futures
+import functools
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -68,6 +69,24 @@ def pick_frame(wanted: str, frames: Sequence[tuple[str, str]]) -> int | None:
     return None
 
 
+@functools.cache
+def app_label(app_id: str) -> str:
+    """`org.gnome.Nautilus` -> `org.gnome.Nautilus (Files)`: the name people and models
+    use, from the app's .desktop file. Asked for "Files", the tree lookup failed and a
+    task ran out of steps re-reading a window it had already renamed a file in."""
+    try:
+        import gi
+
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+
+        info = Gio.DesktopAppInfo.new(f"{app_id}.desktop")
+    except ImportError, ValueError, TypeError:
+        return app_id
+    name = info.get_name() if info is not None else ""
+    return f"{app_id} ({name})" if name and name.lower() != app_id.lower() else app_id
+
+
 class AtspiDesktop:
     def __init__(self, shell: ShellBridge | None = None) -> None:
         self._pool = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="atspi")
@@ -100,7 +119,7 @@ class AtspiDesktop:
             for j in range(app.childCount):
                 frame = app.getChildAtIndex(j)
                 if frame is not None and frame.getState().contains(pyatspi.STATE_SHOWING):
-                    frames.append((app.name, frame))
+                    frames.append((app_label(app.name), frame))
         return frames
 
     def _windows(self) -> list[dict[str, Any]]:
@@ -179,8 +198,16 @@ class AtspiDesktop:
             _set_value(node, value or "")
         elif action == "select":
             node.parent.querySelection().selectChild(node.getIndexInParent())
-        else:
+        elif _offers(node, action) or action in GENERIC_PRESSES:
             _do_action(node, action)
+        elif self._refs.window is not None and action in _window_actions(self._refs.window):
+            # "view.rename" on a file: the window's actions work on what is selected, so
+            # select it and run the window's action (models asked for it on the item).
+            node.parent.querySelection().selectChild(node.getIndexInParent())
+            time.sleep(SETTLE_S)
+            return f"{self._window_action(action)} on {name}"
+        else:
+            _do_action(node, action)  # refuses, naming what the element offers
         time.sleep(SETTLE_S)  # let the app redraw before the next reading
         return f"{action} {name}"
 
@@ -279,8 +306,25 @@ def _do_action(node: Any, wanted: str) -> None:
         if names:
             actions.doAction(0)
             return
-    offered = ", ".join([*names, "select", "focus", "set_value"]) if names else "select, focus"
+    extras = ["select", "focus"]
+    if _editable(node):
+        extras.append("set_value")
+    offered = ", ".join([*names, *extras])
     raise LookupError(f"{node.name or 'the element'} has no action {wanted!r}; it offers {offered}")
+
+
+def _offers(node: Any, action: str) -> bool:
+    try:
+        actions = node.queryAction()
+    except NotImplementedError:
+        return False
+    return action in (actions.getName(i) for i in range(actions.nActions))
+
+
+def _editable(node: Any) -> bool:
+    import pyatspi
+
+    return node.getState().contains(pyatspi.STATE_EDITABLE)
 
 
 def _set_value(node: Any, value: str) -> None:

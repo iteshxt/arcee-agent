@@ -214,8 +214,11 @@ class KbdType(_ScreenTool[TypeArgs]):
     description = "Type text into the focused window, as if on the keyboard."
     usage = Usage(
         when="A field in a desktop app has focus (you clicked it) and needs text.",
-        avoid="Browser fields: browser.fill. Fields in ui.tree: ui.act with set_value.",
-        mistakes="Typing before clicking the field, so the text goes elsewhere.",
+        avoid="Browser fields: browser.fill. Fields in ui.tree (rename boxes, dialogs): read "
+        "the window with ui.tree and use ui.act set_value, which replaces the whole text.",
+        mistakes="Typing before clicking the field, so the text goes elsewhere. Typing a new "
+        "file name into a rename box: Files selects the name without its extension, so "
+        "typing name.txt makes name.txt.txt.",
         example='kbd.type(text="Quarterly report")',
     )
     args_model = TypeArgs

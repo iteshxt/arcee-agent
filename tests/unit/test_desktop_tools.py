@@ -182,3 +182,8 @@ async def test_the_tree_comes_one_line_per_element(tools: Any) -> None:
         "el_3 entry: Name (editable)",
     ]
     assert tree.session.elements["el_2"]["name"] == "Move to Trash"  # kept for confirmations
+
+
+def test_an_app_is_found_by_the_name_people_use() -> None:
+    frames = [("gnome-terminal", "~"), ("org.gnome.Nautilus (Files)", "gate")]
+    assert pick_frame("Files", frames) == 1

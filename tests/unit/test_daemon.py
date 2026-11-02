@@ -73,6 +73,7 @@ def bus_address() -> Iterator[str]:
     yield address
     process.terminate()
     process.wait()
+    process.stdout.close()
 
 
 async def connect(address: str) -> MessageBus:

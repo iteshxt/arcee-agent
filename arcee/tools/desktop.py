@@ -154,8 +154,11 @@ class UiAct(_DesktopTool[ActArgs]):
     )
     usage = Usage(
         when="You read the window with ui.tree and know what to press, pick or type.",
-        mistakes="Clicking a list entry to select it: use select; typing with click: use "
-        "set_value.",
+        mistakes="Clicking a list entry to select it: use select; typing with click or "
+        "kbd.type: use set_value on the editable element, then click the button that "
+        "confirms (Rename, OK, Save) instead of pressing Enter; opening a context menu "
+        "before a window action: run the window action (view.rename) on the selected item "
+        "directly.",
         example='ui.act(target="el_5", action="select")',
     )
     args_model = ActArgs
