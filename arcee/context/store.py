@@ -441,6 +441,19 @@ class Store:
             for item in items
         ]
 
+    async def unsummarised(self, limit: int) -> list[str]:
+        """Finished tasks with no summary yet, newest first (memory-learn digests them)."""
+
+        def read() -> list[str]:
+            rows = self._db.execute(
+                "SELECT id FROM tasks WHERE status != 'running' AND id NOT IN "
+                "(SELECT task_id FROM summaries) ORDER BY started DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+
+        return await self._run(read)
+
     async def save_summary(self, task_id: str, text: str) -> None:
         def write() -> None:
             with self._db:
