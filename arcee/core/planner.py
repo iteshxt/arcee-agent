@@ -36,7 +36,9 @@ def needs_plan(request: str) -> bool:
     splits work into too many steps. So only long or clearly multi-phase requests
     are planned; `--plan always` and `--plan never` override this.
     """
-    sentences = [s for s in re.split(r"[.?!]+", request) if len(s.split()) >= 3]
+    # A sentence ends at . ? or ! before a space or the end: the dots in report.txt or
+    # example.com split a two-sentence rename into four and planned it as long work.
+    sentences = [s for s in re.split(r"[.?!]+(?:\s+|$)", request) if len(s.split()) >= 3]
     return (
         len(request.split()) >= LONG_REQUEST_WORDS
         or len(sentences) >= 3

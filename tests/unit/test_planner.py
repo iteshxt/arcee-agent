@@ -269,6 +269,13 @@ class TestPlannedTasks:
         ("First find my CV, then my cover letter, then zip them both", True),
         ("Check the logs. Find the errors. Summarise what broke.", True),
         (" ".join(["word"] * 30), True),
+        # Dots in file names and sites are not sentence ends.
+        (
+            "In the Files window that is open, rename report-draft.txt to report-final.txt. "
+            "Do it in the Files app itself, not with file or shell tools.",
+            False,
+        ),
+        ("Open example.com and read the page.", False),
     ],
 )
 def test_needs_plan(request_text: str, expected: bool) -> None:
