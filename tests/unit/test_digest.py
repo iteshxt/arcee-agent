@@ -165,3 +165,33 @@ def test_a_fact_must_come_from_the_tasks_own_words() -> None:
     assert grounded("The user books trains to Delhi", task)
     assert not grounded("The user's sister lives in Mumbai", task)  # nowhere in the task
     assert not grounded("The user", task)  # says nothing
+
+
+async def test_summary_only_keeps_no_facts_and_asks_for_none(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    task = await finished_task(store, "open youtube in chrome please", "YouTube is open.")
+    model = FakeAdapter(
+        [reply("Opened YouTube in Chrome.", {"text": "The user uses YouTube", "importance": 0.9})],
+        CONTEXT,
+    )
+
+    await digest_task(model, store, task, facts=False)
+
+    assert await store.all_memories() == []
+    assert await store.search_summaries("YouTube", 5)
+    assert "Leave facts empty" in model.requests[0].system
+    store.close()
+
+
+async def test_a_fact_not_about_the_user_is_dropped(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    task = await finished_task(store, "open youtube in chrome please", "YouTube is open in Chrome.")
+    model = FakeAdapter(
+        [reply("Opened YouTube.", {"text": "YouTube is now open in Chrome", "importance": 1.0})],
+        CONTEXT,
+    )
+
+    await digest_task(model, store, task)
+
+    assert await store.all_memories() == []
+    store.close()

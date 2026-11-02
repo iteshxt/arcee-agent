@@ -61,6 +61,17 @@ If a fact changes one of the facts already known (listed with ids), give that id
 """
 
 
+# For models too small to tell a lasting fact from a task's result (LFM3-Omni, run
+# over 101 past tasks, saved "YouTube is now open in Chrome" and "the biggest file in
+# Downloads is ..." as facts at importance 0.9): the summary alone, which they do well.
+SUMMARY_ONLY: Final = """\
+You keep the memory of Arcee, an agent on the user's Ubuntu desktop. Given one finished \
+task, write summary: what was asked and what happened, in at most 3 sentences (120 \
+words), with the names, places, sites, files and numbers someone would search for later. \
+Leave facts empty.\
+"""
+
+
 class Fact(BaseModel):
     text: str = Field(max_length=300)
     importance: float = Field(ge=0, le=1)
@@ -72,8 +83,11 @@ class TaskDigest(BaseModel):
     facts: list[Fact] = Field(default_factory=list[Fact], max_length=5)
 
 
-async def digest_task(model: ModelAdapter, store: Store, task_id: str) -> TaskDigest | None:
-    """Summarise `task_id` and save what it taught; None when there was nothing to do."""
+async def digest_task(
+    model: ModelAdapter, store: Store, task_id: str, *, facts: bool = True
+) -> TaskDigest | None:
+    """Summarise `task_id` and save what it taught; None when there was nothing to do.
+    `facts`: also learn facts about the user (only on models able to tell them apart)."""
     found = await store.task(task_id)
     if found is None:
         return None
@@ -86,13 +100,15 @@ async def digest_task(model: ModelAdapter, store: Store, task_id: str) -> TaskDi
         lines.insert(2, f"({len(steps) - STEP_LINES} earlier steps not shown)")
     if task.reply:
         lines.append(f"Reply to the user: {task.reply[:1500]}")
-    related = await store.search_memories(f"{task.request} {task.reply or ''}", RELATED)
+    related = (
+        await store.search_memories(f"{task.request} {task.reply or ''}", RELATED) if facts else []
+    )
     if related:
         lines.append("Facts already known:")
         lines += [f"- {row.id}: {row.text}" for row, _ in related]
     response = await model.complete(
         ModelRequest(
-            system=SYSTEM,
+            system=SYSTEM if facts else SUMMARY_ONLY,
             messages=[Message("user", "\n".join(lines))],
             schema=TaskDigest,
             max_tokens=DIGEST_MAX_TOKENS,
@@ -102,7 +118,11 @@ async def digest_task(model: ModelAdapter, store: Store, task_id: str) -> TaskDi
     await store.save_summary(task_id, digest.summary)
     known = {row.id for row, _ in related}
     task_text = "\n".join(lines[: lines.index("Facts already known:")] if related else lines)
-    kept = [f for f in digest.facts if grounded(f.text, task_text)]
+    kept = [
+        f
+        for f in digest.facts
+        if facts and f.text.lower().startswith("the user") and grounded(f.text, task_text)
+    ]
     if dropped := len(digest.facts) - len(kept):
         log.info("digest of %s: dropped %d facts not found in the task", task_id, dropped)
     digest = digest.model_copy(update={"facts": kept})

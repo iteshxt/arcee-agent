@@ -530,7 +530,7 @@ async def browser_reload() -> int:
     return 0
 
 
-async def memory_learn(core: str, host: str, limit: int) -> int:
+async def memory_learn(core: str, host: str, limit: int, facts: bool) -> int:
     """Digest past tasks that have no summary: what memory would have learned then."""
     from arcee.context.digest import digest_task
     from arcee.models.presets import digest_model_for
@@ -543,16 +543,15 @@ async def memory_learn(core: str, host: str, limit: int) -> int:
         print(f"{len(tasks)} past tasks to learn from, on {model.profile.model}")
         for n, task_id in enumerate(tasks, 1):
             try:
-                digest = await digest_task(model, store, task_id)
+                digest = await digest_task(model, store, task_id, facts=facts)
             except Exception as exc:  # one task's failure is not the run's
                 failed += 1
                 print(f"  {n}/{len(tasks)} {task_id}: failed ({type(exc).__name__}: {exc})")
                 continue
-            facts = len(digest.facts) if digest else 0
-            learned += facts
-            print(
-                f"  {n}/{len(tasks)} {task_id}: {'skipped' if digest is None else f'{facts} facts'}"
-            )
+            count = len(digest.facts) if digest else 0
+            learned += count
+            outcome = "skipped" if digest is None else f"{count} facts"
+            print(f"  {n}/{len(tasks)} {task_id}: {outcome}")
     finally:
         await model.aclose()
         store.close()
@@ -613,6 +612,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     learn_cmd.add_argument("--host", default=host)
     learn_cmd.add_argument("-n", type=int, default=1000, help="at most this many tasks")
+    learn_cmd.add_argument(
+        "--facts",
+        action="store_true",
+        help="also learn facts about the user (always on except with --core local, "
+        "whose models mistake results for facts)",
+    )
 
     history_cmd = sub.add_parser("history", help="list recent tasks, or show one")
     history_cmd.add_argument("task_id", nargs="?", help="a task id from the list")
@@ -676,7 +681,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "browser-reload":
             return asyncio.run(browser_reload())
         if args.command == "memory-learn":
-            return asyncio.run(memory_learn(args.core, _host(args.host), args.n))
+            facts = args.facts or args.core != "local"
+            return asyncio.run(memory_learn(args.core, _host(args.host), args.n, facts))
         if args.command == "eval-tasks":
             return asyncio.run(
                 evaluate_tasks(
