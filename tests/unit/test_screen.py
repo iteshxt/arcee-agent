@@ -19,6 +19,7 @@ from arcee.tools.base import ToolContext
 from arcee.tools.screen import (
     ClickArgs,
     FindArgs,
+    FocusedField,
     KbdKey,
     KbdType,
     KeyArgs,
@@ -32,6 +33,7 @@ from arcee.tools.screen import (
     ScreenSession,
     ScrollArgs,
     TypeArgs,
+    keeps_a_tail,
 )
 
 CTX = ToolContext(task_id="t_1", home=Path("/home/u"))
@@ -206,6 +208,29 @@ class TestTools:
 
         assert screen.calls == [("keys", [0xFFE3, ord("s")]), ("type", "Quarterly report")]
         assert "unknown key 'banana'" in str(bad.error)
+
+    async def test_a_new_name_typed_into_a_rename_box_replaces_all_of_it(self) -> None:
+        # Files selects "report-draft" of report-draft.txt; typing the whole new name
+        # over that made report-final.txt.txt.
+        screen = FakeScreen([])
+
+        async def rename_box() -> FocusedField:
+            return FocusedField("report-draft.txt", 0, 12)
+
+        session = ScreenSession(screen, focused=rename_box)
+        done = await KbdType(session).run(TypeArgs(text="report-final.txt"), CTX)
+
+        assert screen.calls == [("keys", [0xFFE3, ord("a")]), ("type", "report-final.txt")]
+        assert "over all of “report-draft.txt”" in done.summary
+
+    def test_only_a_name_that_repeats_the_unselected_tail_takes_the_whole_field(self) -> None:
+        box = FocusedField("report-draft.txt", 0, 12)
+        assert keeps_a_tail(box, "report-final.txt")
+        assert not keeps_a_tail(box, "report-final")  # the extension stays, as Files means
+        assert not keeps_a_tail(FocusedField("report-draft.txt", 0, 16), "x.txt")  # all
+        assert not keeps_a_tail(FocusedField("hello", 5, 5), "hello")  # a caret, no selection
+        assert not keeps_a_tail(FocusedField("a.txt", 2, 5), "b.txt")  # not from the start
+        assert not keeps_a_tail(None, "report-final.txt")
 
     def test_typing_takes_one_line(self) -> None:
         with pytest.raises(ValidationError, match="no line breaks"):

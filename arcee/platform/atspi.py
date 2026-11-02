@@ -87,6 +87,58 @@ def app_label(app_id: str) -> str:
     return f"{app_id} ({name})" if name and name.lower() != app_id.lower() else app_id
 
 
+async def focused_field() -> Any:
+    """The focused editable field in the active window, as a FocusedField, or None."""
+    from arcee.tools.screen import FocusedField
+
+    def find() -> FocusedField | None:
+        try:
+            import pyatspi
+        except ImportError:
+            return None
+        try:
+            desktop = pyatspi.Registry.getDesktop(0)
+            for i in range(desktop.childCount):
+                app = desktop.getChildAtIndex(i)
+                if app is None:
+                    continue
+                for j in range(app.childCount):
+                    frame = app.getChildAtIndex(j)
+                    if frame is None or not frame.getState().contains(pyatspi.STATE_ACTIVE):
+                        continue
+                    node = _focused(frame, pyatspi, 0)
+                    if node is None:
+                        return None
+                    text = node.queryText()
+                    content = text.getText(0, text.characterCount)
+                    if text.getNSelections() == 0:
+                        return FocusedField(content, text.caretOffset, text.caretOffset)
+                    start, end = text.getSelection(0)
+                    return FocusedField(content, start, end)
+        except Exception:  # accessibility off, or the field went away: type as asked
+            return None
+        return None
+
+    return await asyncio.get_running_loop().run_in_executor(_FOCUS_POOL, find)
+
+
+_FOCUS_POOL: Final = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="atspi-focus")
+
+
+def _focused(node: Any, pyatspi: Any, depth: int) -> Any:
+    if node is None or depth > MAX_DEPTH:
+        return None
+    state = node.getState()
+    if not state.contains(pyatspi.STATE_SHOWING):
+        return None
+    if state.contains(pyatspi.STATE_FOCUSED) and state.contains(pyatspi.STATE_EDITABLE):
+        return node
+    for i in range(node.childCount):
+        if (found := _focused(node.getChildAtIndex(i), pyatspi, depth + 1)) is not None:
+            return found
+    return None
+
+
 class AtspiDesktop:
     def __init__(self, shell: ShellBridge | None = None) -> None:
         self._pool = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="atspi")

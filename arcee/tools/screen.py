@@ -8,6 +8,7 @@ pay, and pressing Enter, Delete or a window-closing shortcut need confirmation.
 """
 
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Literal, Protocol
 
@@ -50,6 +51,27 @@ class Looker(Protocol):
     async def locate(self, image: Image.Image, what: str) -> tuple[int, int] | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class FocusedField:
+    """The focused editable field: its text and the selected range [start, end)."""
+
+    text: str
+    start: int
+    end: int
+
+
+def keeps_a_tail(field: FocusedField | None, typed: str) -> bool:
+    """Whether typing `typed` over the selection would leave a tail it already ends with.
+
+    Files' rename box selects the name without its extension (report-draft of
+    report-draft.txt); a model that typed the whole new name made report-final.txt.txt.
+    """
+    if field is None or field.start != 0 or not 0 < field.end < len(field.text):
+        return False
+    tail = field.text[field.end :]
+    return typed.endswith(tail)
+
+
 @dataclass
 class ScreenSession:
     screen: Screen
@@ -58,6 +80,8 @@ class ScreenSession:
     lines: dict[str, TextLine] = field(default_factory=dict[str, TextLine])
     size: tuple[int, int] = (0, 0)
     vision: Looker | None = None
+    # The focused text field, read through accessibility (None when it cannot be).
+    focused: Callable[[], Awaitable[FocusedField | None]] | None = None
 
 
 class _ScreenTool[A: ToolArgs](Tool[A]):
@@ -224,11 +248,20 @@ class KbdType(_ScreenTool[TypeArgs]):
     args_model = TypeArgs
 
     async def run(self, args: TypeArgs, ctx: ToolContext) -> ToolResult:
+        field = await self.session.focused() if self.session.focused is not None else None
+        whole = keeps_a_tail(field, args.text)
         try:
+            if whole:
+                await self.session.screen.keys(keyvals("ctrl+a"))
             await self.session.screen.type(args.text)
         except ShellUnavailableError as exc:
             return ToolResult.fail(str(exc))
         self.session.lines.clear()
+        if whole and field is not None:
+            return ToolResult.ok(
+                f"Typed {len(args.text)} characters over all of “{field.text}”, not just "
+                f"the selected part, so the field reads “{args.text}”"
+            )
         return ToolResult.ok(f"Typed {len(args.text)} characters")
 
 
@@ -369,7 +402,15 @@ async def _screenshot(session: ScreenSession, window: str) -> Image.Image:
         return image.convert("RGB")
 
 
-def screen_tools(screen: Screen | None = None, vision: Looker | None = None) -> list[Tool[Any]]:
+def screen_tools(
+    screen: Screen | None = None,
+    vision: Looker | None = None,
+    focused: Callable[[], Awaitable[FocusedField | None]] | None = None,
+) -> list[Tool[Any]]:
+    if focused is None and screen is None:
+        from arcee.platform.atspi import focused_field
+
+        focused = focused_field
     if screen is None:
         from arcee.platform.screen import GnomeScreen
 
@@ -379,7 +420,7 @@ def screen_tools(screen: Screen | None = None, vision: Looker | None = None) -> 
         from arcee.vision import Vision
 
         vision = Vision(rate_budget())
-    session = ScreenSession(screen, vision=vision)
+    session = ScreenSession(screen, vision=vision, focused=focused)
     return [
         ScreenRead(session),
         ScreenLook(session),
