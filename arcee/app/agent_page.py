@@ -29,7 +29,8 @@ OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
 # particles, up to 60 times a second) kept a fifth of a fast core busy and froze the
 # app on slower machines; playing frames costs next to nothing.
 ASSETS: Final = Path(__file__).parent / "assets"
-LOOPS: Final = {"idle": "wave-idle.gif", "active": "wave-active.gif"}
+# Transparent loops, one look for a dark window and one for a light one.
+LOOPS: Final = {"idle": "wave-idle-{shade}.webp", "active": "wave-active-{shade}.webp"}
 IDLE_TEXT: Final = "Ask me anything"
 # The app's own touches: the mic in sunrise orange, red while it listens.
 CSS: Final = b"""
@@ -37,7 +38,6 @@ CSS: Final = b"""
 .arcee-mic:hover { background: #ff8f3d; }
 .arcee-mic.listening, .arcee-mic.listening:hover,
 .arcee-mic.working, .arcee-mic.working:hover { background: #d93a2b; color: white; }
-.arcee-wave { border-radius: 9999px; }
 .arcee-you { background: alpha(#ff7a1a, 0.16); border-radius: 14px; padding: 8px 12px; }
 """
 
@@ -46,7 +46,8 @@ class SunWave(Gtk.Picture):
     """The ring. `state` is idle, listening or working; `level` the voice's loudness.
 
     Each loop's frames are decoded once into textures and shown in turn, only while
-    the ring is on screen; the voice plays the active loop faster.
+    the ring is on screen; the voice plays the active loop faster. The loops are
+    transparent, drawn for the window's light or dark style, and switch with it.
     """
 
     def __init__(self) -> None:
@@ -58,11 +59,11 @@ class SunWave(Gtk.Picture):
             valign=Gtk.Align.CENTER,
             vexpand=False,
         )
-        self.set_overflow(Gtk.Overflow.HIDDEN)  # round, with GTK's smooth edge
-        self.add_css_class("arcee-wave")
         self.state = "idle"
         self._level = 0.0
         self._loops: dict[str, tuple[list[Gdk.Texture], int]] = {}
+        self._style = Adw.StyleManager.get_default()
+        self._style.connect("notify::dark", lambda *_: self._restyle())
         self._index = 0
         self._timer = 0
         # The first frame now, so GTK sizes the ring by it (not by an empty picture).
@@ -78,8 +79,15 @@ class SunWave(Gtk.Picture):
     def _loop(self) -> tuple[list[Gdk.Texture], int]:
         name = "idle" if self.state == "idle" else "active"
         if name not in self._loops:  # the active loop loads the first time it plays
-            self._loops[name] = _decode(ASSETS / LOOPS[name])
+            shade = "dark" if self._style.get_dark() else "light"
+            self._loops[name] = _decode(ASSETS / LOOPS[name].format(shade=shade))
         return self._loops[name]
+
+    def _restyle(self) -> None:
+        """The window turned light or dark: the other look, loaded as it is needed."""
+        self._loops.clear()
+        frames, _delay = self._loop()
+        self.set_paintable(frames[self._index % len(frames)])
 
     def _next(self) -> bool:
         frames, delay = self._loop()
@@ -97,21 +105,21 @@ class SunWave(Gtk.Picture):
 
 
 def _decode(path: Path) -> tuple[list[Gdk.Texture], int]:
-    """A GIF's frames as textures, and its frame delay in ms."""
+    """An animation's frames as textures (with their alpha), and its frame delay in ms."""
     from PIL import Image, ImageSequence
 
     with Image.open(path) as image:
         delay = int(image.info.get("duration", 60))
         frames = []
         for frame in ImageSequence.Iterator(image):
-            rgb = frame.convert("RGB")
+            rgba = frame.convert("RGBA")
             frames.append(
                 Gdk.MemoryTexture.new(
-                    rgb.width,
-                    rgb.height,
-                    Gdk.MemoryFormat.R8G8B8,
-                    GLib.Bytes.new(rgb.tobytes()),
-                    rgb.width * 3,
+                    rgba.width,
+                    rgba.height,
+                    Gdk.MemoryFormat.R8G8B8A8,
+                    GLib.Bytes.new(rgba.tobytes()),
+                    rgba.width * 4,
                 )
             )
     return frames, delay
