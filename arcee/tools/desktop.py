@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Final, Protocol
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from arcee.core.policy import Policy, Tier
 from arcee.platform.atspi import Snapshot
@@ -131,6 +131,19 @@ class ActArgs(ToolArgs):
         "one of the window_actions from ui.tree"
     )
     value: str | None = Field(default=None, description="Text for set_value")
+
+    @field_validator("action")
+    @classmethod
+    def _plain_set_value(cls, action: str) -> str:
+        # Models write set-text, set_text, type...: all mean set_value. Left as they were,
+        # set-text reached an element as an action name it did not have.
+        return SET_VALUE_ALIASES.get(action.strip().lower(), action.strip())
+
+
+# Names models use for setting an element's text or value.
+SET_VALUE_ALIASES: Final[dict[str, str]] = dict.fromkeys(
+    ("set-text", "set_text", "settext", "set-value", "setvalue", "type", "fill"), "set_value"
+)
 
 
 class UiAct(_DesktopTool[ActArgs]):

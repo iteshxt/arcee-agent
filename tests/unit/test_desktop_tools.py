@@ -84,6 +84,12 @@ async def test_risky_elements_and_window_actions_need_confirmation(tools: Any) -
     assert act.sentence(ActArgs(target="el_2", action="click")) == "Click “Move to Trash”?"
 
 
+def test_the_names_models_use_for_typing_mean_set_value() -> None:
+    for name in ("set-text", "set_text", "Set-Text", "type", "fill"):
+        assert ActArgs(target="el_3", action=name, value="x").action == "set_value"
+    assert ActArgs(target="window", action="view.rename").action == "view.rename"
+
+
 async def test_act_passes_through_and_reports_what_the_window_shows(tools: Any) -> None:
     _, tree, act, desktop = tools
     await tree.run(TreeArgs(), CTX)

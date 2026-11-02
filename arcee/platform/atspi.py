@@ -208,6 +208,9 @@ class AtspiDesktop:
         return f"window action {action}"
 
 
+GENERIC_PRESSES: Final = ("click", "activate", "press")
+
+
 def _describe(node: Any, element_id: str) -> dict[str, Any]:
     import pyatspi
 
@@ -257,16 +260,27 @@ def _window_actions(frame: Any) -> list[str]:
 
 
 def _do_action(node: Any, wanted: str) -> None:
+    """Run the element's action `wanted`. A generic press (click, activate, press) runs
+    whatever press the element has; any other name must be one the element offers.
+
+    Falling back for every name ran the wrong thing and reported success: `set-text`
+    on Files' rename field ran its `activate`, which kept the old name.
+    """
     actions = node.queryAction()
     names = [actions.getName(i) for i in range(actions.nActions)]
-    for candidate in (wanted, "click", "activate", "press", "default.activate"):
-        if candidate in names:
-            actions.doAction(names.index(candidate))
-            return
-    if names:
-        actions.doAction(0)
+    if wanted in names:
+        actions.doAction(names.index(wanted))
         return
-    raise LookupError(f"{node.name or 'the element'} has no actions; try select or focus")
+    if wanted in GENERIC_PRESSES:
+        for candidate in (*GENERIC_PRESSES, "default.activate"):
+            if candidate in names:
+                actions.doAction(names.index(candidate))
+                return
+        if names:
+            actions.doAction(0)
+            return
+    offered = ", ".join([*names, "select", "focus", "set_value"]) if names else "select, focus"
+    raise LookupError(f"{node.name or 'the element'} has no action {wanted!r}; it offers {offered}")
 
 
 def _set_value(node: Any, value: str) -> None:
