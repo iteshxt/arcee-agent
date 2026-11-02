@@ -110,3 +110,16 @@ async def test_an_old_history_db_gains_memory_and_keeps_its_notes(tmp_path: Path
 def test_a_request_becomes_a_query_of_its_content_words() -> None:
     assert match_query("What is my home station?") == '"home" OR "station"'
     assert match_query("the a of") == ""
+
+
+async def test_tasks_without_a_summary_are_the_ones_left_to_learn(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    done = await store.start_task("old request")
+    await store.finish_task(done, status="done", reply="ok", steps=0, model_calls=1)
+    learned = await store.start_task("learned already")
+    await store.finish_task(learned, status="done", reply="ok", steps=0, model_calls=1)
+    await store.save_summary(learned, "Already digested.")
+    await store.start_task("still running")
+
+    assert await store.unsummarised(10) == [done]
+    store.close()

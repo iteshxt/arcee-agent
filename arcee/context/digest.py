@@ -23,22 +23,52 @@ RELATED: Final = 8
 DIGEST_MAX_TOKENS: Final = 1024
 # Nothing to learn from a request this bare that did nothing ("stop", "hi").
 TRIVIAL_WORDS: Final = 3
+# Share of a fact's content words that must appear in the task itself. LFM3-Omni,
+# digesting a task that was a typo ("afasdf"), saved the prompt's own example fact
+# (a home station) as the user's: a fact has to come from the task.
+GROUNDED: Final = 0.6
+# Words every fact may use that the task need not contain.
+_FREE: Final = frozenset({"user", "users", "user's", "uses", "use", "prefers", "likes", "usual"})
+
+
+def grounded(fact: str, task_text: str) -> bool:
+    """Whether most of `fact`'s content words appear in the task's own words."""
+    from arcee.context.examples import tokens
+
+    words = [w for w in tokens(fact) if w not in _FREE]
+    if not words:
+        return False
+    seen = set(tokens(task_text))
+    return sum(w in seen for w in words) / len(words) >= GROUNDED
+
 
 SYSTEM: Final = """\
 You keep the memory of Arcee, an agent on the user's Ubuntu desktop. Given one finished \
 task, write:
 1. summary: what was asked and what happened, in at most 3 sentences (120 words), with \
 the names, places, sites, files and numbers someone would search for later.
-2. facts: durable facts about the user this task showed, that will help with future \
-requests: their name, people, places (home, work, stations), accounts and services they \
-use, devices, folders, routines, preferences. At most 5, each one short sentence about \
-the user ("The user's home station is Abu Road (ABR)"). Not the task's own results \
-("found 3 trains"), not facts about the world, not guesses. Never passwords, codes, \
-keys, card or account numbers. None is a fine answer: most tasks teach nothing lasting.
+2. facts: durable facts about the user that THIS task's request, steps or reply state or \
+plainly show, and that will help with future requests: their name, people, places, \
+accounts and services they use, devices, folders, routines, preferences. At most 5, \
+each one short sentence beginning "The user". Only what this task says: nothing \
+guessed, nothing from these instructions. Not the task's own results ("found 3 \
+files"), not facts about the world. Never passwords, codes, keys, card or account \
+numbers. No facts is the usual answer: most tasks teach nothing lasting.
 Each fact gets an importance from 0 to 1: 0.9 for who the user is and where they live, \
 0.7 for standing preferences and accounts, 0.4 for useful details, 0.2 for passing ones. \
 If a fact changes one of the facts already known (listed with ids), give that id in \
 "replaces"; if it is already known as it is, leave it out.\
+"""
+
+
+# For models too small to tell a lasting fact from a task's result (LFM3-Omni, run
+# over 101 past tasks, saved "YouTube is now open in Chrome" and "the biggest file in
+# Downloads is ..." as facts at importance 0.9): the summary alone, which they do well.
+SUMMARY_ONLY: Final = """\
+You keep the memory of Arcee, an agent on the user's Ubuntu desktop. Given one finished \
+task, write summary: what was asked and what happened, in at most 3 sentences (120 \
+words), with the names, places, sites, files and numbers someone would search for later. \
+Leave facts empty.\
 """
 
 
@@ -53,8 +83,11 @@ class TaskDigest(BaseModel):
     facts: list[Fact] = Field(default_factory=list[Fact], max_length=5)
 
 
-async def digest_task(model: ModelAdapter, store: Store, task_id: str) -> TaskDigest | None:
-    """Summarise `task_id` and save what it taught; None when there was nothing to do."""
+async def digest_task(
+    model: ModelAdapter, store: Store, task_id: str, *, facts: bool = True
+) -> TaskDigest | None:
+    """Summarise `task_id` and save what it taught; None when there was nothing to do.
+    `facts`: also learn facts about the user (only on models able to tell them apart)."""
     found = await store.task(task_id)
     if found is None:
         return None
@@ -67,13 +100,15 @@ async def digest_task(model: ModelAdapter, store: Store, task_id: str) -> TaskDi
         lines.insert(2, f"({len(steps) - STEP_LINES} earlier steps not shown)")
     if task.reply:
         lines.append(f"Reply to the user: {task.reply[:1500]}")
-    related = await store.search_memories(f"{task.request} {task.reply or ''}", RELATED)
+    related = (
+        await store.search_memories(f"{task.request} {task.reply or ''}", RELATED) if facts else []
+    )
     if related:
         lines.append("Facts already known:")
         lines += [f"- {row.id}: {row.text}" for row, _ in related]
     response = await model.complete(
         ModelRequest(
-            system=SYSTEM,
+            system=SYSTEM if facts else SUMMARY_ONLY,
             messages=[Message("user", "\n".join(lines))],
             schema=TaskDigest,
             max_tokens=DIGEST_MAX_TOKENS,
@@ -82,6 +117,15 @@ async def digest_task(model: ModelAdapter, store: Store, task_id: str) -> TaskDi
     digest = response.parsed
     await store.save_summary(task_id, digest.summary)
     known = {row.id for row, _ in related}
+    task_text = "\n".join(lines[: lines.index("Facts already known:")] if related else lines)
+    kept = [
+        f
+        for f in digest.facts
+        if facts and f.text.lower().startswith("the user") and grounded(f.text, task_text)
+    ]
+    if dropped := len(digest.facts) - len(kept):
+        log.info("digest of %s: dropped %d facts not found in the task", task_id, dropped)
+    digest = digest.model_copy(update={"facts": kept})
     for fact in digest.facts:
         replaces = fact.replaces if fact.replaces in known else None  # never a made-up id
         await store.save_memory(

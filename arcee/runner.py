@@ -211,7 +211,9 @@ class TaskRunner:
 
     async def _digest(self, task_id: str) -> None:
         try:
-            await digest_task(self.digest_model, self.store, task_id)
+            # The local models summarise well but mistake results for facts.
+            facts = self.core != "local"
+            await digest_task(self.digest_model, self.store, task_id, facts=facts)
         except Exception as error:  # memory is an aid: a failed digest loses one summary
             log.warning("could not digest %s: %s", task_id, error)
 

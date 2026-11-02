@@ -530,6 +530,35 @@ async def browser_reload() -> int:
     return 0
 
 
+async def memory_learn(core: str, host: str, limit: int, facts: bool) -> int:
+    """Digest past tasks that have no summary: what memory would have learned then."""
+    from arcee.context.digest import digest_task
+    from arcee.models.presets import digest_model_for
+
+    store = Store(data_dir())
+    model = digest_model_for(core, host)
+    learned = failed = 0
+    try:
+        tasks = await store.unsummarised(limit)
+        print(f"{len(tasks)} past tasks to learn from, on {model.profile.model}")
+        for n, task_id in enumerate(tasks, 1):
+            try:
+                digest = await digest_task(model, store, task_id, facts=facts)
+            except Exception as exc:  # one task's failure is not the run's
+                failed += 1
+                print(f"  {n}/{len(tasks)} {task_id}: failed ({type(exc).__name__}: {exc})")
+                continue
+            count = len(digest.facts) if digest else 0
+            learned += count
+            outcome = "skipped" if digest is None else f"{count} facts"
+            print(f"  {n}/{len(tasks)} {task_id}: {outcome}")
+    finally:
+        await model.aclose()
+        store.close()
+    print(f"done: {learned} facts learned, {failed} tasks failed")
+    return 0 if failed == 0 else 1
+
+
 def _row(result: CaseResult) -> dict[str, object]:
     d = result.decision
     return {
@@ -573,6 +602,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-memory",
         action="store_true",
         help="neither recall memory nor remember this task (tests, throwaway runs)",
+    )
+
+    learn_cmd = sub.add_parser(
+        "memory-learn", help="learn from past tasks that have no summary yet (memory)"
+    )
+    learn_cmd.add_argument(
+        "--core", default="local", help="the model that digests them (default: local)"
+    )
+    learn_cmd.add_argument("--host", default=host)
+    learn_cmd.add_argument("-n", type=int, default=1000, help="at most this many tasks")
+    learn_cmd.add_argument(
+        "--facts",
+        action="store_true",
+        help="also learn facts about the user (always on except with --core local, "
+        "whose models mistake results for facts)",
     )
 
     history_cmd = sub.add_parser("history", help="list recent tasks, or show one")
@@ -636,6 +680,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(browser_check())
         if args.command == "browser-reload":
             return asyncio.run(browser_reload())
+        if args.command == "memory-learn":
+            facts = args.facts or args.core != "local"
+            return asyncio.run(memory_learn(args.core, _host(args.host), args.n, facts))
         if args.command == "eval-tasks":
             return asyncio.run(
                 evaluate_tasks(
