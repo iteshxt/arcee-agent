@@ -142,6 +142,10 @@ class TaskRunner:
             status = "stopped" if self.stopped else "cancelled"
             await asyncio.shield(self._finish(task_id, status, "", plans))
             raise
+        except Exception as exc:
+            # A crash (the shell not answering) left the task "running" in History.
+            await self._finish(task_id, "failed", f"{type(exc).__name__}: {exc}", plans)
+            raise
         await self.store.finish_task(
             task_id,
             status=outcome.status,

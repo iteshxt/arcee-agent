@@ -9,6 +9,7 @@ and input calls raise ShellUnavailableError.
 """
 
 import json
+import logging
 import re
 import threading
 from collections.abc import Callable, Sequence
@@ -16,7 +17,11 @@ from typing import Any, Final
 
 BUS_NAME: Final = "me.iteshxt.Arcee.Shell"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Shell"
+log = logging.getLogger(__name__)
 TIMEOUT_MS: Final = 2000
+# Taking control waits longer: while an app cold-starts (Chrome) GNOME Shell can be
+# busy for seconds, and a BeginControl that gave up after 2 s failed the request.
+CONTROL_TIMEOUT_MS: Final = 10_000
 # A screenshot of a large screen takes longer than a click.
 SCREENSHOT_TIMEOUT_MS: Final = 10_000
 
@@ -114,7 +119,8 @@ class ShellBridge:
         """Take (or keep) control of the screen; returns "active" or "paused"."""
         from gi.repository import GLib
 
-        return str(self._must("BeginControl", GLib.Variant("(s)", (reason,)))[0])
+        reply = self._must("BeginControl", GLib.Variant("(s)", (reason,)), CONTROL_TIMEOUT_MS)
+        return str(reply[0])
 
     def end_control(self) -> None:
         """Give control back, if this process holds it. Quiet without the extension."""
@@ -167,7 +173,14 @@ class ShellPresence:
 
         if not await asyncio.to_thread(self._bridge.available):
             return
-        state = await asyncio.to_thread(self._bridge.begin_control, CONTROL_REASON)
+        try:
+            state = await asyncio.to_thread(self._bridge.begin_control, CONTROL_REASON)
+        except ShellUnavailableError as exc:
+            # The glow is for what the user sees; a step that opens an app needs none.
+            # Screen and input calls still refuse without control, so nothing acts unseen.
+            log.warning("could not show that Arcee is working: %s", exc)
+            self.held = False
+            return
         while state == "paused":
             await asyncio.sleep(PAUSE_POLL_S)
             state = await asyncio.to_thread(self._bridge.control_state)
