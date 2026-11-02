@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Arcee",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Lets the Arcee desktop agent read and act on web pages, on request, through a local helper.",
   "author": "Itesh Tomar",
   "homepage_url": "https://iteshxt.me",

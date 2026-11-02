@@ -78,7 +78,8 @@ class Motion:
 IDLE = Motion(frames=40, delay_ms=80, swell=0.035, spread=0.020, turns=1, pulse=0.03)
 # The icon: a still from a livelier ring, with brighter, wider strands to read small.
 ICON = Motion(frames=1, delay_ms=0, swell=0.07, spread=0.05, turns=1, pulse=0.0)
-ACTIVE = Motion(frames=28, delay_ms=54, swell=0.085, spread=0.045, turns=2, pulse=0.10)
+# Calmer than it was: the ribbons swing half as far, one wave, nearly 3 s a loop.
+ACTIVE = Motion(frames=36, delay_ms=80, swell=0.05, spread=0.035, turns=1, pulse=0.05)
 
 
 def lerp(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -127,47 +128,94 @@ def ribbons(light: Light, size: int, phase: float, motion: Motion, boost: float 
                 light.add(x, y, colour, (0.55 + 0.6 * facing) * boost)
 
 
+Vertex = tuple[float, float, float]
+
+
+def geodesic(subdivisions: int = 2) -> tuple[list[Vertex], set[tuple[int, int]]]:
+    """A geodesic sphere: an icosahedron with a vertex up, its faces split into triangles.
+
+    With a vertex on the vertical axis, a fifth of a turn about it looks the same,
+    so the sphere can turn by that much per loop without a seam.
+    """
+    top, bottom = (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)
+    y, r = 1 / math.sqrt(5), 2 / math.sqrt(5)
+    upper = [(r * math.cos(math.tau * k / 5), y, r * math.sin(math.tau * k / 5)) for k in range(5)]
+    lower = [
+        (r * math.cos(math.tau * (k + 0.5) / 5), -y, r * math.sin(math.tau * (k + 0.5) / 5))
+        for k in range(5)
+    ]
+    points: list[Vertex] = [top, *upper, *lower, bottom]
+    faces: list[tuple[int, int, int]] = []
+    for k in range(5):
+        u, u2, lo, lo2 = 1 + k, 1 + (k + 1) % 5, 6 + k, 6 + (k + 1) % 5
+        faces += [(0, u, u2), (u, lo, u2), (u2, lo, lo2), (lo, 11, lo2)]
+    for _ in range(subdivisions):
+        middle: dict[tuple[int, int], int] = {}
+        split: list[tuple[int, int, int]] = []
+        for a, b, c in faces:
+            ab, bc, ca = (_middle(points, middle, x, y) for x, y in ((a, b), (b, c), (c, a)))
+            split += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        faces = split
+    edges = {
+        (min(a, b), max(a, b)) for f in faces for a, b in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0]))
+    }
+    return points, edges
+
+
+def _middle(points: list[Vertex], middle: dict[tuple[int, int], int], a: int, b: int) -> int:
+    """The vertex halfway between a and b, pushed out onto the sphere (made once)."""
+    key = (min(a, b), max(a, b))
+    if key not in middle:
+        x = [(points[a][i] + points[b][i]) / 2 for i in range(3)]
+        n = math.sqrt(sum(v * v for v in x))
+        points.append((x[0] / n, x[1] / n, x[2] / n))
+        middle[key] = len(points) - 1
+    return middle[key]
+
+
+SPHERE = geodesic()
+
+
 def sphere(
     draw: ImageDraw.ImageDraw, light: Light, size: int, phase: float, motion: Motion
 ) -> None:
-    """A small wireframe globe that turns, inside a faint ring with notches."""
+    """The core: a geodesic sphere of fine light that turns slowly, inside a soft
+    scalloped ring, as in the reference the user chose."""
     centre = size / 2
-    radius = size * 0.085 * (1 + motion.pulse * math.sin(phase))
-    ring = size * 0.165
+    radius = size * 0.09 * (1 + motion.pulse * math.sin(phase))
+    inner = size * 0.15
+    # A darker disc under the core, so it reads against the ring's glow.
     draw.ellipse(
-        (centre - ring, centre - ring, centre + ring, centre + ring),
-        outline=lerp(STAGE_CENTRE, DEEP, 0.3),
-        width=max(1, size // 300),
+        (centre - inner, centre - inner, centre + inner, centre + inner),
+        fill=lerp(STAGE_EDGE, STAGE_CENTRE, 0.4),
     )
-    for k in range(24):  # the notches of a gear, very faint
-        a = math.tau * k / 24 + phase / 24  # a 24th of a turn per loop: seamless
-        inner, outer = ring * 0.93, ring * 0.99
-        draw.line(
-            (
-                centre + inner * math.cos(a),
-                centre + inner * math.sin(a),
-                centre + outer * math.cos(a),
-                centre + outer * math.sin(a),
-            ),
-            fill=lerp(STAGE_CENTRE, DEEP, 0.25),
-            width=max(1, size // 360),
-        )
-    spin = phase / 8  # eight meridians: a turn of 1/8 per loop looks the same
-    for lat in range(-60, 61, 30):  # latitude circles
-        phi = math.radians(lat)
-        for i in range(90):
-            _plot(light, centre, radius, phi, math.tau * i / 90 + spin)
-    for m in range(8):  # meridians
-        lon = math.tau * m / 8 + spin
-        for i in range(70):
-            _plot(light, centre, radius, -math.pi / 2 + math.pi * i / 69, lon)
-
-
-def _plot(light: Light, c: float, r: float, phi: float, lon: float) -> None:
-    x = r * math.cos(phi) * math.sin(lon)
-    y = r * math.sin(phi)
-    z = math.cos(phi) * math.cos(lon)  # 1 facing us, -1 behind
-    light.add(c + x, c + y, lerp(DEEP, GOLD, (z + 1) / 2), 0.25 + 0.45 * (z + 1) / 2)
+    # The scalloped ring: twelve soft lobes.
+    ring = size * 0.165
+    for i in range(720):
+        a = math.tau * i / 720
+        rr = ring * (1 + 0.05 * abs(math.sin(6 * a + phase / 12)))
+        light.add(centre + rr * math.cos(a), centre + rr * math.sin(a), DEEP, 0.18)
+    # The sphere, turned a fifth of a turn per loop and tilted towards us.
+    spin = phase / 5
+    tilt = math.radians(20)
+    projected = []
+    for x, y, z in SPHERE[0]:
+        x, z = x * math.cos(spin) - z * math.sin(spin), x * math.sin(spin) + z * math.cos(spin)
+        y, z = y * math.cos(tilt) - z * math.sin(tilt), y * math.sin(tilt) + z * math.cos(tilt)
+        projected.append((centre + radius * x, centre - radius * y, z))
+    for a, b in SPHERE[1]:
+        (x1, y1, z1), (x2, y2, z2) = projected[a], projected[b]
+        depth = (z1 + z2) / 2  # 1 facing us, -1 behind
+        strength = 0.12 + 0.38 * (depth + 1) / 2
+        colour = lerp(DEEP, GOLD, (depth + 1) / 2)
+        steps = max(4, int(math.hypot(x2 - x1, y2 - y1) / 1.5))
+        for k in range(steps):
+            t = k / steps
+            light.add(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, colour, strength)
+    # Its outline, crisp.
+    for i in range(360):
+        a = math.tau * i / 360
+        light.add(centre + radius * math.cos(a), centre + radius * math.sin(a), AMBER, 0.55)
 
 
 def frame(phase: float, motion: Motion, size: int = SIZE, *, icon: bool = False) -> Image.Image:

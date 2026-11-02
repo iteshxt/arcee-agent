@@ -70,6 +70,10 @@ async function handle(method, params) {
   switch (method) {
     case "ping":
       return { version: chrome.runtime.getManifest().version };
+    case "reload":
+      // Load the extension's files again (after an update), once this reply is sent.
+      setTimeout(() => chrome.runtime.reload(), 200);
+      return { reloading: true };
     case "tabs": {
       const tabs = await chrome.tabs.query({});
       return tabs.map((t) => ({ id: t.id, title: t.title, url: t.url, active: t.active }));

@@ -512,6 +512,22 @@ async def browser_check() -> int:
     return 0
 
 
+async def browser_reload() -> int:
+    """After the extension's files change: no trip to chrome://extensions."""
+    client = BrowserClient()
+    try:
+        before = (await client.request("ping"))["version"]
+        await client.request("reload")
+    except BrowserError as exc:
+        print(f"could not reload: {exc}")
+        print("(extensions older than 0.3.6 cannot reload themselves: use chrome://extensions)")
+        return 1
+    finally:
+        await client.aclose()
+    print(f"Chrome is reloading the Arcee extension (was {before})")
+    return 0
+
+
 def _row(result: CaseResult) -> dict[str, object]:
     d = result.decision
     return {
@@ -568,6 +584,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("limits", help="show the cloud models' remaining rate limits")
     sub.add_parser("browser-setup", help="register the Chrome extension's native host")
     sub.add_parser("browser-check", help="check that the Chrome extension is connected")
+    sub.add_parser(
+        "browser-reload", help="make Chrome load the Arcee extension's files again (0.3.6+)"
+    )
 
     tasks_cmd = sub.add_parser("eval-tasks", help="run whole tasks and check their outcomes")
     tasks_cmd.add_argument("--tasks", type=Path, default=Path("tests/eval/tasks.toml"))
@@ -608,6 +627,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return browser_setup()
         if args.command == "browser-check":
             return asyncio.run(browser_check())
+        if args.command == "browser-reload":
+            return asyncio.run(browser_reload())
         if args.command == "eval-tasks":
             return asyncio.run(
                 evaluate_tasks(

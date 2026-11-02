@@ -51,3 +51,17 @@ def test_the_package_registers_the_chrome_host(packaged: list[list[str]], tmp_pa
     assert "registered for every user by the package" in report.lines[0]
     assert any("Load unpacked" in line for line in report.next)
     assert written(tmp_path) == []
+
+
+def test_a_checkout_puts_the_icon_in_the_users_icon_theme(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    report = install.Report()
+
+    install.install_icon(report)
+
+    theme = tmp_path / "icons" / "hicolor"
+    assert (theme / "256x256" / "apps" / "me.iteshxt.Arcee.png").is_file()
+    assert (theme / "16x16" / "apps" / "me.iteshxt.Arcee.png").is_file()
+    assert (theme / "scalable" / "apps" / "me.iteshxt.Arcee.svg").is_file()
