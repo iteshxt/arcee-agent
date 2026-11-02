@@ -15,7 +15,7 @@ from pydantic import Field, field_validator
 
 from arcee.core.policy import Policy, Tier
 from arcee.platform.atspi import Snapshot
-from arcee.tools.base import NoArgs, Tool, ToolArgs, ToolContext, ToolResult, Usage
+from arcee.tools.base import ElementTarget, NoArgs, Tool, ToolArgs, ToolContext, ToolResult, Usage
 
 RISKY: Final = re.compile(
     r"\b(delete|trash|remove|erase|discard|send|submit|pay|buy|purchase|format|uninstall|"
@@ -123,7 +123,7 @@ class UiTree(_DesktopTool[TreeArgs]):
 
 
 class ActArgs(ToolArgs):
-    target: str = Field(
+    target: ElementTarget = Field(
         pattern=r"^(el_\d+|window)$", description="An el_N from ui.tree, or 'window'"
     )
     action: str = Field(

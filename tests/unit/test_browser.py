@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from arcee.browser.client import NOT_CONNECTED, BrowserClient, BrowserError
 from arcee.browser.host import EXTENSION_ID, HOST_NAME, encode, read_message, serve
@@ -186,6 +187,16 @@ class TestTools:
         assert result.summary == "Clicked Compose"
         assert client.calls[-1] == ("click", {"target": "el_1"})
         assert shared.elements == {}
+
+    async def test_a_submit_the_page_refuses_is_reported_not_passed_off(self) -> None:
+        # LFM clicked Sign up with the required name empty and announced success.
+        refused = {"clicked": "el_6", "not_submitted": ["Full name"]}
+        shared, _ = session({"elements": PAGE, "click": refused})
+        await BrowserElements(shared).run(ElementsArgs(), CTX)
+
+        result = await BrowserClick(shared).run(ClickArgs(target="el_1"), CTX)
+
+        assert result.error == "Not submitted: the page wants Full name filled in first"
 
     async def test_navigation_and_tabs(self) -> None:
         shared, client = session(
@@ -387,3 +398,11 @@ async def test_chrome_is_started_once_while_its_extension_connects(
 
 async def _no_sleep(seconds: float) -> None:
     return None
+
+
+def test_an_element_id_with_its_description_copied_after_it_still_counts() -> None:
+    # LFM wrote target='el_3 select'; every such call failed and was asked again.
+    assert FillArgs(target="el_3 select", text="Afternoon").target == "el_3"
+    assert FillArgs(target="el_2 input: type=email", text="x").target == "el_2"
+    with pytest.raises(ValidationError):
+        FillArgs(target="the email box", text="x")

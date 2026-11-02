@@ -5,12 +5,13 @@ correctly, and returns structured `data` so the model reads facts (counts,
 matched paths) instead of re-deriving them from raw text (decision 0003).
 """
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Protocol
+from typing import Annotated, Any, ClassVar, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict
 
 from arcee.core.policy import Policy, Tier
 from arcee.core.protocol import Risk
@@ -58,6 +59,21 @@ class Usage:
         if self.example:
             lines.append(f"Example: {self.example}")
         return "\n".join(lines)
+
+
+_LEADING_ELEMENT: Final = re.compile(r"\s*(el_\d+)\b")
+
+
+def leading_element(value: Any) -> Any:
+    """`el_3 select` -> `el_3`: small local models copy the element's description after
+    its id, and every such call failed validation and was asked again."""
+    if isinstance(value, str) and (match := _LEADING_ELEMENT.match(value)):
+        return match[1]
+    return value
+
+
+# An element id from a tree or page reading, as models write it.
+ElementTarget = Annotated[str, BeforeValidator(leading_element)]
 
 
 class ToolArgs(BaseModel):

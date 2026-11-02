@@ -13,14 +13,14 @@ import html
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Final, Literal
+from typing import Any, ClassVar, Final, Literal, cast
 from urllib.parse import urlparse
 
 from pydantic import Field
 
 from arcee.browser.client import NOT_CONNECTED, BrowserClient, BrowserError
 from arcee.core.policy import Policy, Tier
-from arcee.tools.base import NoArgs, Tool, ToolArgs, ToolContext, ToolResult, Usage
+from arcee.tools.base import ElementTarget, NoArgs, Tool, ToolArgs, ToolContext, ToolResult, Usage
 
 # Labels whose click has consequences outside the page.
 RISKY_CLICK: Final = re.compile(
@@ -404,7 +404,9 @@ class BrowserScroll(_BrowserTool[ScrollArgs]):
 
 
 class ClickArgs(ToolArgs):
-    target: str = Field(pattern=r"^el_\d+$", description="An el_N from browser.get_elements")
+    target: ElementTarget = Field(
+        pattern=r"^el_\d+$", description="An el_N from browser.get_elements"
+    )
 
 
 class BrowserClick(_BrowserTool[ClickArgs]):
@@ -430,11 +432,18 @@ class BrowserClick(_BrowserTool[ClickArgs]):
         except BrowserError as exc:
             return ToolResult.fail(str(exc))
         self.session.elements.clear()
+        page = cast(dict[str, Any], page or {})
+        if missing := cast(list[str], page.get("not_submitted") or []):
+            return ToolResult.fail(
+                f"Not submitted: the page wants {', '.join(missing)} filled in first"
+            )
         return ToolResult.ok(f"Clicked {label or args.target}", data=page)
 
 
 class FillArgs(ToolArgs):
-    target: str = Field(pattern=r"^el_\d+$", description="An el_N field from browser.get_elements")
+    target: ElementTarget = Field(
+        pattern=r"^el_\d+$", description="An el_N field from browser.get_elements"
+    )
     text: str = Field(max_length=20_000)
     submit: bool = Field(default=False, description="Press Enter or submit the form after")
 

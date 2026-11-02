@@ -202,6 +202,15 @@ function clickElement(target) {
   const el = document.querySelector(`[data-arcee-id="${target}"]`);
   if (!el) throw new Error(`${target} is gone; get the elements again`);
   el.scrollIntoView({ block: "center" });
+  // A submit the browser will refuse (a required field left empty) is reported, not
+  // passed off as done: a model clicked Sign up with no name and announced success.
+  const form = el.form || el.closest("form");
+  const submits = form && (el.type === "submit" || (el.tagName === "BUTTON" && !el.type) || el.type === "image");
+  if (submits && !form.checkValidity()) {
+    const invalid = [...form.elements].filter((f) => f.willValidate && !f.checkValidity());
+    const names = invalid.map((f) => (f.labels && f.labels[0] ? f.labels[0].innerText : f.name || f.type).trim());
+    return { clicked: target, url: location.href, title: document.title, not_submitted: names };
+  }
   el.click();
   return { clicked: target, url: location.href, title: document.title };
 }
@@ -209,6 +218,9 @@ function clickElement(target) {
 function fillElement(target, text, submit) {
   const el = document.querySelector(`[data-arcee-id="${target}"]`);
   if (!el) throw new Error(`${target} is gone; get the elements again`);
+  if (el.tagName === "BUTTON" || ["submit", "button", "reset", "image"].includes(el.type)) {
+    throw new Error(`${target} is a button, not a field: click it`);
+  }
   el.scrollIntoView({ block: "center" });
   el.focus();
   if (el.tagName === "SELECT") {

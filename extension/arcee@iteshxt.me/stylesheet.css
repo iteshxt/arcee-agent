@@ -165,6 +165,17 @@
   spacing: 6px;
 }
 
+.arcee-icon-button {
+  border-radius: 999px;
+  padding: 4px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.arcee-icon-button:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
 .arcee-budget-title {
   font-weight: bold;
   font-size: 90%;

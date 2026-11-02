@@ -196,6 +196,12 @@ class ArceeWindow(Adw.ApplicationWindow):
         self._budget = Adw.PreferencesGroup(
             title="Today", description="Groq's free allowance per model; it refills over the day."
         )
+        reload = Gtk.Button(
+            icon_name="view-refresh-symbolic", tooltip_text="Check now", valign=Gtk.Align.CENTER
+        )
+        reload.add_css_class("flat")
+        reload.connect("clicked", lambda _b: self._refresh_budget())
+        self._budget.set_header_suffix(reload)
         self._budget_rows: dict[str, tuple[Adw.ActionRow, Gtk.LevelBar]] = {}
         for model in GROQ_MODELS:
             bar = Gtk.LevelBar(min_value=0, max_value=1, valign=Gtk.Align.CENTER, width_request=140)
