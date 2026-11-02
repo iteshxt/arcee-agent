@@ -20,7 +20,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Final
 
-from dbus_fast import BusType, DBusError, RequestNameReply
+from dbus_fast import BusType, DBusError, Message, MessageType, RequestNameReply
 from dbus_fast.aio import MessageBus
 from dbus_fast.annotations import DBusBool, DBusDouble, DBusStr, DBusUInt32
 from dbus_fast.service import ServiceInterface, method, signal
@@ -364,11 +364,42 @@ class AgentService(ServiceInterface):
             self.Step(step)
 
 
+async def watch_shell_stop(bus: MessageBus, service: AgentService) -> None:
+    """Cancel the request when the user stops Arcee from the shell.
+
+    The extension emits Stopped for the stop shortcut (Super+Shift+Escape) and the
+    Stop pill. Without this only the panel's own Stop reached arceed: the pill and
+    the shortcut took the glow away while the request went on.
+    """
+    from arcee.platform.shell import BUS_NAME as SHELL_INTERFACE
+
+    def on_message(message: Message) -> None:
+        if (
+            message.message_type == MessageType.SIGNAL
+            and message.interface == SHELL_INTERFACE
+            and message.member == "Stopped"
+        ):
+            service.Cancel()
+
+    bus.add_message_handler(on_message)
+    await bus.call(
+        Message(
+            destination="org.freedesktop.DBus",
+            path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus",
+            member="AddMatch",
+            signature="s",
+            body=[f"type='signal',interface='{SHELL_INTERFACE}',member='Stopped'"],
+        )
+    )
+
+
 async def serve(runner: TaskRunner, bus: MessageBus) -> None:
     """Export the service on `bus` and run until the bus disconnects."""
     service = AgentService(runner)
     service.on_quit = bus.disconnect
     bus.export(OBJECT_PATH, service)
+    await watch_shell_stop(bus, service)
     reply = await bus.request_name(BUS_NAME)
     if reply not in (RequestNameReply.PRIMARY_OWNER, RequestNameReply.ALREADY_OWNER):
         raise SystemExit(f"{BUS_NAME} is already running")
