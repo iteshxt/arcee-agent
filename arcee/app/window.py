@@ -27,6 +27,7 @@ from arcee import install, local_models  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
 from arcee.app.agent_page import AgentPage  # noqa: E402
 from arcee.app.local_setup import LocalSetupDialog  # noqa: E402
+from arcee.app.memory_page import MemoryPage  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
@@ -117,7 +118,7 @@ def restart_daemon_when_idle(background: Background, told: Callable[[str], None]
 
 class ArceeWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application, from_keyring: set[str]) -> None:
-        super().__init__(application=app, title="Arcee", default_width=880, default_height=800)
+        super().__init__(application=app, title="Arcee", default_width=1000, default_height=800)
         self._from_keyring = from_keyring
         self._syncing = False  # switches being set together, not by the user
         self._background = Background()
@@ -132,6 +133,13 @@ class ArceeWindow(Adw.ApplicationWindow):
         stack.add_titled_with_icon(
             self._history_page(), "history", "History", "document-open-recent-symbolic"
         )
+        self._memory = MemoryPage(
+            self._background.run,
+            self._toast_with,
+            learning=self._settings.memory,
+            on_learning=self._on_learning,
+        )
+        stack.add_titled_with_icon(self._memory, "memory", "Memory", "bookmark-new-symbolic")
         stack.add_titled_with_icon(
             self._permissions_page(), "permissions", "Permissions", "security-medium-symbolic"
         )
@@ -207,6 +215,19 @@ class ArceeWindow(Adw.ApplicationWindow):
 
     def _toast(self, text: str) -> None:
         self._toasts.add_toast(Adw.Toast(title=text, timeout=3))
+
+    def _toast_with(self, text: str, undo: Callable[[], None] | None) -> None:
+        """A toast, with Undo when `undo` is given."""
+        toast = Adw.Toast(title=GLib.markup_escape_text(text), timeout=5 if undo else 3)
+        if undo is not None:
+            toast.set_button_label("Undo")
+            toast.connect("button-clicked", lambda _t: undo())
+        self._toasts.add_toast(toast)
+
+    def _on_learning(self, on: bool) -> None:
+        if self._settings.memory != on:
+            self._settings.memory = on
+            self._saved()  # arceed starts again with the new setting when idle
 
     def _saved(self) -> None:
         save(self._settings)

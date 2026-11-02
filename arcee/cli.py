@@ -204,7 +204,7 @@ async def run(
         examples=examples,
         presence=presence,
         policy=settings.policy(),
-        memory=memory,
+        memory=memory and settings.memory,
     )
     try:
         notes, problem = await runner.check()
