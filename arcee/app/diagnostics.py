@@ -10,8 +10,12 @@ import os
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from arcee.browser.client import BrowserClient, BrowserError
+from arcee.browser.host import HOST_NAME
+from arcee.browser.setup import EXTENSION_DIR, chrome_hosts_dir
 from arcee.platform.shell import ShellBridge
 from arcee.voice import KEY_ENV as SPEECH_KEY_ENV
 
@@ -29,17 +33,90 @@ class Check:
     fix_action: str = ""
 
 
-async def shell_extension() -> Check:
-    bridge = ShellBridge()
-    if not await asyncio.to_thread(bridge.available):
+EXTENSION_UUID = "arcee@iteshxt.me"
+# GNOME Shell's ExtensionState values (org.gnome.Shell.Extensions).
+_ACTIVE, _INACTIVE, _ERROR, _OUT_OF_DATE, _INITIALIZED = 1, 2, 3, 4, 6
+
+
+def extension_dirs() -> list[Path]:
+    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return [
+        Path(data) / "gnome-shell" / "extensions" / EXTENSION_UUID,
+        Path("/usr/share/gnome-shell/extensions") / EXTENSION_UUID,
+    ]
+
+
+def extension_check(info: dict[str, Any] | None, installed: bool) -> Check:
+    """What is in the way of the extension, from GNOME's own view of it.
+
+    "Not running" alone sent people who had just installed the .deb looking for a
+    missing file: GNOME loads new extensions only at login, and then they are off.
+    """
+    name = "GNOME Shell extension"
+    state = int((info or {}).get("state", 0))
+    if not installed:
+        return Check(name, False, "not installed", "install it", fix_action="shell_extension")
+    if not info:
         return Check(
-            "GNOME Shell extension",
+            name,
             False,
-            "not running: no glow, screen reading or window focus",
-            "install it, then log out and back in",
+            "installed, but GNOME loads new extensions at login",
+            "log out and back in, then press Fix to turn it on",
             fix_action="shell_extension",
         )
-    return Check("GNOME Shell extension", True, "running")
+    if state in (_INACTIVE, _INITIALIZED):
+        return Check(
+            name, False, "installed but turned off", "turn it on", fix_action="shell_extension"
+        )
+    if state == _ERROR:
+        return Check(
+            name,
+            False,
+            f"failed to start: {(info or {}).get('error', 'unknown error')}",
+            "log out and back in; if it stays, report it",
+        )
+    if state == _OUT_OF_DATE:
+        return Check(name, False, "not made for this GNOME version")
+    return Check(name, False, "starting", "wait a moment, then check again")
+
+
+async def extension_info() -> dict[str, Any] | None:
+    """GNOME Shell's record of the extension; None (or {}) when it has not loaded it."""
+    from dbus_fast import BusType, Message, MessageType
+    from dbus_fast.aio import MessageBus
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SESSION).connect()
+    except OSError:
+        return None
+    try:
+        reply = await asyncio.wait_for(
+            bus.call(
+                Message(
+                    destination="org.gnome.Shell.Extensions",
+                    path="/org/gnome/Shell/Extensions",
+                    interface="org.gnome.Shell.Extensions",
+                    member="GetExtensionInfo",
+                    signature="s",
+                    body=[EXTENSION_UUID],
+                )
+            ),
+            timeout=5,
+        )
+    except TimeoutError:
+        return None
+    finally:
+        bus.disconnect()
+    if reply.message_type is not MessageType.METHOD_RETURN:
+        return None
+    return {key: variant.value for key, variant in reply.body[0].items()}
+
+
+async def shell_extension() -> Check:
+    if await asyncio.to_thread(ShellBridge().available):
+        return Check("GNOME Shell extension", True, "running")
+    installed = any(path.is_dir() for path in extension_dirs())
+    return extension_check(await extension_info(), installed)
 
 
 async def daemon() -> Check:
@@ -83,17 +160,36 @@ async def chrome() -> Check:
     try:
         await asyncio.wait_for(client.request("ping"), timeout=5)
     except BrowserError, TimeoutError:
+        if not any(path.is_file() for path in host_manifests()):
+            return Check(
+                "Chrome bridge",
+                False,
+                "the Chrome helper is not registered",
+                "register it, then load the Arcee extension in Chrome",
+                advisory=True,
+                fix_action="browser_bridge",
+            )
         return Check(
             "Chrome bridge",
             False,
-            "not connected: Arcee starts Chrome when it needs it",
-            "if it never connects: register it with Chrome and load the extension",
+            "Chrome is closed, or the Arcee extension is not loaded in it",
+            f"load it once: chrome://extensions, Developer mode, Load unpacked, {EXTENSION_DIR}",
             advisory=True,
             fix_action="browser_bridge",
         )
     finally:
         await client.aclose()
     return Check("Chrome bridge", True, "connected")
+
+
+def host_manifests() -> list[Path]:
+    """Where Chrome looks for Arcee's native host: the user's own, then every user's."""
+    name = f"{HOST_NAME}.json"
+    return [
+        chrome_hosts_dir() / name,
+        Path("/etc/opt/chrome/native-messaging-hosts") / name,
+        Path("/etc/chromium/native-messaging-hosts") / name,
+    ]
 
 
 async def keys() -> list[Check]:
