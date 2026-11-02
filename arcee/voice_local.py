@@ -1,0 +1,322 @@
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeStubs=false
+"""Voice on this computer (decision 0015): a wake word, and speech-to-text, via sherpa-onnx.
+
+The models are downloaded on request (`download`) into the data folder, keeping only
+the files used. `LocalTranscriber` turns a recording into text with Moonshine base,
+on the CPU (the GPU is Ollama's): about 0.4 s for a 5-second request. `WakeListener`
+reads the microphone through `pw-record`; only the keyword spotter sees the audio
+until it hears "hey Arcee", then Silero VAD cuts out the request, which is
+transcribed here. "Arcee stop" stops what is running. Nothing is stored or sent.
+"""
+
+import array
+import asyncio
+import bz2
+import contextlib
+import io
+import logging
+import tarfile
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Final
+
+import httpx
+
+from arcee.context.store import data_dir
+from arcee.voice import RATE, RECORD_COMMAND, VoiceError
+
+log = logging.getLogger(__name__)
+
+RELEASES: Final = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceModel:
+    name: str
+    purpose: str
+    url: str
+    # Files kept from the archive (the rest, other precisions and test audio, is not).
+    files: tuple[str, ...]
+    size_mb: int  # what is kept, to show before downloading
+
+
+SPOTTER: Final = VoiceModel(
+    "wake",
+    'hears "hey Arcee" and "Arcee stop"',
+    f"{RELEASES}/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2",
+    (
+        "tokens.txt",
+        "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+        "decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+        "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+    ),
+    6,
+)
+SPEECH: Final = VoiceModel(
+    "speech",
+    "turns what you say into text, on this computer",
+    f"{RELEASES}/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2",
+    (
+        "preprocess.onnx",
+        "encode.int8.onnx",
+        "uncached_decode.int8.onnx",
+        "cached_decode.int8.onnx",
+        "tokens.txt",
+    ),
+    286,
+)
+VAD: Final = VoiceModel(
+    "vad",
+    "finds where you start and stop speaking",
+    f"{RELEASES}/asr-models/silero_vad.onnx",
+    ("silero_vad.onnx",),
+    1,
+)
+MODELS: Final = (SPOTTER, SPEECH, VAD)
+
+# The wake phrases in the spotter's word pieces (its bpe.model, encoded once). "Arcee"
+# is not an English word, so each phrase comes in spellings that sound alike, all
+# reported under one name.
+KEYWORDS: Final = """\
+▁HE Y ▁A R CE E @HEY_ARCEE
+▁HE Y ▁A R SE E @HEY_ARCEE
+▁HE Y ▁ R ▁C @HEY_ARCEE
+▁A R CE E ▁ST O P @ARCEE_STOP
+▁ R ▁C ▁ST O P @ARCEE_STOP
+"""
+WAKE: Final = "HEY_ARCEE"
+STOP: Final = "ARCEE_STOP"
+THRESHOLD: Final = 0.25
+FRAME: Final = 1280  # 80 ms at 16 kHz
+# After the wake word: the request ends after this much silence, or at most this long.
+END_SILENCE_S: Final = 0.7
+MAX_REQUEST_S: Final = 20.0
+NO_REQUEST_S: Final = 6.0
+
+
+def models_dir() -> Path:
+    return data_dir() / "models"
+
+
+def model_path(model: VoiceModel) -> Path:
+    return models_dir() / model.name
+
+
+def installed(model: VoiceModel) -> bool:
+    return all((model_path(model) / name).is_file() for name in model.files)
+
+
+def missing() -> list[VoiceModel]:
+    return [m for m in MODELS if not installed(m)]
+
+
+async def download(
+    model: VoiceModel,
+    on_progress: Callable[[float], None] = lambda fraction: None,
+    client: httpx.AsyncClient | None = None,
+) -> None:
+    """Fetch `model`, keep its files in the models folder; reports the fraction done."""
+    target = model_path(model)
+    target.mkdir(parents=True, exist_ok=True)
+    data = bytearray()
+    own = client is None
+    client = client or httpx.AsyncClient(timeout=httpx.Timeout(30, read=120), follow_redirects=True)
+    try:
+        async with client.stream("GET", model.url) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length") or 0)
+            async for chunk in response.aiter_bytes():
+                data += chunk
+                if total:
+                    on_progress(min(1.0, len(data) / total))
+    except httpx.HTTPError as exc:
+        raise VoiceError(f"could not download {model.name}: {type(exc).__name__}") from exc
+    finally:
+        if own:
+            await client.aclose()
+    await asyncio.to_thread(_unpack, model, bytes(data), target)
+
+
+def _unpack(model: VoiceModel, data: bytes, target: Path) -> None:
+    if not model.url.endswith(".tar.bz2"):
+        (target / model.files[0]).write_bytes(data)
+        return
+    wanted = set(model.files)
+    with tarfile.open(fileobj=io.BytesIO(bz2.decompress(data)), mode="r:") as archive:
+        for member in archive.getmembers():
+            name = Path(member.name).name
+            if member.isfile() and name in wanted:
+                source = archive.extractfile(member)
+                if source is not None:
+                    (target / name).write_bytes(source.read())
+    if not installed(model):
+        raise VoiceError(f"{model.name}: the download did not hold the expected files")
+
+
+def samples(pcm: bytes) -> list[float]:
+    """16-bit little-endian PCM to floats in [-1, 1]."""
+    return [s / 32768 for s in array.array("h", pcm)]
+
+
+class LocalTranscriber:
+    """Moonshine base on the CPU; the same interface as the Groq `Transcriber`."""
+
+    def __init__(self) -> None:
+        self._recognizer: Any = None
+
+    def _load(self) -> Any:
+        if self._recognizer is None:
+            if not installed(SPEECH):
+                raise VoiceError("the speech model is not downloaded (Models page, Voice)")
+            import sherpa_onnx
+
+            d = model_path(SPEECH)
+            self._recognizer = sherpa_onnx.OfflineRecognizer.from_moonshine(
+                preprocessor=str(d / "preprocess.onnx"),
+                encoder=str(d / "encode.int8.onnx"),
+                uncached_decoder=str(d / "uncached_decode.int8.onnx"),
+                cached_decoder=str(d / "cached_decode.int8.onnx"),
+                tokens=str(d / "tokens.txt"),
+                num_threads=4,
+            )
+        return self._recognizer
+
+    def _transcribe(self, pcm: bytes) -> str:
+        recognizer = self._load()
+        stream = recognizer.create_stream()
+        stream.accept_waveform(RATE, samples(pcm))
+        recognizer.decode_stream(stream)
+        return str(stream.result.text).strip()
+
+    async def transcribe(self, pcm: bytes) -> str:
+        return await asyncio.to_thread(self._transcribe, pcm)
+
+
+def make_spotter(phrases: str = KEYWORDS) -> Any:
+    import sherpa_onnx
+
+    d = model_path(SPOTTER)
+    keywords = models_dir() / "keywords.txt"
+    keywords.write_text(phrases)
+    return sherpa_onnx.KeywordSpotter(
+        tokens=str(d / "tokens.txt"),
+        encoder=str(d / SPOTTER.files[1]),
+        decoder=str(d / SPOTTER.files[2]),
+        joiner=str(d / SPOTTER.files[3]),
+        keywords_file=str(keywords),
+        num_threads=1,
+        keywords_threshold=THRESHOLD,
+    )
+
+
+def make_vad() -> Any:
+    import sherpa_onnx
+
+    config = sherpa_onnx.VadModelConfig()
+    config.silero_vad.model = str(model_path(VAD) / "silero_vad.onnx")
+    config.silero_vad.min_silence_duration = END_SILENCE_S
+    config.silero_vad.max_speech_duration = MAX_REQUEST_S
+    config.sample_rate = RATE
+    return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=MAX_REQUEST_S + 10)
+
+
+class WakeListener:
+    """Listens for the wake word for as long as it runs.
+
+    `on_wake()` when it hears "hey Arcee", `on_request(pcm)` with what was said after
+    it (b"" when nothing was), `on_stop()` for "Arcee stop", `on_level(loudness)` while
+    a request is being heard.
+    """
+
+    def __init__(
+        self,
+        *,
+        on_wake: Callable[[], None],
+        on_request: Callable[[bytes], None],
+        on_stop: Callable[[], None],
+        on_level: Callable[[float], None] = lambda loudness: None,
+        command: tuple[str, ...] = RECORD_COMMAND,
+        keywords: str = KEYWORDS,
+    ) -> None:
+        self._keywords = keywords
+        self._on_wake = on_wake
+        self._on_request = on_request
+        self._on_stop = on_stop
+        self._on_level = on_level
+        self._command = command
+        self.paused = False  # the mic button records on its own meanwhile
+
+    async def run(self) -> None:
+        if missing_models := [m.name for m in (SPOTTER, VAD) if not installed(m)]:
+            raise VoiceError(f"voice models not downloaded: {', '.join(missing_models)}")
+        spotter, vad = await asyncio.to_thread(lambda: (make_spotter(self._keywords), make_vad()))
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self._command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            )
+        except FileNotFoundError as exc:
+            raise VoiceError("pw-record is missing (PipeWire's tools)") from exc
+        assert process.stdout is not None
+        try:
+            await self._listen(process.stdout, spotter, vad)
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            await process.wait()
+
+    async def _listen(self, audio: asyncio.StreamReader, spotter: Any, vad: Any) -> None:
+        from arcee.voice import level
+
+        stream = spotter.create_stream()
+        hearing: bytearray | None = None  # the request after the wake word
+        heard_for = 0.0
+        while True:
+            try:
+                chunk = await audio.readexactly(FRAME * 2)
+            except asyncio.IncompleteReadError:
+                return  # the recorder ended (the mic went away)
+            if self.paused:
+                continue
+            frame = samples(chunk)
+            if hearing is not None:
+                hearing += chunk
+                heard_for += FRAME / RATE
+                self._on_level(level(chunk))
+                vad.accept_waveform(frame)
+                if not vad.empty():  # a whole utterance has ended
+                    pcm = _pcm(vad.front.samples)
+                    vad.pop()
+                    hearing = None
+                    self._on_request(pcm)
+                    stream = spotter.create_stream()
+                elif heard_for >= NO_REQUEST_S and not vad.is_speech_detected():
+                    hearing = None
+                    vad.reset()
+                    self._on_request(b"")
+                    stream = spotter.create_stream()
+                elif heard_for >= MAX_REQUEST_S:
+                    vad.flush()
+                    pcm = _pcm(vad.front.samples) if not vad.empty() else bytes(hearing)
+                    vad.reset()
+                    hearing = None
+                    self._on_request(pcm)
+                    stream = spotter.create_stream()
+                continue
+            stream.accept_waveform(RATE, frame)
+            while spotter.is_ready(stream):
+                spotter.decode_stream(stream)
+                found = spotter.get_result(stream)
+                if not found:
+                    continue
+                spotter.reset_stream(stream)
+                if found == STOP:
+                    self._on_stop()
+                elif found == WAKE:
+                    self._on_wake()
+                    hearing, heard_for = bytearray(), 0.0
+                    vad.reset()
+
+
+def _pcm(values: Any) -> bytes:
+    return array.array("h", (max(-32768, min(32767, int(v * 32767))) for v in values)).tobytes()

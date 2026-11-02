@@ -29,6 +29,7 @@ from arcee.app.agent_page import AgentPage  # noqa: E402
 from arcee.app.local_setup import LocalSetupDialog  # noqa: E402
 from arcee.app.memory_page import MemoryPage  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
+from arcee.app.voice_group import VoiceGroup  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
 from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
@@ -252,6 +253,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             row.add_prefix(check)
             thinking.add(row)
         page.add(thinking)
+        page.add(VoiceGroup(self._background.run, self._toast, self._settings, self._saved))
 
         self._budget = Adw.PreferencesGroup(
             title="Today", description="Groq's free allowance per model; it refills over the day."
@@ -272,9 +274,9 @@ class ArceeWindow(Adw.ApplicationWindow):
         page.add(self._budget)
 
         speech = Adw.PreferencesGroup(
-            title="Speech",
-            description="whisper-large-v3-turbo on Groq turns what you say to the panel's mic "
-            "into a request, on its own key and allowance.",
+            title="Groq speech allowance",
+            description="When speech goes to Groq: whisper-large-v3-turbo, on its own key and "
+            "allowance.",
         )
         self._speech_bar = Gtk.LevelBar(
             min_value=0, max_value=1, value=1, valign=Gtk.Align.CENTER, width_request=140

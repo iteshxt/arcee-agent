@@ -14,6 +14,7 @@ from typing import Any, Final, Literal, cast
 from arcee.core.policy import Policy, Tier
 
 Core = Literal["groq", "local"]
+Speech = Literal["local", "groq"]
 CORES: Final[tuple[Core, ...]] = ("groq", "local")
 
 
@@ -32,6 +33,11 @@ class Settings:
     always_ask: list[str] = field(default_factory=list[str])
     # The first-run setup was finished (or skipped) once.
     setup_done: bool = False
+    # Where speech becomes text: "local" (sherpa-onnx, once its model is downloaded;
+    # Groq until then) or "groq" (Whisper on Groq, more accurate, not local).
+    speech: Speech = "local"
+    # Listen for "hey Arcee" (decision 0015). Off until the user turns it on.
+    listen: bool = False
     # Learn from finished tasks (their summaries and facts) and bring back what matters
     # (decision 0014). Off: nothing new is remembered and nothing is recalled.
     memory: bool = True
@@ -62,6 +68,8 @@ def load(path: Path | None = None) -> Settings:
         setup_done=raw.get("setup_done") is True,
         extension_turned_on=raw.get("extension_turned_on") is True,
         memory=raw.get("memory") is not False,
+        speech="groq" if raw.get("speech") == "groq" else "local",
+        listen=raw.get("listen") is True,
     )
 
 

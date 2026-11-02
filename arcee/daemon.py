@@ -16,9 +16,10 @@ import json
 import logging
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from dbus_fast import BusType, DBusError, Message, MessageType, RequestNameReply
 from dbus_fast.aio import MessageBus
@@ -32,6 +33,7 @@ from arcee.models.errors import ModelUnavailableError
 from arcee.runner import TaskRunner
 from arcee.settings import load as load_settings
 from arcee.voice import Recorder, Transcriber, VoiceError
+from arcee.voice_local import WakeListener
 
 BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
@@ -129,13 +131,55 @@ def doing(event: Event) -> str | None:
             return None
 
 
+class Speech(Protocol):
+    """What turns recorded speech into text: Groq's Whisper or the local model."""
+
+    async def transcribe(self, pcm: bytes) -> str: ...
+
+
+def pick_transcriber(speech: str) -> Speech:
+    """The local model when chosen and downloaded (kept loaded), else Groq's Whisper."""
+    from arcee.voice_local import SPEECH, LocalTranscriber, installed
+
+    if speech == "local" and installed(SPEECH):
+        return LocalTranscriber()
+    return Transcriber()
+
+
+# How long the wake-word listener waits before trying again after it fails (the mic
+# unplugged, PipeWire restarting).
+WAKE_RETRY_S = 10.0
+
+
+async def keep_listening(service: AgentService) -> None:
+    """Run the wake-word listener for as long as arceed runs, again after a failure."""
+    while True:
+        listener = WakeListener(
+            on_wake=service.on_wake,
+            on_request=service.on_request,
+            on_stop=service.on_stop,
+            on_level=service.Level,
+        )
+        service.wake = listener
+        try:
+            await listener.run()
+        except VoiceError as exc:
+            log.warning("not listening for the wake word: %s", exc)
+            return  # the models are missing: nothing to retry until they are not
+        except Exception:
+            log.exception("the wake-word listener failed; starting it again")
+        finally:
+            service.wake = None
+        await asyncio.sleep(WAKE_RETRY_S)
+
+
 class AgentService(ServiceInterface):
     def __init__(
         self,
         runner: TaskRunner,
         *,
         recorder: Callable[[Callable[[float], None]], Recorder] = Recorder,
-        transcriber: Transcriber | None = None,
+        transcriber: Speech | None = None,
     ) -> None:
         super().__init__(BUS_NAME)
         self._runner = runner
@@ -143,6 +187,9 @@ class AgentService(ServiceInterface):
         self._transcriber = transcriber or Transcriber()
         self._recorder: Recorder | None = None
         self._listening: asyncio.Task[None] | None = None
+        # The wake-word listener, when the user turned it on; paused for the mic button.
+        self.wake: WakeListener | None = None
+        self._hearing: asyncio.Future[None] | None = None  # a woken request, transcribing
         self._task: asyncio.Task[None] | None = None
         self._request = ""
         self._step = ""
@@ -184,6 +231,8 @@ class AgentService(ServiceInterface):
         if self._listening is not None and not self._listening.done():
             return
         self._recorder = self._make_recorder(self._level)
+        if self.wake is not None:
+            self.wake.paused = True
         self._listening = asyncio.ensure_future(self._listen(self._recorder))
 
     @method()
@@ -269,20 +318,52 @@ class AgentService(ServiceInterface):
         self.Level(loudness)
 
     async def _listen(self, recorder: Recorder) -> None:
-        """Record, transcribe, tell the panel and the app the text, and run it."""
+        """Record (the mic button), then hear it like a woken request."""
         self.Listening(True)
-        heard: dict[str, str]
         try:
             audio, spoke = await recorder.record()
-            if not spoke:
-                heard = {"error": "I did not hear anything"}
-            else:
-                heard = {"text": await self._transcriber.transcribe(audio)}
         except VoiceError as exc:
-            heard = {"error": str(exc)}
-        finally:
             self.Listening(False)
+            self.Heard(json.dumps({"error": str(exc)}))
+            return
+        finally:
             self._recorder = None
+            if self.wake is not None:
+                self.wake.paused = False
+        self.Listening(False)
+        await self._hear(audio if spoke else b"")
+
+    # --- the wake word (WakeListener's callbacks) ---------------------------------------
+
+    def on_wake(self) -> None:
+        self.Listening(True)
+
+    def on_request(self, audio: bytes) -> None:
+        self.Listening(False)
+        self._hearing = asyncio.ensure_future(self._hear(audio))
+
+    def on_stop(self) -> None:
+        self.Cancel()
+
+    async def _hear(self, audio: bytes) -> None:
+        """Transcribe, tell the panel and the app the text, and run it."""
+        heard: dict[str, str]
+        if not audio:
+            heard = {"error": "I did not hear anything"}
+        else:
+            started = time.monotonic()
+            try:
+                heard = {"text": await self._transcriber.transcribe(audio)}
+            except VoiceError as exc:
+                heard = {"error": str(exc)}
+            # The voice gate (spec section 14): end of speech to transcript under 1.5 s.
+            # Speech ended END_SILENCE_S before the wake listener handed the audio over.
+            log.info(
+                "heard %.1f s of speech, transcribed in %.2f s by %s",
+                len(audio) / 2 / 16000,
+                time.monotonic() - started,
+                type(self._transcriber).__name__,
+            )
         self.Heard(json.dumps(heard))
         # What was heard runs here, once, whether the panel or the app is open.
         text = heard.get("text", "").strip()
@@ -394,9 +475,11 @@ async def watch_shell_stop(bus: MessageBus, service: AgentService) -> None:
     )
 
 
-async def serve(runner: TaskRunner, bus: MessageBus) -> None:
+async def serve(
+    runner: TaskRunner, bus: MessageBus, *, speech: str = "groq", listen: bool = False
+) -> None:
     """Export the service on `bus` and run until the bus disconnects."""
-    service = AgentService(runner)
+    service = AgentService(runner, transcriber=pick_transcriber(speech))
     service.on_quit = bus.disconnect
     bus.export(OBJECT_PATH, service)
     await watch_shell_stop(bus, service)
@@ -404,7 +487,12 @@ async def serve(runner: TaskRunner, bus: MessageBus) -> None:
     if reply not in (RequestNameReply.PRIMARY_OWNER, RequestNameReply.ALREADY_OWNER):
         raise SystemExit(f"{BUS_NAME} is already running")
     log.info("arceed ready on the session bus as %s", BUS_NAME)
-    await bus.wait_for_disconnect()
+    listening = asyncio.ensure_future(keep_listening(service)) if listen else None
+    try:
+        await bus.wait_for_disconnect()
+    finally:
+        if listening is not None:
+            listening.cancel()
 
 
 async def _main() -> None:
@@ -420,7 +508,7 @@ async def _main() -> None:
     )
     bus = await MessageBus(bus_type=BusType.SESSION).connect()
     try:
-        await serve(runner, bus)
+        await serve(runner, bus, speech=settings.speech, listen=settings.listen)
     finally:
         await runner.aclose()
 
