@@ -13,6 +13,7 @@ lines for the user, and removes what an older Arcee left under its old names
 
 import contextlib
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -117,7 +118,7 @@ def daemon() -> Report:
     unit = _config() / "systemd" / "user" / "arceed.service"
     activation = _data() / "dbus-1" / "services" / f"{AGENT_BUS_NAME}.service"
     launcher = _data() / "applications" / f"{APP_ID}.desktop"
-    icon = PROJECT / "art" / "arcee-256.png"
+    install_icon(report)
     files = {
         unit: (
             "[Unit]\n"
@@ -143,7 +144,7 @@ def daemon() -> Report:
             "Name=Arcee\n"
             "Comment=An agent for your desktop, by Itesh Tomar\n"
             f"Exec={bin_dir / 'arcee-app'}\n"
-            f"Icon={icon}\n"
+            f"Icon={APP_ID}\n"
             "Categories=Utility;\n"
             f"StartupWMClass={APP_ID}\n"
         ),
@@ -164,6 +165,28 @@ def daemon() -> Report:
         "arceed starts on the panel's first request (log: journalctl --user -u arceed)"
     )
     return report
+
+
+def install_icon(report: Report) -> None:
+    """The app's icon in the user's icon theme under the app's id, as the .deb puts it in
+    the system's: the app grid, the dock and the window all find it by that name."""
+    art = PROJECT / "art"
+    sizes = {px: art / f"arcee-{px}.png" for px in (64, 128, 256, 512)}
+    small = PROJECT / "browser-ext" / "icons"
+    sizes |= {px: small / f"icon-{px}.png" for px in (16, 32, 48)}
+    theme = _data() / "icons" / "hicolor"
+    for px, source in sizes.items():
+        if source.is_file():
+            target = theme / f"{px}x{px}" / "apps" / f"{APP_ID}.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    if (art / "arcee.svg").is_file():
+        scalable = theme / "scalable" / "apps" / f"{APP_ID}.svg"
+        scalable.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(art / "arcee.svg", scalable)
+    # GNOME notices new icons when the theme's folder changes; touch it to be sure.
+    theme.touch()
+    report.lines.append(f"installed the icon in {theme}")
 
 
 def browser_bridge() -> Report:
