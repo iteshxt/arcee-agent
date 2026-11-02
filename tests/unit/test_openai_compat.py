@@ -6,7 +6,12 @@ import pytest
 
 from arcee.core.protocol import CoreAction
 from arcee.models.base import Message, ModelProfile, ModelRequest, ToolRequest, WireCall
-from arcee.models.errors import ModelUnavailableError, QuotaExhaustedError, TruncatedReplyError
+from arcee.models.errors import (
+    MalformedReplyError,
+    ModelUnavailableError,
+    QuotaExhaustedError,
+    TruncatedReplyError,
+)
 from arcee.models.openai_compat import OpenAICompatAdapter
 from arcee.models.presets import cloud_profile, core_ladder, planner_for, share_budget
 from arcee.models.rotation import RotatingAdapter
@@ -222,6 +227,22 @@ async def test_groq_json_validation_failures_become_replies_to_repair() -> None:
     )
 
     assert response.parsed.action.tool == "fs.list"
+
+
+async def test_a_reply_groq_could_not_parse_is_a_broken_reply_not_an_outage() -> None:
+    rejected = httpx.Response(
+        400,
+        json={
+            "error": {
+                "code": "tool_use_failed",
+                "message": "Parsing failed. The model generated output that could not be "
+                "parsed. Please adjust your prompt. See 'failed_generation' for more details.",
+            }
+        },
+    )
+
+    with pytest.raises(MalformedReplyError):
+        await adapter(Server(rejected)).respond(ToolRequest("s", [Message("user", "hi")], []))
 
 
 def test_schemas_sent_to_models_carry_no_top_level_description() -> None:
