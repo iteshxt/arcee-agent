@@ -338,14 +338,26 @@ class ArceeIndicator extends PanelMenu.Button {
             more.connect('activate', () => this._showApp('history'));
             menu.addMenuItem(more);
         }).catch(() => {});
+        this._checkBudget();
+    }
+
+    _checkBudget() {
         this._agent.LimitsAsync().then(([json]) => this._showBudget(JSON.parse(json)))
             .catch(() => this._showBudget(null));
     }
 
     _showBudget(limits) {
         this._budget.destroy_all_children();
-        const title = new St.Label({text: 'Today', style_class: 'arcee-budget-title'});
-        this._budget.add_child(title);
+        // Today, and a button to read the counts again (another run may have used some).
+        const header = new St.BoxLayout({x_expand: true});
+        header.add_child(new St.Label({text: 'Today', style_class: 'arcee-budget-title',
+            x_expand: true, y_align: Clutter.ActorAlign.CENTER}));
+        const reload = new St.Button({style_class: 'arcee-icon-button', can_focus: true,
+            accessible_name: 'Check now',
+            child: new St.Icon({icon_name: 'view-refresh-symbolic', icon_size: 14})});
+        reload.connect('clicked', () => this._checkBudget());
+        header.add_child(reload);
+        this._budget.add_child(header);
         const models = Object.entries(limits ?? {}).filter(([, l]) => l.day_tokens_limit);
         if (!models.length) {
             this._budget.add_child(new St.Label({style_class: 'arcee-card-body',

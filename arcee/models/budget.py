@@ -121,11 +121,15 @@ class HeaderBudget:
         self._daily_limits = dict(daily_tokens or {})
         self._models: dict[str, Allowance] = {}
         self._daily: dict[str, DailyTokens] = {}
+        # When the file was last read or written here; another process (arcee-cli, the
+        # app, arceed) that saved since has newer counts.
+        self._stamp: int | None = None
         self._load()
         self._output: dict[str, float] = {}
 
     def snapshot(self) -> dict[str, dict[str, float]]:
         """Current tokens and requests left per model, refill included."""
+        self.sync()
         now = self._now()
         out: dict[str, dict[str, float]] = {
             model: {
@@ -147,6 +151,7 @@ class HeaderBudget:
 
         Raises QuotaExhaustedError when the day's requests or tokens are used up.
         """
+        self.sync()
         now = self._now()
         day_wait = self._day_wait(model, tokens, now)
         allowance = self._models.get(model)
@@ -188,12 +193,14 @@ class HeaderBudget:
 
     def use(self, model: str, tokens: int) -> None:
         """Count a reply's tokens (input and output) against the day's allowance."""
+        self.sync()
         if tokens > 0 and (day := self._day(model)) is not None:
             day.take(tokens, self._now())
             self._save()
 
     def refused(self, model: str, kind: str, limit: int, used: int) -> None:
         """Take the true count from a refusal ("tokens per day: Limit 200000, Used 199655")."""
+        self.sync()
         now = self._now()
         if kind == "TPD":
             self._daily_limits[model] = limit
@@ -233,6 +240,7 @@ class HeaderBudget:
 
     def observe(self, model: str, headers: Mapping[str, str]) -> None:
         """Take the provider's counts from a reply's headers, then save."""
+        self.sync()
         try:
             allowance = Allowance(
                 tokens_limit=int(headers["x-ratelimit-limit-tokens"]),
@@ -246,7 +254,23 @@ class HeaderBudget:
         self._models[model] = allowance
         self._save()
 
+    def sync(self) -> None:
+        """Read the file again if another process saved it since this one last did.
+
+        Each process kept its own counts and saved them over the others': arceed's panel
+        showed full bars for models arcee-cli had used up for the day.
+        """
+        if self._path is not None and self._file_stamp() != self._stamp:
+            self._load()
+
+    def _file_stamp(self) -> int | None:
+        try:
+            return self._path.stat().st_mtime_ns if self._path is not None else None
+        except FileNotFoundError:
+            return None
+
     def _load(self) -> None:
+        self._stamp = self._file_stamp()
         if self._path is None or not self._path.is_file():
             return
         try:
@@ -271,3 +295,4 @@ class HeaderBudget:
         }
         temporary.write_text(json.dumps(state, indent=1))
         temporary.replace(self._path)
+        self._stamp = self._file_stamp()

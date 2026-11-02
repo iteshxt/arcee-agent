@@ -190,3 +190,18 @@ async def test_a_daily_refusal_is_a_quota_error_not_a_wait() -> None:
         await adapter.respond(ToolRequest("s", [Message("user", "hi")], []))
     assert clock.sleeps == []
     assert budget.snapshot()["openai/gpt-oss-120b"]["day_tokens_left"] == 345
+
+
+def test_a_running_process_sees_what_another_used(tmp_path: Path) -> None:
+    # arceed's panel showed full bars for models arcee-cli had used up for the day.
+    path = tmp_path / "rate-limits.json"
+    now = Now()
+    service = HeaderBudget(path, now=now, daily_tokens={"m": 200_000})
+    assert service.snapshot() == {}
+
+    cli = HeaderBudget(path, now=now, daily_tokens={"m": 200_000})
+    cli.refused("m", "TPD", 200_000, 199_000)
+
+    assert service.snapshot()["m"]["day_tokens_left"] == 1_000
+    service.use("m", 400)  # and its own saves keep the other's count
+    assert HeaderBudget(path, now=now).snapshot()["m"]["day_tokens_left"] == 600
