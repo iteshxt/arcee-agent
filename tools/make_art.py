@@ -176,15 +176,28 @@ def _middle(points: list[Vertex], middle: dict[tuple[int, int], int], a: int, b:
 
 
 SPHERE = geodesic()
+# The icon's sphere: one split of the icosahedron (120 edges, not 480), to stay
+# clear at 64 pixels.
+ICON_SPHERE = geodesic(subdivisions=1)
 
 
 def sphere(
-    draw: ImageDraw.ImageDraw, light: Light, size: int, phase: float, motion: Motion
+    draw: ImageDraw.ImageDraw,
+    light: Light,
+    size: int,
+    phase: float,
+    motion: Motion,
+    *,
+    scale: float = 1.0,
+    bright: float = 1.0,
+    mesh: tuple[list[Vertex], set[tuple[int, int]]] | None = None,
 ) -> None:
     """The core: a geodesic sphere of fine light that turns slowly, inside a soft
-    scalloped ring, as in the reference the user chose."""
+    scalloped ring, as in the reference the user chose. The icon draws it larger,
+    brighter and with fewer triangles (`scale`, `bright`, `mesh`), to read small."""
+    points, edges = mesh or SPHERE
     centre = size / 2
-    radius = size * 0.09 * (1 + motion.pulse * math.sin(phase))
+    radius = size * 0.09 * scale * (1 + motion.pulse * math.sin(phase))
     inner = size * 0.15
     # A darker disc under the core, so it reads against the ring's glow.
     draw.ellipse(
@@ -196,19 +209,19 @@ def sphere(
     for i in range(720):
         a = math.tau * i / 720
         rr = ring * (1 + 0.05 * abs(math.sin(6 * a + phase / 12)))
-        light.add(centre + rr * math.cos(a), centre + rr * math.sin(a), DEEP, 0.18)
+        light.add(centre + rr * math.cos(a), centre + rr * math.sin(a), DEEP, 0.18 * bright)
     # The sphere, turned a fifth of a turn per loop and tilted towards us.
     spin = phase / 5
     tilt = math.radians(20)
     projected = []
-    for x, y, z in SPHERE[0]:
+    for x, y, z in points:
         x, z = x * math.cos(spin) - z * math.sin(spin), x * math.sin(spin) + z * math.cos(spin)
         y, z = y * math.cos(tilt) - z * math.sin(tilt), y * math.sin(tilt) + z * math.cos(tilt)
         projected.append((centre + radius * x, centre - radius * y, z))
-    for a, b in SPHERE[1]:
+    for a, b in edges:
         (x1, y1, z1), (x2, y2, z2) = projected[a], projected[b]
         depth = (z1 + z2) / 2  # 1 facing us, -1 behind
-        strength = 0.12 + 0.38 * (depth + 1) / 2
+        strength = (0.12 + 0.38 * (depth + 1) / 2) * bright
         colour = lerp(DEEP, GOLD, (depth + 1) / 2)
         steps = max(4, int(math.hypot(x2 - x1, y2 - y1) / 1.5))
         for k in range(steps):
@@ -217,19 +230,21 @@ def sphere(
     # Its outline, crisp.
     for i in range(360):
         a = math.tau * i / 360
-        light.add(centre + radius * math.cos(a), centre + radius * math.sin(a), AMBER, 0.55)
+        light.add(
+            centre + radius * math.cos(a), centre + radius * math.sin(a), AMBER, 0.55 * bright
+        )
 
 
 def frame(phase: float, motion: Motion, size: int = SIZE, *, icon: bool = False) -> Image.Image:
-    """One picture of the ring. As an icon: brighter light and a warm core for the globe,
-    so it still reads at 64 pixels."""
+    """One picture of the ring. As an icon: brighter light, and the geodesic sphere
+    larger and with fewer triangles, so both still read at 64 pixels."""
     big = size * SUPER
     image = stage(big)
     draw = ImageDraw.Draw(image)
     buffer = Light(big)
     ribbons(buffer, big, phase, motion, boost=1.4 if icon else 1.0)
     if icon:
-        core(buffer, big)
+        sphere(draw, buffer, big, phase, motion, scale=1.45, bright=2.2, mesh=ICON_SPHERE)
     else:
         sphere(draw, buffer, big, phase, motion)
     light = buffer.image()
@@ -386,7 +401,7 @@ def icon_png(path: Path, px: int) -> None:
     """The particle ring itself, as the large icon: the same light as the animation."""
     from PIL import ImageChops
 
-    image = frame(math.tau * 0.3, ICON, size=max(px, 128), icon=True).resize(
+    image = frame(math.tau * 0.3, ICON, size=max(px, 256), icon=True).resize(
         (px, px), Image.Resampling.LANCZOS
     )
     mask = Image.new("L", (px * 4, px * 4), 0)
