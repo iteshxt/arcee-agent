@@ -2,10 +2,12 @@
 
     uv run python tools/make_art.py
 
-- arcee/app/assets/wave-idle.gif, wave-active.gif: the Agent page's ring of
-  particles in sunrise amber, a loose ribbon of light around a small wireframe
-  sphere. Idle breathes slowly; active (listening, working) pulses. Each loops
-  without a seam: every motion turns a whole number of times per loop.
+- arcee/app/assets/wave-{idle,active}-{dark,light}.webp: the Agent page's ring of
+  particles in sunrise amber, loose ribbons of light round a small geodesic sphere,
+  transparent, in a look for dark windows and one for light ones. Idle breathes
+  slowly; active (listening, working) pulses. Each loops without a seam: every
+  motion turns a whole number of times per loop. (Animated WebP: a GIF's
+  transparency is all or nothing, which frays soft light.)
 - art/arcee.svg: the icon (the ring on a dark disc) for the app, Chrome and the
   package; art/arcee-panel.svg: the ring alone, for GNOME's top bar.
 - browser-ext/icons/icon-{16,32,48,128}.png, rendered from art/arcee.svg.
@@ -24,7 +26,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
-SIZE = 320  # the GIF's pixels; the app shows it at 300 logical pixels
+SIZE = 300  # the loops' pixels, shown as they are
 SUPER = 2  # drawn at twice the size, then shrunk, for smooth particles
 # Sunrise amber, from deep to bright.
 DEEP = (224, 90, 0)
@@ -75,11 +77,11 @@ class Motion:
     pulse: float  # how much the sphere breathes
 
 
-IDLE = Motion(frames=40, delay_ms=80, swell=0.035, spread=0.020, turns=1, pulse=0.03)
+IDLE = Motion(frames=32, delay_ms=100, swell=0.035, spread=0.020, turns=1, pulse=0.03)
 # The icon: a still from a livelier ring, with brighter, wider strands to read small.
 ICON = Motion(frames=1, delay_ms=0, swell=0.07, spread=0.05, turns=1, pulse=0.0)
 # Calmer than it was: the ribbons swing half as far, one wave, nearly 3 s a loop.
-ACTIVE = Motion(frames=36, delay_ms=80, swell=0.05, spread=0.035, turns=1, pulse=0.05)
+ACTIVE = Motion(frames=30, delay_ms=95, swell=0.05, spread=0.035, turns=1, pulse=0.05)
 
 
 def lerp(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -237,6 +239,55 @@ def frame(phase: float, motion: Motion, size: int = SIZE, *, icon: bool = False)
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def clear_frame(phase: float, motion: Motion, shade: str) -> Image.Image:
+    """The ring as light with alpha, for the app's own background: no disc.
+
+    "dark": amber light that glows on a dark window. "light": deeper orange ink that
+    reads on a white one.
+    """
+    big = SIZE * SUPER
+    buffer = Light(big)
+    ribbons(buffer, big, phase, motion)
+    scratch = Image.new("RGB", (big, big))  # the core's dark disc goes nowhere
+    sphere(ImageDraw.Draw(scratch), buffer, big, phase, motion)
+    light = buffer.image()
+    glow = light.filter(ImageFilter.GaussianBlur(big * 0.01))
+    lit = _add(Image.eval(glow, lambda v: round(v * 0.55)), light, 1.0)
+    lit = lit.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
+    out = bytearray()
+    for r, g, b in zip(*(iter(lit.tobytes()),) * 3, strict=True):
+        alpha = max(r, g, b)
+        if alpha == 0:
+            out += b"\0\0\0\0"
+            continue
+        # Light added on black, undone: the colour at full strength, and how much of it.
+        cr, cg, cb = (round(v * 255 / alpha) for v in (r, g, b))
+        if shade == "light":
+            cr, cg, cb = round(cr * 0.86), round(cg * 0.6), round(cb * 0.28)
+            alpha = min(255, round(alpha * 1.25))
+        out += bytes((cr, cg, cb, alpha))
+    return Image.frombytes("RGBA", (SIZE, SIZE), bytes(out))
+
+
+def webp(motion: Motion, shade: str, path: Path) -> None:
+    """An animated WebP with alpha: soft edges a GIF cannot hold, and smaller."""
+    frames = [
+        clear_frame(math.tau * f / motion.frames, motion, shade) for f in range(motion.frames)
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=motion.delay_ms,
+        loop=0,
+        quality=45,
+        alpha_quality=50,
+        method=6,
+    )
+    print(f"{path.relative_to(ROOT)}: {len(frames)} frames, {path.stat().st_size // 1024} KB")
+
+
 def core(light: Light, size: int) -> None:
     """A soft amber sun in the middle."""
     centre = size / 2
@@ -388,8 +439,9 @@ def _render(svg: Path, png: Path, px: int) -> None:
 if __name__ == "__main__":
     import sys
 
-    if "--icons" not in sys.argv:  # --icons: the icons alone (the GIFs take longer)
+    if "--icons" not in sys.argv:  # --icons: the icons alone (the loops take longer)
         assets = ROOT / "arcee" / "app" / "assets"
-        gif(IDLE, assets / "wave-idle.gif")
-        gif(ACTIVE, assets / "wave-active.gif")
+        for shade in ("dark", "light"):
+            webp(IDLE, shade, assets / f"wave-idle-{shade}.webp")
+            webp(ACTIVE, shade, assets / f"wave-active-{shade}.webp")
     icons()
