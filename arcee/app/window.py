@@ -738,10 +738,16 @@ def main() -> None:
 
     # What went wrong, kept for a report: warnings and errors, and the stack of every
     # thread if Python itself crashes (GTK or a C library underneath).
+    # Logging never stops the app: with no writable data folder it logs to stderr.
     logs = data_dir() / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
+    try:
+        logs.mkdir(parents=True, exist_ok=True)
+        crash_log = open(logs / "app-crash.log", "a")  # noqa: SIM115 - open for life
+        log_file: str | None = str(logs / "app.log")
+    except OSError:
+        crash_log, log_file = sys.stderr, None
     logging.basicConfig(
-        filename=logs / "app.log",
+        filename=log_file,
         level=logging.WARNING,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
@@ -751,5 +757,5 @@ def main() -> None:
         sys.__excepthook__(kind, value, trace)
 
     sys.excepthook = report
-    faulthandler.enable(open(logs / "app-crash.log", "a"))  # noqa: SIM115 - open for life
+    faulthandler.enable(crash_log)
     ArceeApp(load_env()).run(sys.argv)
