@@ -16,6 +16,7 @@ import json
 import logging
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -350,10 +351,19 @@ class AgentService(ServiceInterface):
         if not audio:
             heard = {"error": "I did not hear anything"}
         else:
+            started = time.monotonic()
             try:
                 heard = {"text": await self._transcriber.transcribe(audio)}
             except VoiceError as exc:
                 heard = {"error": str(exc)}
+            # The voice gate (spec section 14): end of speech to transcript under 1.5 s.
+            # Speech ended END_SILENCE_S before the wake listener handed the audio over.
+            log.info(
+                "heard %.1f s of speech, transcribed in %.2f s by %s",
+                len(audio) / 2 / 16000,
+                time.monotonic() - started,
+                type(self._transcriber).__name__,
+            )
         self.Heard(json.dumps(heard))
         # What was heard runs here, once, whether the panel or the app is open.
         text = heard.get("text", "").strip()
