@@ -64,3 +64,14 @@ def test_the_extension_check_says_what_is_in_the_way(
 
     assert not check.ok
     assert (check.detail, check.fix_action) == (detail, fix_action)
+
+
+def test_off_means_loaded_by_gnome_but_not_running() -> None:
+    from arcee.app.diagnostics import is_off, is_on
+
+    assert is_off({"state": 2.0})
+    assert is_off({"state": 6.0})
+    assert not is_off(None)
+    assert not is_off({})
+    assert is_on({"state": 1.0})
+    assert not is_on({"state": 2.0})

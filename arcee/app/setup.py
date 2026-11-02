@@ -6,6 +6,7 @@ part does, shows whether it is already in place, and installs it on a click with
 same installers arcee-cli uses (arcee/install.py). Nothing needs sudo.
 """
 
+import subprocess
 from collections.abc import Callable
 from typing import Any, Final
 
@@ -37,15 +38,7 @@ class SetupDialog(Adw.Dialog):
         self._steps = [
             self._welcome(),
             self._keys(),
-            self._part(
-                2,
-                "Desktop control",
-                "preferences-desktop-display-symbolic",
-                "A GNOME Shell extension lets Arcee see the screen, click and type, and show "
-                "the glow and Stop button while it works. GNOME loads it at your next login.",
-                diagnostics.shell_extension,
-                install.shell_extension,
-            ),
+            self._desktop_control(),
             self._part(
                 3,
                 "Background service",
@@ -170,6 +163,76 @@ class SetupDialog(Adw.Dialog):
         self._run(check(), show_check)
         return self._page(title, status, index)
 
+    def _desktop_control(self) -> Any:
+        """The GNOME Shell extension, with exactly what is left to do for it."""
+        status = Adw.StatusPage(
+            icon_name="preferences-desktop-display-symbolic",
+            title="Desktop control",
+            description="Arcee's GNOME Shell extension puts Arcee in the top bar, lets it see "
+            "the screen, click and type, and shows the glow and a Stop button while it works.",
+        )
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, halign=Gtk.Align.CENTER)
+        state = Gtk.Label(
+            label="Checking…", wrap=True, justify=Gtk.Justification.CENTER, max_width_chars=60
+        )
+        button = Gtk.Button(halign=Gtk.Align.CENTER, visible=False)
+        button.add_css_class("pill")
+        box.append(state)
+        box.append(button)
+        status.set_child(box)
+        action: list[str] = [""]
+
+        def show(check: diagnostics.Check) -> None:
+            button.set_sensitive(True)
+            if check.ok:
+                state.set_label("✓ On and working: Arcee's icon is in the top bar.")
+                button.set_visible(False)
+            elif check.detail == "installed but turned off":
+                state.set_label("Installed, but turned off.")
+                action[0] = "enable"
+                button.set_label("Turn it on")
+                button.set_visible(True)
+            elif check.detail.startswith("installed, but GNOME loads"):
+                state.set_label(
+                    "Installed. GNOME starts new extensions only when you log in, so finish "
+                    "setup, then log out and back in once.\nWhen you open Arcee again it "
+                    "turns the extension on by itself."
+                )
+                button.set_visible(False)
+            elif check.detail == "not installed":
+                state.set_label("Not installed yet.")
+                action[0] = "install"
+                button.set_label("Install")
+                button.set_visible(True)
+            else:
+                state.set_label(f"{check.detail}. {check.fix}".strip())
+                button.set_visible(False)
+
+        def clicked(_button: Any) -> None:
+            button.set_sensitive(False)
+
+            async def work() -> diagnostics.Check:
+                import asyncio
+
+                if action[0] == "enable":
+                    await _threaded(install.enable_shell_extension)
+                else:
+                    await _threaded(install.shell_extension)
+                # GNOME takes a moment to start it: look again for up to 3 s.
+                check = await diagnostics.shell_extension()
+                for _ in range(10):
+                    if check.ok or check.detail != "starting":
+                        break
+                    await asyncio.sleep(0.3)
+                    check = await diagnostics.shell_extension()
+                return check
+
+            self._run(work(), show)
+
+        button.connect("clicked", clicked)
+        self._run(diagnostics.shell_extension(), show)
+        return self._page("Desktop control", status, 2)
+
     def _chrome(self) -> Any:
         status = Adw.StatusPage(
             icon_name="web-browser-symbolic",
@@ -206,11 +269,27 @@ class SetupDialog(Adw.Dialog):
         status = Adw.StatusPage(
             icon_name="object-select-symbolic",
             title="Ready",
-            description="If you installed desktop control, log out and back in once. Then "
+            description="One last step on a new install: log out and back in, so GNOME "
+            "starts Arcee's extension. Then open Arcee once (it turns the extension on), "
             "click Arcee's icon in the top bar, type or press the mic, and ask.\n\n"
             "Diagnostics in this app shows every part, with a Fix button where one is "
             "missing. Super+Shift+Escape always stops Arcee.",
         )
+        logout = Gtk.Button(label="Log out now", halign=Gtk.Align.CENTER)
+        logout.add_css_class("pill")
+        logout.set_tooltip_text("GNOME asks before it logs you out")
+
+        def log_out(_button: Any) -> None:
+            self._on_done()  # setup counts as finished either way
+            subprocess.Popen(
+                ["gnome-session-quit", "--logout"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+
+        logout.connect("clicked", log_out)
+        status.set_child(logout)
         return self._page("Ready", status, 5, last=True)
 
 

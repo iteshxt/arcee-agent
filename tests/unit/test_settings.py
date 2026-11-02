@@ -29,3 +29,11 @@ def test_unknown_values_fall_back_one_by_one(tmp_path: Path) -> None:
     path.write_text('{"core": "skynet", "confirm_all": "yes", "always_ask": ["fs.trash"]}')
 
     assert load(path) == Settings(core="groq", confirm_all=False, always_ask=["fs.trash"])
+
+
+def test_arcee_remembers_it_turned_the_extension_on(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    save(Settings(extension_turned_on=True), path)
+
+    assert load(path).extension_turned_on is True
+    assert Settings().extension_turned_on is False

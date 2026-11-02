@@ -160,6 +160,40 @@ class ArceeWindow(Adw.ApplicationWindow):
         if self._stack.get_child_by_name(name) is not None:
             self._stack.set_visible_child_name(name)
 
+    def turn_on_extension_once(self) -> None:
+        """After the login that loaded the extension, turn it on (once) by ourselves.
+
+        The .deb installs it for every user, but GNOME loads new extensions only at
+        login and starts them off; people did not know to turn it on.
+        """
+        if self._settings.extension_turned_on:
+            return
+
+        async def turn_on() -> str:
+            import asyncio
+
+            info = await diagnostics.extension_info()
+            if diagnostics.is_on(info):
+                return "on"
+            if diagnostics.is_off(info):
+                return (
+                    "turned on" if await asyncio.to_thread(install.enable_shell_extension) else ""
+                )
+            return ""
+
+        def done(result: str) -> None:
+            if not result:
+                return  # not loaded yet (no login since installing): next time
+            self._settings.extension_turned_on = True
+            save(self._settings)
+            if result == "turned on":
+                self._toast(
+                    "Turned on Arcee's GNOME Shell extension: look for its icon in the top bar."
+                )
+                self._run_checks()
+
+        self._background.run(turn_on(), done)
+
     def show_setup(self) -> None:
         def done() -> None:
             self._settings.setup_done = True
@@ -651,6 +685,8 @@ class ArceeApp(Adw.Application):
         window.present()
         if not window.settings.setup_done:  # first run
             window.show_setup()
+        else:
+            window.turn_on_extension_once()
 
     def do_command_line(self, command_line: Gio.ApplicationCommandLine) -> int:
         options = command_line.get_options_dict().end().unpack()
