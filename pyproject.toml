@@ -13,6 +13,7 @@ dependencies = [
     "json-repair>=0.64.2",
     "pillow>=12",
     "pydantic>=2.14.1",
+    "sherpa-onnx>=2.0.1",
 ]
 
 [project.urls]

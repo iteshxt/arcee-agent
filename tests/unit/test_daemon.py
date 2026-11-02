@@ -249,3 +249,53 @@ async def test_speaking_streams_levels_then_the_text_and_runs_it(bus_address: st
     await agent.call_cancel()
     bus.disconnect()
     service_bus.disconnect()
+
+
+async def test_a_woken_request_is_heard_and_run(bus_address: str) -> None:
+    # What the wake-word listener calls: woken, then the request's audio.
+    service_bus = await connect(bus_address)
+    service = AgentService(
+        FakeRunner(hang=True),  # pyright: ignore[reportArgumentType]
+        transcriber=FakeTranscriber(),
+    )
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    bus, agent = await client(bus_address)
+    listening: list[bool] = []
+    heard: asyncio.Future[dict[str, str]] = asyncio.get_running_loop().create_future()
+    started: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    agent.on_listening(listening.append)
+    agent.on_heard(lambda payload: heard.set_result(json.loads(payload)))
+    agent.on_started(started.set_result)
+
+    service.on_wake()
+    service.on_request(b"pcm")
+
+    assert await asyncio.wait_for(heard, 5) == {"text": "open chrome and run youtube"}
+    assert await asyncio.wait_for(started, 5) == "open chrome and run youtube"
+    assert listening == [True, False]  # the panel and the app show it, as for the mic
+
+    finished: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    agent.on_finished(lambda payload: finished.set_result(json.loads(payload)))
+    service.on_stop()  # "Arcee stop"
+    assert (await asyncio.wait_for(finished, 5))["status"] == "stopped"
+    bus.disconnect()
+    service_bus.disconnect()
+
+
+async def test_waking_without_a_request_says_so(bus_address: str) -> None:
+    service_bus = await connect(bus_address)
+    service = AgentService(FakeRunner(), transcriber=FakeTranscriber())  # pyright: ignore[reportArgumentType]
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    bus, agent = await client(bus_address)
+    heard: asyncio.Future[dict[str, str]] = asyncio.get_running_loop().create_future()
+    agent.on_heard(lambda payload: heard.set_result(json.loads(payload)))
+
+    service.on_wake()
+    service.on_request(b"")
+
+    assert await asyncio.wait_for(heard, 5) == {"error": "I did not hear anything"}
+    assert not service.busy
+    bus.disconnect()
+    service_bus.disconnect()
