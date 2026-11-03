@@ -75,10 +75,12 @@ def test_a_reply_that_gives_up_without_looking_is_sent_back_to_the_tools() -> No
     for reply in (
         "I don't have access to real-time weather information.",
         "I need to know your location. Could you please tell me your city?",
+        "I need to know which song you're referring to.",
     ):
         review = review_reply(reply, asked, names)
         assert review is not None
         assert "web_weather" in review.nudge
+        assert "media_now_playing" in review.nudge
     # Once a tool has run, saying it could not find something is an honest answer.
     looked = [*asked, Message("tool", '{"status": "error"}')]
     assert review_reply("I can't check the weather right now.", looked, names) is None

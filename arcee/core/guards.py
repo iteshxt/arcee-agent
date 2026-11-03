@@ -27,14 +27,16 @@ NARRATION_NUDGE: Final = (
 GAVE_UP_NUDGE: Final = (
     "Do not answer yet: look it up first. For the weather, call web_weather now with no "
     "arguments (it finds where the user is) or with place set to a place they named. For "
-    "other current facts, call web_search."
+    "the song or video playing now, call media_now_playing. For other current facts, call "
+    "web_search."
 )
 # Small models answer "what's the weather" with "I don't have access to real-time
 # data" or by asking where the user is, before trying the tool they were given.
 _GAVE_UP: Final = re.compile(
     r"\b(don'?t|do not|can'?t|cannot|unable to)\b[^.]{0,40}\b(access|real[- ]time|"
     r"current|browse|look (it )?up|check)\b|\b(tell|let) me (know )?(your|the) "
-    r"(city|location)\b|\bwhere you are\b",
+    r"(city|location)\b|\bwhere you are\b|\bwhich (song|track|video|music)\b|"
+    r"\bwhat (song|track) you\b",
     re.IGNORECASE,
 )
 
@@ -130,7 +132,8 @@ def review_reply(
     if not grounding:
         return None
     tools_ran = any(m.role == "tool" for m in messages)
-    if not tools_ran and _GAVE_UP.search(reply) and {"web_search", "web_weather"} & {*wire_names}:
+    lookups = {"web_search", "web_weather", "media_now_playing"}
+    if not tools_ran and _GAVE_UP.search(reply) and lookups & {*wire_names}:
         return Review("grounding", "reply gave up without a lookup", GAVE_UP_NUDGE)
     evidence = "\n".join(m.text for m in messages if m.role != "assistant")
     if missing := ungrounded(reply, evidence, tools_ran=tools_ran):

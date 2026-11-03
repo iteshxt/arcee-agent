@@ -105,6 +105,9 @@ DOING: Final = {
     "ui_act": "Clicking in the window",
     "system_status": "Checking the system",
     "network_status": "Checking the network",
+    "media_control": "Controlling the music",
+    "media_now_playing": "Checking what's playing",
+    "fs_usage": "Measuring folder sizes",
 }
 THINKING: Final = "Thinking…"
 SUBJECT_ARGS: Final = ("name", "app", "url", "query", "path", "what", "target")

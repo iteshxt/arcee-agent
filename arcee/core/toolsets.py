@@ -32,6 +32,7 @@ BROWSER: Final = ("browser.*",)
 # Desktop apps: their window tree first, the screen (OCR, clicks, keys) as fallback.
 DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
 WEB: Final = ("web.*",)
+MEDIA: Final = ("media.*",)
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -106,6 +107,12 @@ _QUESTION: Final = _words(
     r"^\W*(who|what|whats|what's|when|where|why|how|which|whose|is|are|was|were|does|did|"
     r"can|could|will|would|should)\b|"
     r"\b(tell me (about|who|what|why|how)|explain|define|meaning of)\b"
+)
+# Music and video already playing: pause, skip, what is this. Offered beside whatever
+# else the request needs (pausing YouTube is not a browser task).
+_MEDIA_REQUEST: Final = _words(
+    r"\b(pause|unpause|resume|play(ing)?|next (song|track|video)|previous (song|track)|"
+    r"skip|song|track|music|playing|spotify|stop the (music|song|video)|who sings)\b"
 )
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
@@ -187,6 +194,8 @@ def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
         filters += BROWSER
     if web:
         filters += WEB
+    if _MEDIA_REQUEST.search(request) or "media" in {c.split("_", 1)[0] for c in _called(messages)}:
+        filters += MEDIA
     return filters
 
 
