@@ -2,9 +2,13 @@
 """Training "Hey Arcee" on the user's voice (wake_match), as phone assistants do.
 
 Three times "Hey Arcee", then one ordinary sentence; each is heard until the user
-stops speaking, and the dialog moves on by itself. arceed stops listening for the wake
-word meanwhile, and takes up what was trained when it is done. What is kept is the
-sound of the samples, not the audio.
+stops speaking, and the trainer moves on by itself. People say it differently (run
+together, or "hey… Arcee" with a pause), so it is said the user's own way and matched
+to that. arceed stops listening for the wake word meanwhile, and takes up what was
+trained when it is done. What is kept is the sound of the samples, not the audio.
+
+`WakeTrainer` is the widget, in first-run setup and in `WakeTrainingDialog` (Voice
+settings, to train again).
 """
 
 from collections.abc import Callable
@@ -21,35 +25,37 @@ from arcee.voice import VoiceError  # noqa: E402
 
 Runner = Callable[..., Any]  # (work, done[, failed]) -> its future, as Background.run
 SENTENCE: Final = "“Hey, what's the weather like today?”"
+ABOUT: Final = (
+    "You will say “Hey Arcee” three times, then one ordinary sentence. Say it the way "
+    "you naturally do, run together or with a pause, from where you usually sit. It "
+    "takes about half a minute."
+)
 
 
-class WakeTrainingDialog(Adw.Dialog):
-    def __init__(self, run: Runner, on_trained: Callable[[], None]) -> None:
-        super().__init__(title="Train “Hey Arcee”", content_width=440)
+def is_trained() -> bool:
+    return wake_match.trained_path().is_file()
+
+
+class WakeTrainer(Gtk.Box):
+    """The steps of training, with a Start (or Train again) button."""
+
+    def __init__(
+        self,
+        run: Runner,
+        on_trained: Callable[[], None] = lambda: None,
+        icon: bool = True,  # off where the page shows its own
+    ) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         self._run = run
         self._on_trained = on_trained
-        self._session: Any = None  # the running training, cancelled if the dialog closes
+        self._session: Any = None  # the running training, cancelled with `cancel()`
 
-        box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=14,
-            margin_top=12,
-            margin_bottom=24,
-            margin_start=24,
-            margin_end=24,
+        self._icon = Gtk.Image(
+            icon_name="audio-input-microphone-symbolic", pixel_size=56, visible=icon
         )
-        self._icon = Gtk.Image(icon_name="audio-input-microphone-symbolic", pixel_size=56)
-        self._icon.add_css_class("dim-label")
-        self._heading = Gtk.Label(
-            label="Teach Arcee your voice", wrap=True, justify=Gtk.Justification.CENTER
-        )
+        self._heading = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER)
         self._heading.add_css_class("title-2")
-        self._text = Gtk.Label(
-            label="You will say “Hey Arcee” three times, then one ordinary sentence. Speak as "
-            "you normally would, from where you usually sit. It takes about half a minute.",
-            wrap=True,
-            justify=Gtk.Justification.CENTER,
-        )
+        self._text = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, max_width_chars=52)
         self._text.add_css_class("dim-label")
         self._level = Gtk.LevelBar(
             min_value=0, max_value=1, visible=False, margin_start=40, margin_end=40
@@ -60,10 +66,9 @@ class WakeTrainingDialog(Adw.Dialog):
             dot = Gtk.Image(icon_name="radio-symbolic", pixel_size=14)
             self._dots.append(dot)
             self._steps.append(dot)
-        self._button = Gtk.Button(label="Start", halign=Gtk.Align.CENTER, margin_top=6)
+        self._button = Gtk.Button(halign=Gtk.Align.CENTER, margin_top=6)
         self._button.add_css_class("pill")
-        self._button.add_css_class("suggested-action")
-        self._button.connect("clicked", lambda _b: self._clicked())
+        self._button.connect("clicked", lambda _b: self.start())
         for child in (
             self._icon,
             self._heading,
@@ -72,24 +77,54 @@ class WakeTrainingDialog(Adw.Dialog):
             self._steps,
             self._button,
         ):
-            box.append(child)
+            self.append(child)
+        if is_trained():
+            self._show_trained()
+        else:
+            self._show_ready()
 
-        view = Adw.ToolbarView(content=box)
-        view.add_top_bar(Adw.HeaderBar())
-        self.set_child(view)
-        self.connect("closed", lambda _d: self._closed())
-        self._done = False
+    # --- what the user sees ---------------------------------------------------------
 
-    # --- the steps, told from the training (on the background thread) -----------------
+    def _icon_style(self, style: str) -> None:
+        for name in ("dim-label", "accent", "success"):
+            self._icon.remove_css_class(name)
+        self._icon.add_css_class(style)
 
+    def _show_dots(self, step: int) -> None:
+        for n, dot in enumerate(self._dots):
+            name = "object-select-symbolic" if n < step else "radio-symbolic"
+            dot.set_from_icon_name("radio-checked-symbolic" if n == step else name)
+
+    def _show_ready(self) -> None:
+        self._icon.set_from_icon_name("audio-input-microphone-symbolic")
+        self._icon_style("dim-label")
+        self._heading.set_label("Teach Arcee your voice")
+        self._text.set_label(ABOUT)
+        self._show_dots(-1)
+        self._button.set_label("Start")
+        self._button.add_css_class("suggested-action")
+        self._button.set_visible(True)
+
+    def _show_trained(self) -> None:
+        self._icon.set_from_icon_name("object-select-symbolic")
+        self._icon_style("success")
+        self._heading.set_label("Arcee knows your voice")
+        self._text.set_label(
+            "Say “Hey Arcee” whenever you need it. If it misses you, or wakes when you did "
+            "not call it, train it again: in a new room, with a new mic, or to say it "
+            "another way."
+        )
+        self._show_dots(len(self._dots))
+        self._button.set_label("Train again")
+        self._button.remove_css_class("suggested-action")
+        self._button.set_visible(True)
+
+    # Told from the training, on the background thread.
     def _say(self, step: int, heading: str, text: str) -> None:
         def show() -> bool:
             self._heading.set_label(heading)
             self._text.set_label(text)
-            for n, dot in enumerate(self._dots):
-                dot.set_from_icon_name("object-select-symbolic" if n < step else "radio-symbolic")
-                if n == step:
-                    dot.set_from_icon_name("radio-checked-symbolic")
+            self._show_dots(step)
             return GLib.SOURCE_REMOVE
 
         GLib.idle_add(show)
@@ -97,13 +132,19 @@ class WakeTrainingDialog(Adw.Dialog):
     def _loudness(self, value: float) -> None:
         GLib.idle_add(lambda: self._level.set_value(min(1.0, value * 4)) and False)
 
+    # --- training -------------------------------------------------------------------
+
     async def _train(self) -> wake_match.Training:
         vad = voice_local.make_vad()
         await wake_match.hold_wake(True)
         try:
             samples: list[list[float]] = []
             for n in range(wake_match.SAMPLES):
-                self._say(n, "Say “Hey Arcee”", f"{n + 1} of {wake_match.SAMPLES}")
+                self._say(
+                    n,
+                    "Say “Hey Arcee”",
+                    f"{n + 1} of {wake_match.SAMPLES}, your own way, then stop.",
+                )
                 samples.append(await voice_local.record_phrase(self._loudness, vad=vad))
             self._say(
                 wake_match.SAMPLES,
@@ -117,49 +158,53 @@ class WakeTrainingDialog(Adw.Dialog):
         finally:
             await wake_match.hold_wake(False)  # arceed takes up what was trained
 
-    # --- the dialog ------------------------------------------------------------------
-
-    def _clicked(self) -> None:
-        if self._done:
-            self.close()
+    def start(self) -> None:
+        if voice_local.missing():
+            self._failed(VoiceError("the voice models are not downloaded yet"))
             return
         self._button.set_visible(False)
         self._level.set_visible(True)
-        self._icon.remove_css_class("dim-label")
-        self._icon.add_css_class("accent")
+        self._icon.set_from_icon_name("audio-input-microphone-symbolic")
+        self._icon_style("accent")
+        self._show_dots(0)
         self._session = self._run(self._train(), self._trained, self._failed)
 
+    def cancel(self) -> None:
+        if self._session is not None:
+            self._session.cancel()  # its own `finally` lets arceed listen again
+            self._session = None
+
     def _trained(self, _training: wake_match.Training) -> None:
-        self._done = True
         self._session = None
         self._level.set_visible(False)
-        self._icon.set_from_icon_name("object-select-symbolic")
-        self._icon.remove_css_class("accent")
-        self._icon.add_css_class("success")
-        for dot in self._dots:
-            dot.set_from_icon_name("object-select-symbolic")
-        self._heading.set_label("Arcee knows your voice")
-        self._text.set_label(
-            "Say “Hey Arcee” whenever you need it. If it misses you, or wakes when you did "
-            "not call it, train it again from here."
-        )
-        self._button.set_label("Done")
-        self._button.set_visible(True)
+        self._show_trained()
         self._on_trained()
 
     def _failed(self, error: BaseException) -> None:
         self._session = None
         self._level.set_visible(False)
-        self._icon.remove_css_class("accent")
-        self._icon.add_css_class("dim-label")
+        self._icon.set_from_icon_name("audio-input-microphone-symbolic")
+        self._icon_style("dim-label")
         self._heading.set_label("Not trained")
         reason = str(error) if isinstance(error, VoiceError) else f"something went wrong ({error})"
         self._text.set_label(f"{reason[:1].upper()}{reason[1:]}.")
-        for dot in self._dots:
-            dot.set_from_icon_name("radio-symbolic")
+        self._show_dots(-1)
         self._button.set_label("Try again")
+        self._button.add_css_class("suggested-action")
         self._button.set_visible(True)
 
-    def _closed(self) -> None:
-        if self._session is not None:
-            self._session.cancel()  # its own `finally` lets arceed listen again
+
+class WakeTrainingDialog(Adw.Dialog):
+    """Training (again) from the Voice settings."""
+
+    def __init__(self, run: Runner, on_trained: Callable[[], None]) -> None:
+        super().__init__(title="Train “Hey Arcee”", content_width=460)
+        self._trainer = WakeTrainer(run, on_trained)
+        self._trainer.set_margin_top(12)
+        self._trainer.set_margin_bottom(24)
+        self._trainer.set_margin_start(24)
+        self._trainer.set_margin_end(24)
+        view = Adw.ToolbarView(content=self._trainer)
+        view.add_top_bar(Adw.HeaderBar())
+        self.set_child(view)
+        self.connect("closed", lambda _d: self._trainer.cancel())

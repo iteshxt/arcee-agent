@@ -68,6 +68,11 @@ class VoiceGroup(Adw.PreferencesGroup):
         self.add(self._train)
         self._show_training()
 
+    def refresh(self) -> None:
+        """Show the settings as they are now (first-run setup may have changed them)."""
+        self._listen.set_active(self._settings.listen)
+        self._show_training()
+
     def _show_training(self) -> None:
         trained = wake_match.trained_path().is_file()
         self._train.set_subtitle(
@@ -77,6 +82,10 @@ class VoiceGroup(Adw.PreferencesGroup):
             "learns how you say it."
         )
         self._train_button.set_label("Train again…" if trained else "Train…")
+        if not trained:
+            self._train_button.add_css_class("suggested-action")
+        else:
+            self._train_button.remove_css_class("suggested-action")
         self._forget.set_visible(trained)
         self._train.set_sensitive(self._settings.listen)
 
@@ -113,24 +122,15 @@ class VoiceGroup(Adw.PreferencesGroup):
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("download", "Download")
         dialog.set_response_appearance("download", Adw.ResponseAppearance.SUGGESTED)
-        dialog.connect("response", lambda _d, r: r == "download" and self._fetch(models))
+        dialog.connect("response", lambda _d, r: r == "download" and self._fetch())
         dialog.present(self.get_root())
 
-    def _fetch(self, models: list[VoiceModel]) -> None:
+    def _fetch(self) -> None:
         self._listen.set_sensitive(False)
         self._progress.set_visible(True)
-        total = sum(m.size_mb for m in models)
 
-        async def fetch() -> None:
-            done = 0
-            for model in models:
-
-                def progress(fraction: float, model: VoiceModel = model, done: int = done) -> None:
-                    value = (done + fraction * model.size_mb) / total
-                    GLib.idle_add(lambda: self._progress.set_fraction(value) and False)
-
-                await voice_local.download(model, progress)
-                done += model.size_mb
+        def progress(fraction: float) -> None:
+            GLib.idle_add(lambda: self._progress.set_fraction(fraction) and False)
 
         def finished(_none: None) -> None:
             self._listen.set_sensitive(True)
@@ -144,4 +144,4 @@ class VoiceGroup(Adw.PreferencesGroup):
             self._progress.set_visible(False)
             self._toast(f"Could not download: {error}")
 
-        self._run(fetch(), finished, failed)
+        self._run(voice_local.download_missing(progress), finished, failed)

@@ -229,6 +229,7 @@ class Trained:
         self.after = after
         self.checks = 0
         self.shortest = 1
+        self.window = 80
 
     def heard(self, recent: list[list[float]]) -> bool:
         self.checks += 1
@@ -278,3 +279,22 @@ async def test_no_phrase_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
         await voice_local.record_phrase(
             command=("python3", "-c", script), vad=Vad(speech_frames=None, talking=False)
         )
+
+
+async def test_the_missing_models_download_with_progress_over_all_of_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched: list[str] = []
+
+    async def download(model: VoiceModel, on_progress: Any) -> None:
+        on_progress(0.5)
+        fetched.append(model.name)
+
+    monkeypatch.setattr(voice_local, "download", download)
+    seen: list[float] = []
+
+    await voice_local.download_missing(seen.append)
+
+    assert fetched == ["wake", "vad"]
+    assert seen[0] == pytest.approx(3 / 7)  # half of the 6 MB, of 7 MB in all
+    assert seen[-1] == 1.0

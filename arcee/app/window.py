@@ -216,8 +216,9 @@ class ArceeWindow(Adw.ApplicationWindow):
             save(self._settings)
             self._show_key_states()
             self._run_checks()
+            self._voice_group.refresh()  # setup may have turned on and trained the wake word
 
-        SetupDialog(self._background.run, done).present(self)
+        SetupDialog(self._background.run, done, self._settings, self._saved).present(self)
 
     def _toast(self, text: str) -> None:
         self._toasts.add_toast(Adw.Toast(title=text, timeout=3))
@@ -258,7 +259,10 @@ class ArceeWindow(Adw.ApplicationWindow):
             row.add_prefix(check)
             thinking.add(row)
         page.add(thinking)
-        page.add(VoiceGroup(self._background.run, self._toast, self._settings, self._saved))
+        self._voice_group = VoiceGroup(
+            self._background.run, self._toast, self._settings, self._saved
+        )
+        page.add(self._voice_group)
 
         self._budget = Adw.PreferencesGroup(
             title="Today", description="Groq's free allowance per model; it refills over the day."

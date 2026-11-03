@@ -25,7 +25,7 @@ FFT: Final = 512
 WIN: Final = 400  # 25 ms
 HOP: Final = 320  # 20 ms: a frame of the listener's (80 ms) is four of these
 BINS: Final = 24
-WINDOW: Final = 80  # frames matched against: the last 1.6 s of speech
+WINDOW: Final = 80  # frames matched against, at least: the last 1.6 s of speech
 SAMPLES: Final = 3  # "hey Arcee"s asked for when training
 # A trained wake word is never looser than this, whatever the samples suggest.
 LOOSEST: Final = 0.3
@@ -171,6 +171,12 @@ class Trained:
     def shortest(self) -> int:
         return min(len(t) for t in self.templates)
 
+    @property
+    def window(self) -> int:
+        """Frames of speech to match against: room for the longest sample (said slowly,
+        or "hey… Arcee" with a pause) and a little either side."""
+        return max(WINDOW, max(len(t) for t in self.templates) + 25)
+
 
 @dataclass(frozen=True, slots=True)
 class Training:
@@ -195,10 +201,11 @@ def train(samples: list[list[float]], other: list[float]) -> Training:
     if spread > LOOSEST:
         raise VoiceError("the samples sounded too different: say it the same way each time")
     heard = log_mel(other)
-    # The sentence as the listener sees it: every 1.6 s stretch of it.
+    # The sentence as the listener sees it: every stretch of it as long as it keeps.
+    window = Trained(templates, LOOSEST).window
     near = min(
-        min(distance(t, normalise(heard[i : i + WINDOW])) for t in templates)
-        for i in range(0, max(1, len(heard) - WINDOW + 1), WINDOW // 4)
+        min(distance(t, normalise(heard[i : i + window])) for t in templates)
+        for i in range(0, max(1, len(heard) - window + 1), WINDOW // 4)
     )
     if near <= spread:
         raise VoiceError("the sentence sounded like “Hey Arcee”: try a different sentence")

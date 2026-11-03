@@ -106,3 +106,14 @@ def test_a_damaged_file_is_no_training(data: Path) -> None:
     wake_match.trained_path().parent.mkdir(parents=True)
     wake_match.trained_path().write_text("{not json")
     assert wake_match.load() is None
+
+
+def test_a_slow_or_paused_wake_word_is_matched_whole() -> None:
+    # "hey… Arcee" with a pause runs past 1.6 s: the listener keeps enough to hold it.
+    quick = Trained([normalise(log_mel(sweep(300, 1200, 0.8)))], 0.2)
+    paused = Trained(
+        [normalise(log_mel(sweep(300, 600, 0.6) + silence(0.6) + sweep(600, 1200, 0.9)))], 0.2
+    )
+
+    assert quick.window == wake_match.WINDOW
+    assert paused.window > len(paused.templates[0])

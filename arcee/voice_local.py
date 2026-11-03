@@ -135,6 +135,21 @@ async def download(
     await asyncio.to_thread(_unpack, model, bytes(data), target)
 
 
+async def download_missing(on_progress: Callable[[float], None] = lambda fraction: None) -> None:
+    """Fetch whichever of the models is missing; reports the fraction of all of it."""
+    needed = missing()
+    total = sum(m.size_mb for m in needed) or 1
+    done = 0
+    for model in needed:
+
+        def progress(fraction: float, model: VoiceModel = model, done: int = done) -> None:
+            on_progress((done + fraction * model.size_mb) / total)
+
+        await download(model, progress)
+        done += model.size_mb
+    on_progress(1.0)
+
+
 def _unpack(model: VoiceModel, data: bytes, target: Path) -> None:
     if not model.url.endswith(".tar.bz2"):
         (target / model.files[0]).write_bytes(data)
@@ -285,7 +300,8 @@ class WakeListener:
                 if not spotting:
                     spotting = True
                     stream = spotter.create_stream()
-                    heard, frames_spotted = wake_match.Features(), 0
+                    keep = trained.window if (trained := self.trained) else wake_match.WINDOW
+                    heard, frames_spotted = wake_match.Features(keep), 0
                     feed = list(recent)  # the start of "hey", heard before the VAD was sure
                 else:
                     feed = [frame]
