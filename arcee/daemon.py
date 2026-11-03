@@ -161,6 +161,41 @@ def is_stop(text: str) -> bool:
     return bool(STOP_WORDS.match(re.sub(r"[^\w\s']", " ", text).strip()))
 
 
+# A spoken answer to a question on screen ("yes", "go ahead", "the second one").
+YES: Final = re.compile(
+    r"^(yes|yeah|yep|yup|sure|ok(ay)?|go ahead|allow|do it|please do|of course|fine|"
+    r"alright|all right|right)\b",
+    re.IGNORECASE,
+)
+NO: Final = re.compile(r"^(no|nope|nah|don'?t|do not|deny|cancel|never|not now)\b", re.IGNORECASE)
+ORDINALS: Final = ("first", "second", "third", "fourth", "fifth")
+
+
+def spoken_answer(text: str, kind: str, options: Sequence[str]) -> str | None:
+    """What the user said, as an answer to a question of `kind` with `options`; None
+    when it answers nothing ("yes or no?")."""
+    said = re.sub(r"[^\w\s']", " ", text).strip().lower()
+    yes, no = bool(YES.match(said)), bool(NO.match(said))
+    if kind == "confirm":
+        return "yes" if yes else "no" if no else None
+    words = " ".join(said.split())
+    for option in options:
+        wanted = " ".join(re.sub(r"[^\w\s']", " ", option).lower().split())
+        if wanted and re.search(rf"\b{re.escape(wanted)}\b", words):
+            return option  # whole words: "not sure" is not "no"
+    for n, ordinal in enumerate(ORDINALS[: len(options)]):
+        if re.search(rf"\b{ordinal}\b", said):
+            return options[n]
+    # "yes" to "Go ahead" / "No": the choice that says yes, or no.
+    for option in options:
+        lowered = option.lower()
+        if (yes and YES.match(lowered)) or (no and NO.match(lowered)):
+            return option
+    if options and (yes or no):
+        return None
+    return text.strip()
+
+
 async def keep_listening(service: AgentService) -> None:
     """Run the wake-word listener for as long as arceed runs, again after a failure."""
     while True:
@@ -208,6 +243,7 @@ class AgentService(ServiceInterface):
         self._request = ""
         self._step = ""
         self._questions: dict[str, asyncio.Future[str]] = {}
+        self._asked: dict[str, dict[str, Any]] = {}  # the questions, to answer by voice
         self._ids = itertools.count(1)
         # Ends the service (set by `serve` to disconnect its bus).
         self.on_quit: Callable[[], None] = lambda: None
@@ -369,6 +405,10 @@ class AgentService(ServiceInterface):
     def Heard(self, payload: str) -> DBusStr:
         return payload
 
+    @signal()
+    def Answered(self, question_id: str) -> DBusStr:
+        return question_id
+
     # --- voice ------------------------------------------------------------------------
 
     def _level(self, loudness: float) -> None:
@@ -427,6 +467,16 @@ class AgentService(ServiceInterface):
         if text and is_stop(text):
             heard = {"error": "Stopped." if self._stop_task() else "Nothing to stop."}
             text = ""
+        elif text and self._asked:
+            # A question is waiting: what was said answers it.
+            question_id, asked = next(reversed(self._asked.items()))
+            answer = spoken_answer(text, asked["kind"], asked.get("options", []))
+            if answer is None:
+                heard = {"error": "Say “yes” or “no”."}
+            else:
+                heard = {"text": text, "answer": answer}
+                self.Answer(question_id, answer)
+            text = ""
         elif text and self.busy:
             heard = {"error": f"Still working on: {self._request}. Say “Arcee stop” first."}
             text = ""
@@ -451,6 +501,7 @@ class AgentService(ServiceInterface):
         question_id = f"q{next(self._ids)}"
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._questions[question_id] = future
+        self._asked[question_id] = payload
         # The user answers with the mouse: give control back so that is not a pause.
         presence = self._runner.presence
         held = presence.held
@@ -461,6 +512,8 @@ class AgentService(ServiceInterface):
             return await future
         finally:
             self._questions.pop(question_id, None)
+            self._asked.pop(question_id, None)
+            self.Answered(question_id)  # every place showing it closes it
             if held:
                 await presence.acting()
 
@@ -570,6 +623,7 @@ async def _main() -> None:
         policy=settings.policy(),
         presence=ShellPresence(),
         memory=settings.memory,
+        sharing=settings.personal_to_cloud,
     )
     bus = await MessageBus(bus_type=BusType.SESSION).connect()
     try:

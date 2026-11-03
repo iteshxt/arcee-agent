@@ -139,7 +139,8 @@ class AgentPage(Gtk.Box):
         self.set_margin_bottom(12)
         self._listening = False
         self._working = False
-        self._open_questions: list[Gtk.Widget] = []
+        # Questions waiting for an answer, by id: answered anywhere, they close here too.
+        self._open_questions: dict[str, Gtk.Widget] = {}
         self.wave = SunWave()
         # Held in its own centred box: asked its height at the page's full width, the
         # ring answered in proportion and left a gap above and below.
@@ -284,6 +285,11 @@ class AgentPage(Gtk.Box):
                 heard = json.loads(value)
                 if heard.get("error"):
                     self._add(heard["error"], "dim-label")
+                elif "answer" in heard:  # a question answered by voice
+                    self._add(heard.get("text", ""), "arcee-you", halign=Gtk.Align.END)
+            case "Answered":
+                if (buttons := self._open_questions.pop(str(value), None)) is not None:
+                    buttons.set_sensitive(False)
             case "Started":
                 self._set_working(True, "Working…")
                 self._add(value, "arcee-you", halign=Gtk.Align.END)
@@ -298,7 +304,7 @@ class AgentPage(Gtk.Box):
                 done = json.loads(value)
                 self._set_working(False, IDLE_TEXT)
                 # A question left unanswered can no longer be answered.
-                for card in self._open_questions:
+                for card in self._open_questions.values():
                     card.set_sensitive(False)
                 self._open_questions.clear()
                 reply = done.get("reply") or (
@@ -341,8 +347,7 @@ class AgentPage(Gtk.Box):
 
         def answer(value: str) -> None:
             buttons.set_sensitive(False)
-            if buttons in self._open_questions:
-                self._open_questions.remove(buttons)
+            self._open_questions.pop(question["id"], None)
             self._call("Answer", GLib.Variant("(ss)", (question["id"], value)))
 
         if question.get("kind") == "confirm":
@@ -362,6 +367,6 @@ class AgentPage(Gtk.Box):
             entry.connect("activate", lambda e: answer(e.get_text()))
             buttons.append(entry)
         card.append(buttons)
-        self._open_questions.append(buttons)
+        self._open_questions[question["id"]] = buttons
         self._log.append(card)
         GLib.idle_add(self._scroll_to_end)

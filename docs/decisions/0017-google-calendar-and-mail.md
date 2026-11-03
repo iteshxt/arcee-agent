@@ -79,14 +79,17 @@ email is confirmed whatever its tier.
 Reading mail or a calendar means the model reads it. With the Groq Core, that content
 goes to Groq; with Local (Ollama), it stays on this computer. At the user's word,
 **Arcee asks each time**: before a task's first mail, calendar or contacts result would
-go to a cloud model, it asks ("This needs your email's text to go to Groq. Go ahead?"),
-once per task; no answer is remembered. On the local model it does not ask. A setting
-(Permissions) can later make the answer standing:
+go to a cloud model, it asks ("This needs your emails to go to Groq. Go ahead?", with
+Go ahead and No), once per task; no answer is remembered. A task that read them on the
+local model and would hand over to a cloud one asks too, and stays local on a no. On
+the local model it does not ask. Permissions → Privacy (built 2026-11-04,
+`Settings.personal_to_cloud`, a tool's `personal`):
 
-- **Ask each time** (the default, the user's choice), or
-- **Cloud model may read mail and calendar**, or
-- **Local model only for mail and calendar** (those tasks run on Ollama), or
-- **Off** (mail and calendar tools are not offered).
+- **Ask each time** (the default, the user's choice),
+- **Always allow** (for those who want it, at the user's word), or
+- **Never** (the tool is refused, and the model says a local model can read them).
+
+"Local model only for these tasks" may follow, once mail and calendar tools exist.
 
 Tools return the least that answers: headers and a short snippet for lists, one
 message's text (HTML stripped, quoted history trimmed, attachments by name only) for a

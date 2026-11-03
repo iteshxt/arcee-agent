@@ -36,6 +36,7 @@ const AGENT_INTERFACE = `
     <signal name="Listening"><arg type="b"/></signal>
     <signal name="Level"><arg type="d"/></signal>
     <signal name="Heard"><arg type="s"/></signal>
+    <signal name="Answered"><arg type="s"/></signal>
   </interface>
 </node>`;
 const AgentProxy = Gio.DBusProxy.makeProxyWrapper(AGENT_INTERFACE);
@@ -79,6 +80,7 @@ class ArceeIndicator extends PanelMenu.Button {
             onResume: resumeControl,
             // The user closed the pill: the next request starts a new conversation.
             onDismiss: () => this._agent.EndConversationAsync().catch(logError),
+            onAnswer: (id, answer) => this._agent.AnswerAsync(id, answer).catch(logError),
         });
         this._spoken = false; // the request under way is followed on the pill
         this._request = '';
@@ -102,6 +104,7 @@ class ArceeIndicator extends PanelMenu.Button {
             this._agent.connectSignal('Listening', (_p, _s, [on]) => this._onListening(on)),
             this._agent.connectSignal('Level', (_p, _s, [loudness]) => this._onLevel(loudness)),
             this._agent.connectSignal('Heard', (_p, _s, [json]) => this._onHeard(json)),
+            this._agent.connectSignal('Answered', (_p, _s, [id]) => this._onAnswered(id)),
         ];
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (!open)
@@ -312,9 +315,16 @@ class ArceeIndicator extends PanelMenu.Button {
             this._spoken = false;
             this._cue.fail(heard.error);
             this._say('', heard.error);
-        } else {
+        } else if (heard.answer === undefined) {
             this._cue.heard(heard.text ?? '');
-        }
+        } // an answer to a question: Answered closes it
+    }
+
+    // A question was answered, wherever: it goes from the pill and the menu.
+    _onAnswered(questionId) {
+        this._cue.answered(questionId);
+        if (this._questionShown === questionId)
+            this._question.visible = false;
     }
 
     _onStarted(request) {
@@ -351,6 +361,12 @@ class ArceeIndicator extends PanelMenu.Button {
 
     _onQuestion(json) {
         const question = JSON.parse(json);
+        this._questionShown = question.id;
+        // In a conversation the pill asks, with its buttons (and the voice works).
+        if (this._spoken && this._cue.ask(question)) {
+            this._question.visible = false;
+            return;
+        }
         this._questionBox.destroy_all_children();
         const text = new St.Label({text: question.text, style_class: 'arcee-card-title'});
         text.clutter_text.line_wrap = true;
