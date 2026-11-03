@@ -9,6 +9,7 @@ GObject bindings in the type-checked core.
 import asyncio
 import configparser
 import os
+import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -19,6 +20,8 @@ from pydantic import Field
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 
 MAX_LISTED: Final = 25
+# Ids a browser makes for its web apps: chrome-<32 letters>-Default, msedge-<…>-Default.
+_GENERATED_ID: Final = re.compile(r"(^|-)[a-p]{32}(-|$)")
 LAUNCH_CHECK_S: Final = 1.0
 
 
@@ -31,14 +34,32 @@ class App:
     path: Path
 
     def score(self, query: str) -> float:
-        """How well `query` names this app: exact name or id first, then words, then fuzzy."""
+        """How well `query` names this app: exact name or id first, then a word of its name,
+        then part of its name or id, then what it does, then fuzzy.
+
+        The name counts before the id: a Chrome web app's id is "chrome-<code>-Default"
+        whatever it is called, and "Chrome" opened one (Cinemode, 2026-11-04) because
+        "chrome" was in its id and the tie went to the first name alphabetically. Such
+        made-up ids are not matched at all; the app is found by its own name.
+        """
         q = query.lower().strip()
         name, ident = self.name.lower(), self.id.lower().removesuffix(".desktop")
-        if q in (name, ident) or ident.endswith(f".{q}") or ident.endswith(f"_{q}"):
+        generated = bool(_GENERATED_ID.search(ident))
+        if q == name:
             return 1.0
-        if q in name or q in ident:
+        # "google-chrome", "org.gnome.Calculator": below an exact name ("Settings" is
+        # GNOME's, not nvidia-settings).
+        if not generated and (q == ident or any(ident.endswith(c + q) for c in ".-_")):
+            return 0.95
+        if q in re.findall(r"\w+", name):
+            return 0.9
+        if q in name:
             return 0.8
-        if q in self.keywords.lower() or q in self.comment.lower():
+        if q in ident and not generated:
+            return 0.7
+        keywords = self.keywords.lower()
+        # "VS Code" is the keyword "vscode".
+        if q in keywords or q.replace(" ", "") in keywords.split(";") or q in self.comment.lower():
             return 0.6
         return 0.5 * SequenceMatcher(None, q, name).ratio()
 
