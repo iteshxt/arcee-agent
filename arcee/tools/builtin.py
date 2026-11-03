@@ -19,7 +19,7 @@ from arcee.tools.registry import Registry
 from arcee.tools.screen import screen_tools
 from arcee.tools.shell import ShellRun, ShellScript
 from arcee.tools.system import NetworkStatus, SystemStatus
-from arcee.tools.web import WebFetch, WebNews, WebSearch
+from arcee.tools.web import WebFetch, WebNews, WebSearch, WebWeather
 from arcee.tools.windows import window_tools
 
 
@@ -47,6 +47,7 @@ def builtin_registry(
             NetworkStatus(),
             WebSearch(),
             WebNews(),
+            WebWeather(),
             WebFetch(),
             *browser_tools(browser),
             *desktop_tools(),

@@ -263,6 +263,11 @@ class TestTools:
             FILES + CONTROL + WAIT + BROWSER,
         ),
         ("Open example.com in Chrome", CONTROL + WAIT + BROWSER + WEB),
+        # Spoken: a greeting before the request does not make it small talk.
+        ("Hey, how hot is it outside?", CONTROL + WEB),
+        ("Hey Arcee, thanks", CONTROL),
+        ("Will it rain in Mumbai tomorrow?", CONTROL + WEB),
+        ("What's the weather like today?", CONTROL + WEB),
     ],
 )
 def test_tool_groups_follow_the_request(request_text: str, expected: tuple[str, ...]) -> None:

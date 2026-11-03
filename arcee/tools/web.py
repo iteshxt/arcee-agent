@@ -331,6 +331,182 @@ class WebNews(Tool[NewsArgs]):
         return ToolResult.ok(f"{len(headlines)} headlines, {what}", data=data)
 
 
+# --- web.weather ----------------------------------------------------------------
+
+WTTR: Final = "https://wttr.in"
+GEOCODE: Final = "https://geocoding-api.open-meteo.com/v1/search"
+FORECAST: Final = "https://api.open-meteo.com/v1/forecast"
+# Open-Meteo's weather codes (WMO), in words.
+WMO: Final = {
+    0: "Clear",
+    1: "Mostly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Fog",
+    51: "Light drizzle",
+    53: "Drizzle",
+    55: "Heavy drizzle",
+    61: "Light rain",
+    63: "Rain",
+    65: "Heavy rain",
+    71: "Light snow",
+    73: "Snow",
+    75: "Heavy snow",
+    80: "Rain showers",
+    81: "Rain showers",
+    82: "Heavy rain showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with hail",
+    99: "Thunderstorm with hail",
+}
+
+
+class WeatherArgs(ToolArgs):
+    place: str = Field(
+        default="",
+        description="A city or place the user named; leave empty for where the user is "
+        "(found by itself)",
+    )
+    days: int = Field(default=2, ge=1, le=3, description="Days of forecast, from today")
+
+
+class WebWeather(Tool[WeatherArgs]):
+    name = "web.weather"
+    read_only = True
+    description = (
+        "The weather now and the forecast (temperature, feels like, conditions, rain chance) "
+        "for where the user is, or for a named place."
+    )
+    usage = Usage(
+        when='The user asks about the weather: "what\'s the weather like", "will it rain '
+        'tomorrow", "how hot is it in Delhi".',
+        avoid="Searching the web or opening a weather site for it.",
+        mistakes="Asking the user where they are: leave place empty for where they are.",
+        example='web.weather(place="Delhi", days=2)',
+    )
+    args_model = WeatherArgs
+    timeout_s = 20
+
+    def __init__(self, *, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client
+
+    async def run(self, args: WeatherArgs, ctx: ToolContext) -> ToolResult:
+        place = args.place.strip()
+        async with _maybe_owned(self._client) as client:
+            try:
+                data = await _wttr(client, place, args.days)
+            except (SearchRefusedError, httpx.HTTPError, ValueError, KeyError, IndexError) as exc:
+                if not place:
+                    return ToolResult.fail(
+                        f"the weather service did not answer ({type(exc).__name__}); "
+                        "ask the user which place, then try again with it"
+                    )
+                try:
+                    data = await _open_meteo(client, place, args.days)
+                except (SearchRefusedError, httpx.HTTPError, ValueError, KeyError) as exc2:
+                    return ToolResult.fail(f"no weather for {place!r}: {exc2}")
+        now = data["now"]
+        summary = f"{data['place']}: {now['condition'].lower()}, {now['temp_c']}°C"
+        return ToolResult.ok(summary, data=data)
+
+
+async def _wttr(client: httpx.AsyncClient, place: str, days: int) -> dict[str, Any]:
+    """wttr.in: a named place, or where the request comes from."""
+    response = await _get(client, f"{WTTR}/{place}", params={"format": "j1"})
+    if response.status_code != 200:
+        raise SearchRefusedError(f"wttr.in answered HTTP {response.status_code}")
+    raw = response.json()
+    current = raw["current_condition"][0]
+    area = raw["nearest_area"][0]
+    names = [area[k][0]["value"] for k in ("areaName", "region", "country") if area.get(k)]
+    forecast: list[dict[str, Any]] = []
+    for day in raw["weather"][:days]:
+        hourly = cast(list[dict[str, Any]], day.get("hourly") or [])
+        midday: dict[str, Any] = hourly[len(hourly) // 2] if hourly else {}
+        forecast.append(
+            {
+                "date": day["date"],
+                "min_c": int(day["mintempC"]),
+                "max_c": int(day["maxtempC"]),
+                "condition": (midday.get("weatherDesc") or [{"value": ""}])[0]["value"].strip(),
+                "rain_chance": max((int(h.get("chanceofrain", 0)) for h in hourly), default=0),
+            }
+        )
+    return {
+        "place": ", ".join(dict.fromkeys(n for n in names if n)),
+        "now": {
+            "temp_c": int(current["temp_C"]),
+            "feels_like_c": int(current["FeelsLikeC"]),
+            "condition": current["weatherDesc"][0]["value"].strip(),
+            "humidity": int(current["humidity"]),
+            "wind_kmh": int(current["windspeedKmph"]),
+        },
+        "days": _labelled(forecast),
+    }
+
+
+async def _open_meteo(client: httpx.AsyncClient, place: str, days: int) -> dict[str, Any]:
+    """Open-Meteo, for a named place: its geocoder, then its forecast."""
+    found = await _get(client, GEOCODE, params={"name": place, "count": 1})
+    results = found.json().get("results") if found.status_code == 200 else None
+    if not results:
+        raise ValueError("no such place")
+    spot = results[0]
+    response = await _get(
+        client,
+        FORECAST,
+        params={
+            "latitude": spot["latitude"],
+            "longitude": spot["longitude"],
+            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,"
+            "weather_code,wind_speed_10m",
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+            "weather_code",
+            "timezone": "auto",
+            "forecast_days": days,
+        },
+    )
+    if response.status_code != 200:
+        raise SearchRefusedError(f"Open-Meteo answered HTTP {response.status_code}")
+    raw = response.json()
+    current, daily = raw["current"], raw["daily"]
+    return {
+        "place": ", ".join(str(spot[k]) for k in ("name", "admin1", "country") if spot.get(k)),
+        "now": {
+            "temp_c": round(current["temperature_2m"]),
+            "feels_like_c": round(current["apparent_temperature"]),
+            "condition": WMO.get(current["weather_code"], "Unknown"),
+            "humidity": round(current["relative_humidity_2m"]),
+            "wind_kmh": round(current["wind_speed_10m"]),
+        },
+        "days": _labelled(
+            [
+                {
+                    "date": date,
+                    "min_c": round(daily["temperature_2m_min"][i]),
+                    "max_c": round(daily["temperature_2m_max"][i]),
+                    "condition": WMO.get(daily["weather_code"][i], "Unknown"),
+                    "rain_chance": daily["precipitation_probability_max"][i] or 0,
+                }
+                for i, date in enumerate(daily["time"])
+            ]
+        ),
+    }
+
+
+def _labelled(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each day named as people ask for it: today, tomorrow, then its weekday."""
+    from datetime import date
+
+    names = ("today", "tomorrow")
+    out: list[dict[str, Any]] = []
+    for n, day in enumerate(days):
+        when = names[n] if n < len(names) else date.fromisoformat(day["date"]).strftime("%A")
+        out.append({"day": when, **day})
+    return out
+
+
 # --- web.fetch ------------------------------------------------------------------
 
 

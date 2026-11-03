@@ -21,9 +21,11 @@ from arcee.tools.web import (
     FetchArgs,
     NewsArgs,
     SearchArgs,
+    WeatherArgs,
     WebFetch,
     WebNews,
     WebSearch,
+    WebWeather,
     extract_text,
     news_region,
 )
@@ -339,3 +341,118 @@ def test_the_news_edition_follows_the_system_language() -> None:
     assert news_region("en_IN.UTF-8") == {"hl": "en-IN", "gl": "IN", "ceid": "IN:en"}
     assert news_region("de_DE.UTF-8") == {"hl": "de-DE", "gl": "DE", "ceid": "DE:de"}
     assert news_region("C.UTF-8") == {"hl": "en-US", "gl": "US", "ceid": "US:en"}
+
+
+WTTR_J1 = {
+    "current_condition": [
+        {
+            "temp_C": "22",
+            "FeelsLikeC": "19",
+            "weatherDesc": [{"value": "Smoky haze "}],
+            "humidity": "28",
+            "windspeedKmph": "7",
+        }
+    ],
+    "nearest_area": [
+        {
+            "areaName": [{"value": "Ludhiana"}],
+            "region": [{"value": "Punjab"}],
+            "country": [{"value": "India"}],
+        }
+    ],
+    "weather": [
+        {
+            "date": "2026-11-03",
+            "mintempC": "18",
+            "maxtempC": "32",
+            "hourly": [
+                {"chanceofrain": "1", "weatherDesc": [{"value": "Clear"}]},
+                {"chanceofrain": "12", "weatherDesc": [{"value": "Sunny"}]},
+            ],
+        },
+        {"date": "2026-11-04", "mintempC": "17", "maxtempC": "31", "hourly": []},
+    ],
+}
+
+
+async def test_the_weather_where_the_user_is() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=WTTR_J1)
+
+    result = await WebWeather(client=client(handler)).run(
+        WeatherArgs(), ToolContext("t_w", Path("/h"))
+    )
+
+    assert str(seen[0].url) == "https://wttr.in/?format=j1"  # no place: from the network
+    assert result.status == "ok"
+    assert result.summary == "Ludhiana, Punjab, India: smoky haze, 22°C"
+    assert result.data is not None
+    assert result.data["now"]["feels_like_c"] == 19
+    assert result.data["days"][0] == {
+        "day": "today",
+        "date": "2026-11-03",
+        "min_c": 18,
+        "max_c": 32,
+        "condition": "Sunny",
+        "rain_chance": 12,
+    }
+    assert result.data["days"][1]["day"] == "tomorrow"  # asked or not: "will it rain tomorrow"
+
+
+async def test_a_named_place_falls_back_to_open_meteo() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "wttr.in":
+            return httpx.Response(503)
+        if "geocoding" in request.url.host:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "name": "Delhi",
+                            "latitude": 28.6,
+                            "longitude": 77.2,
+                            "admin1": "Delhi",
+                            "country": "India",
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "current": {
+                    "temperature_2m": 20.8,
+                    "apparent_temperature": 22.3,
+                    "relative_humidity_2m": 75,
+                    "weather_code": 0,
+                    "wind_speed_10m": 5.0,
+                },
+                "daily": {
+                    "time": ["2026-11-03"],
+                    "temperature_2m_min": [16.2],
+                    "temperature_2m_max": [30.6],
+                    "weather_code": [61],
+                    "precipitation_probability_max": [40],
+                },
+            },
+        )
+
+    result = await WebWeather(client=client(handler)).run(
+        WeatherArgs(place="Delhi"), ToolContext("t_w2", Path("/h"))
+    )
+
+    assert result.summary == "Delhi, Delhi, India: clear, 21°C"
+    assert result.data is not None
+    assert result.data["days"][0]["condition"] == "Light rain"
+
+
+async def test_no_weather_service_asks_for_a_place() -> None:
+    result = await WebWeather(client=client(lambda _r: httpx.Response(503))).run(
+        WeatherArgs(), ToolContext("t_w3", Path("/h"))
+    )
+    assert result.status != "ok"
+    assert "which place" in (result.error or "")
