@@ -27,6 +27,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 from arcee import install, local_models  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
 from arcee.app.agent_page import AgentPage  # noqa: E402
+from arcee.app.formatting import show_markdown  # noqa: E402
 from arcee.app.local_setup import LocalSetupDialog  # noqa: E402
 from arcee.app.memory_page import MemoryPage  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
@@ -511,7 +512,8 @@ class ArceeWindow(Adw.ApplicationWindow):
         task, steps = found
         page = Adw.PreferencesPage()
         reply = Adw.PreferencesGroup(title="Reply")
-        label = Gtk.Label(label=task.reply or task.status, wrap=True, xalign=0, selectable=True)
+        label = Gtk.Label(wrap=True, xalign=0, selectable=True)
+        show_markdown(label, task.reply or task.status)
         reply.add(label)
         page.add(reply)
         group = Adw.PreferencesGroup(title=f"{len(steps)} steps")

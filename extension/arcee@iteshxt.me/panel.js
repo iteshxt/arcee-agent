@@ -12,6 +12,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {ListeningCue} from './cue.js';
+import {plain, toPango} from './markdown.js';
 
 const AGENT_INTERFACE = `
 <node>
@@ -255,10 +256,18 @@ class ArceeIndicator extends PanelMenu.Button {
         return (error.message ?? `${error}`).replace(/^GDBus\.Error:[\w.-]+:\s*/, '');
     }
 
-    _say(title, body, working = false) {
+    // `markdown`: the body is Arcee's reply, written in Markdown, shown formatted.
+    _say(title, body, working = false, markdown = false) {
         this._statusTitle.text = shorten(title, 160);
         this._statusTitle.visible = Boolean(title);
-        this._statusBody.text = body;
+        try {
+            if (markdown)
+                this._statusBody.clutter_text.set_markup(toPango(body));
+            else
+                this._statusBody.text = body;
+        } catch {
+            this._statusBody.text = plain(body);
+        }
         this._statusBody.visible = Boolean(body);
         this._stop.visible = working;
         this._status.visible = Boolean(title || body);
@@ -381,7 +390,7 @@ class ArceeIndicator extends PanelMenu.Button {
         this._step = '';
         this._onStep('');
         const reply = done.reply || (done.status === 'stopped' ? 'Stopped.' : `Ended: ${done.status}.`);
-        this._say(this._statusTitle.text, shorten(reply, 400));
+        this._say(this._statusTitle.text, reply.length > 600 ? `${reply.slice(0, 599)}…` : reply, false, true);
         // The reply goes on the pill, typed or spoken, until it has been read; not when
         // the menu or the app is in front showing it already. No notification banner.
         const appInFront = global.display.focus_window?.get_gtk_application_id?.() === APP_ID;

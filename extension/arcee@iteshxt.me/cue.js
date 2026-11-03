@@ -23,6 +23,8 @@ import Pango from 'gi://Pango';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+import {plain, toPango} from './markdown.js';
+
 // Small, at the user's word: noticeable, out of the way (35 px: 15% up from 30 px, at
 // their word again). The ring's box is fixed, so the pill centres before its first
 // frame has loaded (measured then, it was 16 px wide and sat off centre).
@@ -212,13 +214,18 @@ export class ListeningCue {
         this._phase = 'done';
         this._stop.visible = false;
         this._resume.visible = false;
-        let words = oneLine(text);
+        // The models write Markdown: shown formatted, its line breaks (lists) kept.
+        let words = (text ?? '').trim();
         if (words.length > REPLY_CHARS)
             words = `${words.slice(0, REPLY_CHARS - 1)}… (the rest is in Arcee)`;
         this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
         this._doing.visible = false;
         this._reply.set_size(-1, -1);
-        this._reply.text = words;
+        try {
+            this._reply.clutter_text.set_markup(toPango(words));
+        } catch {
+            this._reply.text = plain(words);
+        }
         this._reply.visible = true;
         // As wide as the reply needs, up to REPLY_WIDTH_PX, and as tall as it wraps to at
         // that width: set both, as the pill's layout asked the label's height without its
