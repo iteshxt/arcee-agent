@@ -124,3 +124,32 @@ async def test_a_transcription_is_counted(monkeypatch: pytest.MonkeyPatch, tmp_p
     await Transcriber(client, usage).transcribe(tone(100, chunks=400))  # 20 s of audio
 
     assert usage.snapshot()["audio_s_day"] == 20
+
+
+async def test_a_stalled_transcription_is_tried_once_more(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One request hung for 20 s and lost what was said.
+    monkeypatch.setenv("GROQ_API_KEY_TTS", "k")
+    calls: list[int] = []
+
+    def server(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("stalled", request=request)
+        return httpx.Response(200, json={"text": "open chrome"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(server))
+
+    assert await Transcriber(client).transcribe(tone(100, chunks=40)) == "open chrome"
+    assert len(calls) == 2
+
+
+async def test_two_stalls_give_up_with_a_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GROQ_API_KEY_TTS", "k")
+
+    def stall(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(stall))
+
+    with pytest.raises(VoiceError, match="could not reach Groq: ReadTimeout"):
+        await Transcriber(client).transcribe(tone(100, chunks=40))
