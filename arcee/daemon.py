@@ -360,7 +360,7 @@ class AgentService(ServiceInterface):
         text = heard.get("text", "").strip()
         if text and not self.busy:
             self._request = text
-            self._task = asyncio.ensure_future(self._run(text))
+            self._task = asyncio.ensure_future(self._run(text, spoken=True))
 
     # --- the agent's user: questions go to the panel ----------------------------------
 
@@ -396,12 +396,12 @@ class AgentService(ServiceInterface):
     def busy(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def _run(self, request: str) -> None:
+    async def _run(self, request: str, *, spoken: bool = False) -> None:
         self.Started(request)
         self._set_step(THINKING)
         payload: dict[str, Any]
         try:
-            result = await self._runner.run(request, self, self._progress)
+            result = await self._runner.run(request, self, self._progress, spoken=spoken)
             payload = {
                 "status": result.status,
                 "reply": result.reply,

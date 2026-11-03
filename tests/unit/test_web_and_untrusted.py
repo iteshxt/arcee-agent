@@ -59,20 +59,81 @@ class TestSearch:
             ],
         }
 
-    async def test_bot_challenge_is_reported_not_worked_around(self) -> None:
+    async def test_a_refused_search_falls_back_to_wikipedia(self) -> None:
+        # DuckDuckGo's 202 is a bot check: Wikipedia's own search answers instead.
+        calls: list[httpx.Request] = []
+        page = {
+            "key": "Kim_Kardashian",
+            "title": "Kim Kardashian",
+            "description": "media personality",
+            "excerpt": 'rose to fame with <span class="searchmatch">reality</span> TV',
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if "duckduckgo" in request.url.host:
+                return httpx.Response(202, text="")
+            return httpx.Response(200, json={"pages": [page]})
+
+        result = await WebSearch(client=client(handler), searxng_url="").run(
+            SearchArgs(query="how did kim kardashian become popular"),
+            ToolContext("t_wiki", Path("/h")),
+        )
+
+        assert result.error is None
+        assert result.data is not None
+        assert result.data["results"] == [
+            {
+                "title": "Kim Kardashian",
+                "url": "https://en.wikipedia.org/wiki/Kim_Kardashian",
+                "snippet": "media personality rose to fame with reality TV",
+            }
+        ]
+        assert calls[-1].headers["User-Agent"].startswith("Arcee/")  # Wikimedia's rule
+
+    async def test_after_two_failures_the_web_tools_stop_trying(self) -> None:
+        # One question made 13 failed lookups before answering from what the model knew.
         calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
-            return httpx.Response(202, text="")
+            return httpx.Response(202 if "duckduckgo" in request.url.host else 503, text="")
 
-        result = await WebSearch(client=client(handler), searxng_url="").run(
-            SearchArgs(query="x"), CTX
+        search = WebSearch(client=client(handler), searxng_url="")
+        ctx = ToolContext("t_down", Path("/h"))
+        first = await search.run(SearchArgs(query="a"), ctx)
+        second = await search.run(SearchArgs(query="b"), ctx)
+        tried = len(calls)
+        third = await search.run(SearchArgs(query="c"), ctx)
+        fetch = await WebFetch(client=client(handler)).run(
+            FetchArgs(url="https://en.wikipedia.org/wiki/X"), ctx
         )
 
-        assert len(calls) == 1
-        assert result.error is not None
-        assert "ARCEE_SEARXNG_URL" in result.error
+        assert first.error is not None
+        assert "DuckDuckGo refused the search (HTTP 202)" in first.error
+        assert "Wikipedia's search answered HTTP 503" in first.error
+        assert second.error is not None
+        assert "Answer from what you know" in second.error
+        assert third.error is not None
+        assert third.error.startswith("the web is not answering")
+        assert fetch.error == third.error
+        assert len(calls) == tried  # no more requests once given up
+
+    async def test_a_connection_that_never_opened_is_tried_once_more(self) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if len(calls) == 1:
+                raise httpx.ConnectError("no route", request=request)
+            return httpx.Response(200, text=DDG)
+
+        result = await WebSearch(client=client(handler), searxng_url="").run(
+            SearchArgs(query="ubuntu"), ToolContext("t_retry", Path("/h"))
+        )
+
+        assert result.error is None
+        assert len(calls) == 2
 
     async def test_searxng_backend(self) -> None:
         body = {"results": [{"title": "A", "url": "https://a.example", "content": "about a"}]}

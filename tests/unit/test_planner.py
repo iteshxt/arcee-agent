@@ -414,3 +414,16 @@ class TestMemory:
         assert outcome.reply == "Hello!"
         assert "What you remember" not in core.requests[0].system
         assert any(isinstance(e, Guarded) and "memory unavailable" in e.what for e in events)
+
+
+async def test_a_spoken_request_tells_the_core_words_may_be_misheard() -> None:
+    # "Go to Cron" (Whisper's Chrome) led to a file listing.
+    agent, _, core, _, _ = make([], [Completion("Opening Chrome.")], plan_if=lambda r: False)
+    typed_agent, _, typed_core, _, _ = make([], [Completion("Hi.")], plan_if=lambda r: False)
+
+    await agent.run("Go to Cron.", spoken=True)
+    await typed_agent.run("Go to Cron.")
+
+    assert "spoken and transcribed" in core.requests[0].system
+    assert '"go to Cron" is "go to Chrome"' in core.requests[0].system
+    assert "spoken and transcribed" not in typed_core.requests[0].system

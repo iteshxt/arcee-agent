@@ -119,9 +119,17 @@ class TaskRunner:
         self._usable = [model for model, ok in zip(self.ladder, healthy, strict=True) if ok]
         return notes, None
 
-    async def run(self, request: str, user: User, on_event: Callable[[Event], None]) -> TaskResult:
+    async def run(
+        self,
+        request: str,
+        user: User,
+        on_event: Callable[[Event], None],
+        *,
+        spoken: bool = False,
+    ) -> TaskResult:
         """Run `request` to its end and record it. A cancel is recorded, then re-raised;
-        `stopped` names the cancel the user asked for (Stop) instead of an interrupt."""
+        `stopped` names the cancel the user asked for (Stop) instead of an interrupt.
+        `spoken`: the request was transcribed from speech, so words may be misheard."""
         if not self._usable:
             _, problem = await self.check()
             if problem:
@@ -157,7 +165,7 @@ class TaskRunner:
         started = time.monotonic()
         self.stopped = False
         try:
-            outcome = await agent.run(request, task_id=task_id)
+            outcome = await agent.run(request, task_id=task_id, spoken=spoken)
         except ModelUnavailableError as exc:
             await self._finish(task_id, "failed", f"model unavailable: {exc}", plans)
             raise

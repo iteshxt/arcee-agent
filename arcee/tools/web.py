@@ -1,9 +1,13 @@
 """Web tools (spec section 11): `web.search` and `web.fetch`, no API keys.
 
-Search uses DuckDuckGo's plain HTML page; fetching extracts a page's readable
-text without running JavaScript. Both results are untrusted content. Fetching
-refuses addresses on this machine or the local network, so a page cannot point
-Arcee at the user's own services (Ollama, routers, dev servers).
+Search uses DuckDuckGo's plain HTML page, and Wikipedia's search when DuckDuckGo
+refuses (its HTTP 202 is a bot check, not "accepted") or cannot be reached; fetching
+extracts a page's readable text without running JavaScript. After two failed lookups
+in a task the tools say the web is not answering, so the Core answers from what it
+knows: one question took 13 failed searches and fetches before it did. Both results
+are untrusted content. Fetching refuses addresses on this machine or the local
+network, so a page cannot point Arcee at the user's own services (Ollama, routers,
+dev servers).
 """
 
 import asyncio
@@ -23,6 +27,17 @@ from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 SEARCH_URL: Final = "https://html.duckduckgo.com/html/"
 SEARXNG_ENV: Final = "ARCEE_SEARXNG_URL"
 USER_AGENT: Final = "Mozilla/5.0 (X11; Linux x86_64) Arcee/0.1"
+WIKIPEDIA_SEARCH: Final = "https://en.wikipedia.org/w/rest.php/v1/search/page"
+# Wikimedia asks automated clients for a name and a way to reach whoever runs them.
+WIKIPEDIA_AGENT: Final = "Arcee/0.3 (https://iteshxt.me; desktop agent)"
+# Failed web lookups in one task before the tools stop trying.
+GIVE_UP_AFTER: Final = 2
+GIVE_UP: Final = (
+    "the web is not answering right now; do not search or fetch again in this task. "
+    "Answer from what you know, and say it may be out of date"
+)
+# Connections that never opened (ConnectError) are retried once after this pause.
+RETRY_S: Final = 0.5
 TIMEOUT: Final = httpx.Timeout(15.0, connect=5.0)
 MAX_PAGE_BYTES: Final = 3_000_000
 _SKIP: Final = frozenset({"script", "style", "noscript", "svg", "nav", "footer", "header", "form"})
@@ -35,6 +50,36 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=TIMEOUT, follow_redirects=True, headers={"User-Agent": USER_AGENT}
     )
+
+
+class _Failures:
+    """Failed web lookups per task: past GIVE_UP_AFTER, the tools stop trying."""
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+
+    def spent(self, task_id: str) -> bool:
+        return self._counts.get(task_id, 0) >= GIVE_UP_AFTER
+
+    def failed(self, task_id: str, reason: str) -> ToolResult:
+        if len(self._counts) > 50:  # one count per recent task is plenty
+            self._counts.clear()
+        self._counts[task_id] = self._counts.get(task_id, 0) + 1
+        if self.spent(task_id):
+            return ToolResult.fail(f"{reason}; {GIVE_UP}")
+        return ToolResult.fail(reason)
+
+
+FAILURES: Final = _Failures()
+
+
+async def _get(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
+    """GET, once more after a moment if the connection never opened."""
+    try:
+        return await client.get(url, **kwargs)
+    except httpx.ConnectError:
+        await asyncio.sleep(RETRY_S)
+        return await client.get(url, **kwargs)
 
 
 # --- web.search -----------------------------------------------------------------
@@ -68,16 +113,27 @@ class WebSearch(Tool[SearchArgs]):
         self._searxng = searxng_url if searxng_url is not None else os.environ.get(SEARXNG_ENV)
 
     async def run(self, args: SearchArgs, ctx: ToolContext) -> ToolResult:
+        if FAILURES.spent(ctx.task_id):
+            return ToolResult.fail(GIVE_UP)
+        problems: list[str] = []
+        results: list[dict[str, str]] = []
         async with _maybe_owned(self._client) as client:
-            try:
-                if self._searxng:
-                    results = await _searxng(client, self._searxng, args.query)
-                else:
-                    results = await _duckduckgo(client, args.query)
-            except SearchRefusedError as refused:
-                return ToolResult.fail(str(refused))
-            except httpx.HTTPError as exc:
-                return ToolResult.fail(f"search failed: {type(exc).__name__}")
+            engines = (
+                [("SearXNG", lambda: _searxng(client, self._searxng or "", args.query))]
+                if self._searxng
+                else [("DuckDuckGo", lambda: _duckduckgo(client, args.query))]
+            )
+            engines.append(("Wikipedia", lambda: _wikipedia(client, args.query, args.n)))
+            for name, search in engines:
+                try:
+                    results = await search()
+                    break
+                except SearchRefusedError as refused:
+                    problems.append(str(refused))
+                except httpx.HTTPError as exc:
+                    problems.append(f"{name} could not be reached ({type(exc).__name__})")
+            else:
+                return FAILURES.failed(ctx.task_id, "search failed: " + "; ".join(problems))
         results = results[: args.n]
         data = {"query": args.query, "count": len(results), "results": results}
         return ToolResult.ok(f"{len(results)} results for {args.query!r}", data=data)
@@ -88,14 +144,40 @@ class SearchRefusedError(Exception):
 
 
 async def _duckduckgo(client: httpx.AsyncClient, query: str) -> list[dict[str, str]]:
-    response = await client.get(SEARCH_URL, params={"q": query})
+    response = await _get(client, SEARCH_URL, params={"q": query})
     if response.status_code != 200 or "anomaly" in response.text.lower():
-        # 202 is DuckDuckGo's bot challenge. It is not solved; the user can set up SearXNG.
-        raise SearchRefusedError(
-            f"DuckDuckGo refused the search (HTTP {response.status_code}); "
-            f"set {SEARXNG_ENV} to a SearXNG instance for reliable search"
-        )
+        # 202 is DuckDuckGo's bot check (it came after a burst of searches), not "accepted".
+        raise SearchRefusedError(f"DuckDuckGo refused the search (HTTP {response.status_code})")
     return parse_results(response.text)
+
+
+async def _wikipedia(client: httpx.AsyncClient, query: str, n: int) -> list[dict[str, str]]:
+    """Wikipedia's own search: no key, and dependable for who, what and how questions."""
+    response = await _get(
+        client,
+        WIKIPEDIA_SEARCH,
+        params={"q": query, "limit": n},
+        headers={"User-Agent": WIKIPEDIA_AGENT},
+    )
+    if response.status_code != 200:
+        raise SearchRefusedError(f"Wikipedia's search answered HTTP {response.status_code}")
+    pages = cast(list[dict[str, Any]], response.json().get("pages", []))
+    return [
+        {
+            "title": str(page.get("title", "")),
+            "url": f"https://en.wikipedia.org/wiki/{page.get('key', '')}",
+            "snippet": " ".join(
+                part
+                for part in (
+                    str(page.get("description") or ""),
+                    re.sub(r"<[^>]+>", "", str(page.get("excerpt") or "")),
+                )
+                if part
+            ),
+        }
+        for page in pages
+        if page.get("key")
+    ]
 
 
 async def _searxng(client: httpx.AsyncClient, base: str, query: str) -> list[dict[str, str]]:
@@ -194,13 +276,20 @@ class WebFetch(Tool[FetchArgs]):
             return ToolResult.fail("only http and https addresses can be fetched")
         if not self._allow_private and await _is_private(parsed.hostname):
             return ToolResult.fail("addresses on this computer or the local network are refused")
+        if FAILURES.spent(ctx.task_id):
+            return ToolResult.fail(GIVE_UP)
+        # Wikipedia answered 403 to the browser-like name; it asks bots for their own.
+        wiki = parsed.hostname.endswith("wikipedia.org")
+        headers = {"User-Agent": WIKIPEDIA_AGENT} if wiki else {}
         async with _maybe_owned(self._client) as client:
             try:
-                response = await client.get(args.url)
+                response = await _get(client, args.url, headers=headers)
             except httpx.HTTPError as exc:
-                return ToolResult.fail(f"could not fetch the page: {type(exc).__name__}")
+                return FAILURES.failed(
+                    ctx.task_id, f"could not fetch the page: {type(exc).__name__}"
+                )
         if response.status_code >= 400:
-            return ToolResult.fail(f"the page answered HTTP {response.status_code}")
+            return FAILURES.failed(ctx.task_id, f"the page answered HTTP {response.status_code}")
         kind = response.headers.get("content-type", "")
         body = response.text[:MAX_PAGE_BYTES]
         if "html" in kind:

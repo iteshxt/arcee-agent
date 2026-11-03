@@ -39,8 +39,12 @@ class FakeRunner:
         self.presence = NoPresence()
         self.stopped = False
         self.hang = hang
+        self.spoken = False
 
-    async def run(self, request: str, user: User, on_event: Callable[[Event], None]) -> TaskResult:
+    async def run(
+        self, request: str, user: User, on_event: Callable[[Event], None], *, spoken: bool = False
+    ) -> TaskResult:
+        self.spoken = spoken
         if self.hang:
             await asyncio.sleep(60)
         allowed = await user.confirm(
@@ -274,6 +278,8 @@ async def test_a_woken_request_is_heard_and_run(bus_address: str) -> None:
     assert await asyncio.wait_for(heard, 5) == {"text": "open chrome and run youtube"}
     assert await asyncio.wait_for(started, 5) == "open chrome and run youtube"
     assert listening == [True, False]  # the panel and the app show it, as for the mic
+    await asyncio.sleep(0.05)
+    assert service._runner.spoken is True  # pyright: ignore  # the Core is told: spoken
 
     finished: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
     agent.on_finished(lambda payload: finished.set_result(json.loads(payload)))
