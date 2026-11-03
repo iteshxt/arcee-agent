@@ -37,40 +37,6 @@
   background-gradient-end: rgba(96, 156, 255, 0.7);
 }
 
-.arcee-pill {
-  background-color: rgba(28, 28, 32, 0.85);
-  border: 1px solid rgba(255, 122, 26, 0.7);
-  border-radius: 999px;
-  padding: 3px 4px 3px 12px;
-  spacing: 8px;
-  color: #f2f2f2;
-  font-weight: bold;
-  font-size: 9pt;
-}
-
-.arcee-pill.paused {
-  border-color: rgba(96, 156, 255, 0.8);
-}
-
-.arcee-pill-button {
-  border-radius: 999px;
-  padding: 2px 10px;
-  background-color: rgba(255, 255, 255, 0.12);
-  color: #f2f2f2;
-}
-
-.arcee-pill-button:hover {
-  background-color: rgba(255, 255, 255, 0.22);
-}
-
-.arcee-stop {
-  background-color: #c0392b;
-}
-
-.arcee-stop:hover {
-  background-color: #e74c3c;
-}
-
 /* The panel menu: sunrise orange for Arcee's own actions. */
 .arcee-menu {
   min-width: 380px;
@@ -313,14 +279,14 @@
    over light and dark windows alike. */
 .arcee-cue {
   border-radius: 999px;
-  padding: 3px;
+  padding: 3px 6px 3px 3px;
   spacing: 8px;
   background-color: rgba(12, 9, 6, 0.6);
   box-shadow: 0 1px 6px rgba(255, 122, 26, 0.22);
 }
 
 .arcee-cue-text {
-  padding-right: 14px;
+  padding-right: 6px;
   spacing: 0;
 }
 
@@ -333,4 +299,37 @@
 .arcee-cue-doing {
   color: #ffb36b;
   font-size: 8.5pt;
+}
+
+/* The user has taken the screen back: the user's blue, as the glow. */
+.arcee-cue.paused {
+  box-shadow: 0 1px 6px rgba(96, 156, 255, 0.35);
+}
+
+.arcee-cue.paused .arcee-cue-doing {
+  color: #9cc2ff;
+}
+
+.arcee-cue-button {
+  border-radius: 999px;
+  padding: 3px 10px;
+  min-height: 18px;
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #f2f2f2;
+  font-size: 8.5pt;
+  font-weight: bold;
+}
+
+.arcee-cue-button:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.arcee-cue-stop {
+  padding: 6px;
+  min-height: 0;
+  background-color: rgba(192, 57, 43, 0.9);
+}
+
+.arcee-cue-stop:hover {
+  background-color: #e74c3c;
 }

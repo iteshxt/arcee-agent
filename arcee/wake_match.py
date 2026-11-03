@@ -15,7 +15,7 @@ only while someone speaks (the listener's VAD gate).
 import json
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -27,6 +27,7 @@ HOP: Final = 320  # 20 ms: a frame of the listener's (80 ms) is four of these
 BINS: Final = 24
 WINDOW: Final = 80  # frames matched against, at least: the last 1.6 s of speech
 SAMPLES: Final = 3  # "hey Arcee"s asked for when training
+STOP_SAMPLES: Final = 2  # and "Arcee stop"s
 # A trained wake word is never looser than this, whatever the samples suggest.
 LOOSEST: Final = 0.3
 SHORTEST_S: Final = 0.3
@@ -156,26 +157,39 @@ def distance(template: Frames, query: Frames) -> float:
 
 @dataclass(frozen=True, slots=True)
 class Trained:
-    """The user's wake word: the sound of their samples, and how close counts."""
+    """The user's wake word (and "Arcee stop", when trained): the sound of their samples,
+    and how close counts."""
 
     templates: list[Frames]
     threshold: float
+    stops: list[Frames] = field(default_factory=list[Frames])
+    stop_threshold: float = 0.0
 
     def closest(self, query: Frames) -> float:
         return min(distance(t, query) for t in self.templates)
 
+    def match(self, recent: Frames) -> str:
+        """ "wake", "stop" or "" for the speech just heard."""
+        query = normalise(recent)
+        wake = self.closest(query)
+        if self.stops:
+            stop = min(distance(t, query) for t in self.stops)
+            if stop <= self.stop_threshold and stop < wake:
+                return "stop"
+        return "wake" if wake <= self.threshold else ""
+
     def heard(self, recent: Frames) -> bool:
-        return self.closest(normalise(recent)) <= self.threshold
+        return self.match(recent) == "wake"
 
     @property
     def shortest(self) -> int:
-        return min(len(t) for t in self.templates)
+        return min(len(t) for t in [*self.templates, *self.stops])
 
     @property
     def window(self) -> int:
         """Frames of speech to match against: room for the longest sample (said slowly,
         or "hey… Arcee" with a pause) and a little either side."""
-        return max(WINDOW, max(len(t) for t in self.templates) + 25)
+        return max(WINDOW, max(len(t) for t in [*self.templates, *self.stops]) + 25)
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,32 +199,69 @@ class Training:
     trained: Trained
     spread: float  # how far apart the samples were (the furthest one from the rest)
     other: float  # how close the ordinary sentence came
+    stop_spread: float = 0.0  # the same for "Arcee stop", when trained
+    stop_other: float = 0.0
 
 
-def train(samples: list[list[float]], other: list[float]) -> Training:
-    """The wake word from the user's `samples` of it, kept apart from `other` speech."""
+def _check_lengths(samples: list[list[float]], phrase: str) -> None:
     for sample in samples:
         seconds = len(sample) / RATE
         if seconds < SHORTEST_S:
-            raise VoiceError("one of the samples was too short: say the whole “Hey Arcee”")
+            raise VoiceError(f"one of the samples was too short: say the whole {phrase}")
         if seconds > LONGEST_S:
-            raise VoiceError("one of the samples was too long: say just “Hey Arcee”, then stop")
+            raise VoiceError(f"one of the samples was too long: say just {phrase}, then stop")
+
+
+def _spread(templates: list[Frames]) -> float:
+    """Each sample against the rest, as the listener will hear it: by its closest."""
+    return max(min(distance(t, held) for t in templates if t is not held) for held in templates)
+
+
+def _nearest(templates: list[Frames], speech: Frames, window: int) -> float:
+    """How close `templates` come to any stretch of `speech` the listener would keep."""
+    return min(
+        min(distance(t, normalise(speech[i : i + window])) for t in templates)
+        for i in range(0, max(1, len(speech) - window + 1), WINDOW // 4)
+    )
+
+
+def train(
+    samples: list[list[float]], other: list[float], stops: list[list[float]] | None = None
+) -> Training:
+    """The wake word from the user's `samples` of it (and "Arcee stop" from `stops`),
+    kept apart from `other` speech and from each other."""
+    stops = stops or []
+    _check_lengths(samples, "“Hey Arcee”")
+    _check_lengths(stops, "“Arcee stop”")
     templates = [normalise(log_mel(s)) for s in samples]
-    # Each sample against the rest, as the listener will hear it: by its closest.
-    spread = max(min(distance(t, held) for t in templates if t is not held) for held in templates)
+    stop_templates = [normalise(log_mel(s)) for s in stops]
+    spread = _spread(templates)
     if spread > LOOSEST:
         raise VoiceError("the samples sounded too different: say it the same way each time")
-    heard = log_mel(other)
-    # The sentence as the listener sees it: every stretch of it as long as it keeps.
-    window = Trained(templates, LOOSEST).window
-    near = min(
-        min(distance(t, normalise(heard[i : i + window])) for t in templates)
-        for i in range(0, max(1, len(heard) - window + 1), WINDOW // 4)
-    )
+    window = Trained(templates, LOOSEST, stop_templates).window
+    sentence = log_mel(other)
+    near = _nearest(templates, sentence, window)
     if near <= spread:
         raise VoiceError("the sentence sounded like “Hey Arcee”: try a different sentence")
+    stop_spread = stop_near = 0.0
+    stop_threshold = 0.0
+    if stop_templates:
+        stop_spread = _spread(stop_templates)
+        if stop_spread > LOOSEST:
+            raise VoiceError("the “Arcee stop” samples sounded too different: say it the same way")
+        # "Arcee stop" must not wake Arcee, nor "Hey Arcee" stop it.
+        crossed = min(min(distance(t, s) for t in templates) for s in stop_templates)
+        near = min(near, crossed)
+        stop_near = min(
+            _nearest(stop_templates, sentence, window),
+            min(min(distance(t, s) for t in stop_templates) for s in templates),
+        )
+        if near <= spread or stop_near <= stop_spread:
+            raise VoiceError("“Hey Arcee” and “Arcee stop” sounded too alike: say each clearly")
+        stop_threshold = min(LOOSEST, stop_spread + 0.4 * (stop_near - stop_spread))
     threshold = min(LOOSEST, spread + 0.4 * (near - spread))
-    return Training(Trained(templates, round(threshold, 4)), spread, near)
+    trained = Trained(templates, round(threshold, 4), stop_templates, round(stop_threshold, 4))
+    return Training(trained, spread, near, stop_spread, stop_near)
 
 
 def trained_path() -> Path:
@@ -222,16 +273,32 @@ def trained_path() -> Path:
 def save(trained: Trained) -> None:
     path = trained_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    rounded = [[[round(v, 4) for v in f] for f in t] for t in trained.templates]
-    path.write_text(json.dumps({"threshold": trained.threshold, "templates": rounded}))
+
+    def rounded(templates: list[Frames]) -> list[Frames]:
+        return [[[round(v, 4) for v in f] for f in t] for t in templates]
+
+    data = {
+        "threshold": trained.threshold,
+        "templates": rounded(trained.templates),
+        "stop_threshold": trained.stop_threshold,
+        "stops": rounded(trained.stops),
+    }
+    path.write_text(json.dumps(data))
 
 
 def load() -> Trained | None:
     """The user's trained wake word, if they trained one."""
     try:
         data = json.loads(trained_path().read_text())
+
+        def frames(templates: list[list[list[float]]]) -> list[Frames]:
+            return [[list(map(float, f)) for f in t] for t in templates]
+
         return Trained(
-            [[list(map(float, f)) for f in t] for t in data["templates"]], float(data["threshold"])
+            frames(data["templates"]),
+            float(data["threshold"]),
+            frames(data.get("stops", [])),  # trained before "Arcee stop" was: none
+            float(data.get("stop_threshold", 0.0)),
         )
     except OSError, ValueError, KeyError, TypeError:
         return None

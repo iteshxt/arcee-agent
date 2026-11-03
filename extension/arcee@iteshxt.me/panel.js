@@ -64,16 +64,21 @@ function section(child) {
 
 export const ArceeIndicator = GObject.registerClass(
 class ArceeIndicator extends PanelMenu.Button {
-    // `onStep` hears what Arcee is doing now ('' when it is done), for the pill;
-    // `onCuePlaced` where the voice cue ends on screen (0 when gone), to keep the pill
-    // below it.
-    _init(path, onStep, onCuePlaced = () => {}) {
+    // `onStep` hears what Arcee is doing now ('' when it is done); `stopControl` and
+    // `resumeControl` act on the control session (ShellBridge).
+    _init(path, {onStep = () => {}, stopControl = () => {}, resumeControl = () => {}} = {}) {
         super._init(0.5, 'Arcee', false);
         this._onStep = onStep;
-        // At the top centre for a spoken request: the ring while Arcee listens (the wake
-        // word, or the mic), then what was said, each step, and the reply.
-        this._cue = new ListeningCue(path, onCuePlaced);
-        this._spoken = false; // the request under way was spoken: the cue follows it
+        this._stopControl = stopControl;
+        // Arcee's pill at the top centre: for a spoken request, the ring while Arcee
+        // listens (the wake word, or the mic), then what was said, each step and the
+        // reply; also whenever Arcee holds the screen. Stop (and Esc) stop it all.
+        this._cue = new ListeningCue(path, {
+            onStop: () => this._stopAll(),
+            onResume: resumeControl,
+        });
+        this._spoken = false; // the request under way is followed on the pill
+        this._request = '';
         this.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(`${path}/icons/arcee.svg`),
             style_class: 'system-status-icon',
@@ -113,6 +118,29 @@ class ArceeIndicator extends PanelMenu.Button {
     // Hidden for the moment of a screenshot (see ShellBridge.Screenshot).
     setCueShown(shown) {
         this._cue.setShown(shown);
+    }
+
+    // Arcee took the screen ('active'), the user took it back ('paused'), or it ended:
+    // the pill shows it, and follows the request even when it was typed.
+    controlChanged(state) {
+        if (state !== 'off' && !this._cue.visible) {
+            this._cue.follow(this._request, this._step);
+            this._spoken = true;
+        }
+        this._cue.control(state);
+    }
+
+    // Whether `actor` is the pill's (pressing Stop is not the user taking control).
+    ownsActor(actor) {
+        return this._cue.contains(actor);
+    }
+
+    // Stop, or Esc: whatever is under way ends, heard or running.
+    _stopAll() {
+        this._agent.CancelAsync().catch(logError);
+        this._stopControl();
+        this._cue.stopped();
+        this._spoken = false;
     }
 
     destroy() {
@@ -282,8 +310,11 @@ class ArceeIndicator extends PanelMenu.Button {
         this._progress = [];
         this._step = '';
         this._say(request, 'Working…', true);
-        if (this._spoken)
+        this._request = request;
+        if (this._spoken) {
             this._cue.heard(request);
+            this._cue.working(true);
+        }
     }
 
     _onProgress(line) {

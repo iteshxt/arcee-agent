@@ -130,22 +130,22 @@ class ShellBridge {
         this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         this._time = 0;
-        // Arcee's other things on screen (the voice cue), hidden with the pill for a
-        // screenshot.
+        // Arcee's pill (the panel's), hidden with the glow for a screenshot.
         this.onShown = _shown => {};
         // What is pressed right now, so a stop can release it.
         this._buttons = new Set();
         this._keys = new Set();
     }
 
-    // What Arcee is doing now, shown on the pill instead of "Arcee is working".
-    setStep(doing) {
-        this._control.setStep(doing);
+    // The control session's state goes to Arcee's pill, whose buttons are not the user
+    // taking control.
+    showControlOn(indicator) {
+        this._control.onState = state => indicator.controlChanged(state);
+        this._control.isOwnActor = actor => indicator.ownsActor(actor);
     }
 
-    // Where the voice cue ends, for the pill to sit below it.
-    setCueBelow(bottom) {
-        this._control.setBelow(bottom);
+    resume() {
+        this._control.resume();
     }
 
     destroy() {
@@ -430,9 +430,12 @@ export default class ArceeExtension extends Extension {
         Main.wm.addKeybinding(
             'stop-agent', this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.ALL,
             () => this._bridge.stop());
-        this._indicator = new ArceeIndicator(
-            this.path, doing => this._bridge?.setStep(doing), bottom => this._bridge?.setCueBelow(bottom));
+        this._indicator = new ArceeIndicator(this.path, {
+            stopControl: () => this._bridge?.stop(),
+            resumeControl: () => this._bridge?.resume(),
+        });
         this._bridge.onShown = shown => this._indicator?.setCueShown(shown);
+        this._bridge.showControlOn(this._indicator);
         Main.panel.addToStatusArea('arcee', this._indicator);
     }
 

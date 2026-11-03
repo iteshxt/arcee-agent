@@ -221,9 +221,11 @@ class FakeRecorder:
 
 
 class FakeTranscriber:
+    text = "open chrome and run youtube"
+
     async def transcribe(self, pcm: bytes) -> str:
         assert pcm == b"pcm"
-        return "open chrome and run youtube"
+        return self.text
 
 
 async def test_speaking_streams_levels_then_the_text_and_runs_it(bus_address: str) -> None:
@@ -333,3 +335,58 @@ async def test_training_holds_the_wake_word_then_it_takes_up_what_was_trained(
     service.HoldWake(True)  # and nothing says it is done: it comes back by itself
     await asyncio.sleep(0.15)
     assert not listener.paused
+
+
+@pytest.mark.parametrize(
+    ("text", "stops"),
+    [
+        ("Stop.", True),
+        ("Arcee stopped.", True),
+        ("Arcee, stop", True),
+        ("cancel that", True),
+        ("Never mind.", True),
+        ("stop the music in Spotify", False),
+        ("What time is it?", False),
+    ],
+)
+def test_stop_words(text: str, stops: bool) -> None:
+    from arcee.daemon import is_stop
+
+    assert is_stop(text) is stops
+
+
+async def test_saying_stop_after_the_wake_word_stops_the_request(bus_address: str) -> None:
+    service_bus = await connect(bus_address)
+    transcriber = FakeTranscriber()
+    service = AgentService(FakeRunner(hang=True), transcriber=transcriber)  # pyright: ignore[reportArgumentType]
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    bus, agent = await client(bus_address)
+    finished: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    agent.on_finished(lambda payload: finished.set_result(json.loads(payload)))
+    service.Run("open chrome")
+    await asyncio.sleep(0.05)
+
+    transcriber.text = "Arcee stopped."
+    service.on_wake()
+    service.on_request(b"pcm")
+
+    assert (await asyncio.wait_for(finished, 5))["status"] == "stopped"
+    bus.disconnect()
+    service_bus.disconnect()
+
+
+async def test_cancel_drops_a_request_being_heard() -> None:
+    from arcee.voice_local import WakeListener
+
+    service = AgentService(FakeRunner(), transcriber=FakeTranscriber())  # pyright: ignore[reportArgumentType]
+    heard = WakeListener(on_wake=lambda: None, on_request=lambda _pcm: None, on_stop=lambda: None)
+    heard._hearing = True  # pyright: ignore[reportPrivateUsage]  # woken, the request coming
+    service.wake = heard
+    listening: list[bool] = []
+    service.Listening = listening.append  # type: ignore[method-assign]
+
+    service.Cancel()  # Esc
+
+    assert heard._drop  # pyright: ignore[reportPrivateUsage]
+    assert listening == [False]
