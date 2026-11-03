@@ -84,8 +84,14 @@ _BROWSER_REQUEST: Final = _words(
     r"log ?in|sign ?in|click|this page|the page|open page|site i)\b"
 )
 _WEB_REQUEST: Final = _words(
-    r"\b(web|websites?|internet|google|search (the|for|online)|look up|news|"
+    r"\b(web|websites?|internet|google|search (the|for|online)|look up|news|weather|"
+    r"forecast|rain(ing|y)?|temperature|humid(ity)?|snow(ing)?|umbrella|"
     r"wikipedia|links?|urls?|articles?)\b|https?://|www\.|\.(com|org|net|io)\b"
+)
+# A greeting before a request ("Hey, how hot is it outside?", common when spoken) does
+# not make it small talk: it is set aside before the request is read.
+_GREETING_FIRST: Final = _words(
+    r"^\W*(hi|hello|hey|ok|okay)\b(\W+(arcee|rc)\b)?(?!\W+(arcee|rc)\b)[\s,!.]+(?=\S+\s+\S)"
 )
 # Greetings, thanks and questions about Arcee itself need no tools at all.
 _CHAT: Final = _words(
@@ -97,7 +103,8 @@ _CHAT: Final = _words(
 # improvising with files and shell commands (it once ran five curl scripts).
 _QUESTION: Final = _words(
     r"^\W*(who|what|whats|what's|when|where|why|how|which|whose|is|are|was|were|does|did|"
-    r"can|could)\b|\b(tell me (about|who|what|why|how)|explain|define|meaning of)\b"
+    r"can|could|will|would|should)\b|"
+    r"\b(tell me (about|who|what|why|how)|explain|define|meaning of)\b"
 )
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
@@ -132,7 +139,7 @@ _NAMESPACE_GROUP: Final = {
 
 def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
     """Tool filters for a task, decided from the request and the tools used so far."""
-    request = messages[0].text if messages else ""
+    request = _GREETING_FIRST.sub("", messages[0].text if messages else "", count=1)
     used = {
         _NAMESPACE_GROUP[name]
         for m in messages

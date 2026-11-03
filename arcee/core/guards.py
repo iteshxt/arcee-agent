@@ -24,6 +24,20 @@ NARRATION_NUDGE: Final = (
     "or reply to the user with the answer only."
 )
 
+GAVE_UP_NUDGE: Final = (
+    "Do not answer yet: look it up first. For the weather, call web_weather now with no "
+    "arguments (it finds where the user is) or with place set to a place they named. For "
+    "other current facts, call web_search."
+)
+# Small models answer "what's the weather" with "I don't have access to real-time
+# data" or by asking where the user is, before trying the tool they were given.
+_GAVE_UP: Final = re.compile(
+    r"\b(don'?t|do not|can'?t|cannot|unable to)\b[^.]{0,40}\b(access|real[- ]time|"
+    r"current|browse|look (it )?up|check)\b|\b(tell|let) me (know )?(your|the) "
+    r"(city|location)\b|\bwhere you are\b",
+    re.IGNORECASE,
+)
+
 REASONING_NUDGE: Final = (
     "That was your reasoning about the request, not an answer to the user. Reply to "
     "the user directly with the answer itself."
@@ -108,14 +122,17 @@ def review_reply(
     `narration` is off for a plan step's handoff note, which may name the tools
     the next steps will use.
     """
+    wire_names = list(wire_names)  # read twice
     if narration and (named := narrated_tool(reply, wire_names)) is not None:
         return Review("narration", f"reply was narration naming {named}", NARRATION_NUDGE)
     if narration and _REASONING.search(reply):
         return Review("narration", "reply was the model's own reasoning", REASONING_NUDGE)
     if not grounding:
         return None
-    evidence = "\n".join(m.text for m in messages if m.role != "assistant")
     tools_ran = any(m.role == "tool" for m in messages)
+    if not tools_ran and _GAVE_UP.search(reply) and {"web_search", "web_weather"} & {*wire_names}:
+        return Review("grounding", "reply gave up without a lookup", GAVE_UP_NUDGE)
+    evidence = "\n".join(m.text for m in messages if m.role != "assistant")
     if missing := ungrounded(reply, evidence, tools_ran=tools_ran):
         return Review(
             "grounding", f"reply stated {', '.join(missing)} unseen", grounding_nudge(missing)

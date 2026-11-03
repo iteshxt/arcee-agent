@@ -304,6 +304,7 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "network.status",
         "web.search",
         "web.news",
+        "web.weather",
         "web.fetch",
         "browser.tabs",
         "browser.navigate",

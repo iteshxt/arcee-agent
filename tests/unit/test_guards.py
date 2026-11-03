@@ -67,3 +67,18 @@ def test_an_answer_that_mentions_users_is_still_an_answer() -> None:
     reply = "Jason Bourne is a fictional CIA assassin; users of the films know him from 2002 on."
 
     assert review_reply(reply, [Message("user", "who is jason bourne")], []) is None
+
+
+def test_a_reply_that_gives_up_without_looking_is_sent_back_to_the_tools() -> None:
+    asked = [Message("user", "What's the weather like today?")]
+    names = ["web_search", "web_weather"]
+    for reply in (
+        "I don't have access to real-time weather information.",
+        "I need to know your location. Could you please tell me your city?",
+    ):
+        review = review_reply(reply, asked, names)
+        assert review is not None
+        assert "web_weather" in review.nudge
+    # Once a tool has run, saying it could not find something is an honest answer.
+    looked = [*asked, Message("tool", '{"status": "error"}')]
+    assert review_reply("I can't check the weather right now.", looked, names) is None
