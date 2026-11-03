@@ -1,12 +1,15 @@
 // Arcee's pill at the top centre: when Arcee hears "hey Arcee" (or the mic is pressed),
 // its ring appears, pulsing with the voice. Beside it, what the user said and what
-// Arcee is doing about it, step by step, then its reply for a moment: a spoken request
-// can be followed without opening the panel. While a request runs it has a Stop button;
-// while Arcee holds the screen (control.js) it shows too, typed requests included, and
-// offers Resume once the user takes over. Esc, while it shows, stops everything. The ring is the app's
-// active loop, as frames (icons/cue/NN.png, from tools/make_art.py): GNOME 50's shell
-// has no sprite-sheet animation, so the frames are shown one after another, and only
-// while the cue is on screen.
+// Arcee is doing about it, step by step, for as long as the request runs; then Arcee's
+// reply, the pill growing to hold it, until the user has read it (Esc, or a click
+// anywhere, puts it away). A spoken request can be followed without opening the panel.
+// While a request runs it has a Stop button; while Arcee holds the screen (control.js)
+// it shows too, typed requests included, and offers Resume once the user takes over.
+// Esc, while a request runs, stops everything.
+//
+// The ring is the app's active loop, as frames (icons/cue/NN.png, from
+// tools/make_art.py): GNOME 50's shell has no sprite-sheet animation, so the frames are
+// shown one after another, and only while the pill is on screen.
 //
 // Only its buttons take clicks, and only the user's (not Arcee's own virtual pointer):
 // Arcee's clicks near the top of the screen go through to the window under it. It
@@ -20,31 +23,35 @@ import Pango from 'gi://Pango';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// Small, at the user's word: noticeable, out of the way. The ring is about the size of
-// the top bar's own icons, and the cue a slim pill just below the bar.
-const SIZE = 30;
-// The ring's own box, fixed, so the cue centres before its first frame has loaded
-// (measured then, it was 16 px wide and sat off centre).
-const RING_BOX = SIZE;
+// Small, at the user's word: noticeable, out of the way (35 px: 15% up from 30 px, at
+// their word again). The ring's box is fixed, so the pill centres before its first
+// frame has loaded (measured then, it was 16 px wide and sat off centre).
+const SIZE = 35;
 const FRAME_MS = 95; // the loop's own pace
 const FADE_MS = 160;
 const GAP_PX = 6;
-const TEXT_CHARS = 60; // a line
-const REPLY_WIDTH_PX = 380; // the reply wraps to two lines at this width
-// How long the cue waits for what comes next before it goes by itself: for the words
-// after the wake word, for the request to start, for its next step.
+const TEXT_CHARS = 64; // a line of what was said, or of a step
+const REPLY_CHARS = 700; // the rest is in the panel and the app
+const REPLY_WIDTH_PX = 560; // a reply wraps at this width
+// How long the pill waits for what comes next before it goes by itself: for the words
+// after the wake word, for the request to start. While a request runs it stays (until
+// it ends, or nothing has been heard of it for SILENT_RUN_MS: arceed went away).
 const WAIT_LISTENING_MS = 30000;
-const WAIT_HEARD_MS = 10000;
-const WAIT_STEP_MS = 180000;
-// The reply stays this long, and longer for a longer one.
-const REPLY_MS = 5000;
-const REPLY_MS_PER_CHAR = 45;
-const REPLY_LONGEST_MS = 12000;
+const WAIT_HEARD_MS = 60000;
+const SILENT_RUN_MS = 15 * 60000;
+// The reply stays long enough to read, and longer for a longer one.
+const REPLY_MS = 8000;
+const REPLY_MS_PER_CHAR = 60;
+const REPLY_LONGEST_MS = 45000;
 const ERROR_MS = 3500;
 const STOPPED_MS = 1200;
 
+function oneLine(text) {
+    return (text ?? '').replace(/\s+/g, ' ').trim();
+}
+
 function shorten(text, length = TEXT_CHARS) {
-    const line = (text ?? '').replace(/\s+/g, ' ').trim();
+    const line = oneLine(text);
     return line.length > length ? `${line.slice(0, length - 1)}…` : line;
 }
 
@@ -53,6 +60,8 @@ function shorten(text, length = TEXT_CHARS) {
 function fromUser(event) {
     return event?.get_source_device()?.get_device_node() != null;
 }
+
+const PRESSES = new Set([Clutter.EventType.BUTTON_PRESS, Clutter.EventType.TOUCH_BEGIN]);
 
 export class ListeningCue {
     // `onStop` for its Stop button and Esc, `onResume` for Resume.
@@ -74,10 +83,9 @@ export class ListeningCue {
         this._index = 0;
         this._ticker = 0;
         this._limit = 0;
-        this._shown = true;
         this._icon = new St.Icon({icon_size: SIZE, gicon: this._frames[0] ?? null});
         this._ring = new St.Bin({
-            child: this._icon, width: RING_BOX, height: RING_BOX,
+            child: this._icon, width: SIZE, height: SIZE,
             y_align: Clutter.ActorAlign.CENTER,
             pivot_point: new Graphene.Point({x: 0.5, y: 0.5}),
         });
@@ -85,12 +93,18 @@ export class ListeningCue {
         this._doing = new St.Label({style_class: 'arcee-cue-doing'});
         for (const label of [this._said, this._doing])
             label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        // The reply has a label of its own, wrapping from the start: one switched to
+        // wrapping later kept its one-line height and spilled out of the pill.
+        this._reply = new St.Label({style_class: 'arcee-cue-reply', visible: false});
+        this._reply.clutter_text.line_wrap = true;
+        this._reply.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+        this._reply.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         this._text = new St.BoxLayout({
             style_class: 'arcee-cue-text', orientation: Clutter.Orientation.VERTICAL,
             y_align: Clutter.ActorAlign.CENTER, visible: false,
         });
-        this._text.add_child(this._said);
-        this._text.add_child(this._doing);
+        for (const label of [this._said, this._doing, this._reply])
+            this._text.add_child(label);
         this._resume = new St.Button({
             style_class: 'arcee-cue-button', label: 'Resume', visible: false,
             y_align: Clutter.ActorAlign.CENTER,
@@ -98,7 +112,7 @@ export class ListeningCue {
         this._stop = new St.Button({
             style_class: 'arcee-cue-button arcee-cue-stop', visible: false,
             y_align: Clutter.ActorAlign.CENTER, accessible_name: 'Stop Arcee',
-            child: new St.Icon({icon_name: 'media-playback-stop-symbolic', icon_size: 12}),
+            child: new St.Icon({icon_name: 'media-playback-stop-symbolic', icon_size: 14}),
         });
         this._resume.connect('clicked', () => fromUser(Clutter.get_current_event()) && this._onResume());
         this._stop.connect('clicked', () => fromUser(Clutter.get_current_event()) && this._onStop());
@@ -129,40 +143,10 @@ export class ListeningCue {
 
     // Shown for a request already running (Arcee took the screen for a typed one).
     follow(request, doing) {
-        if (this.visible)
+        if (this.visible && this._phase !== 'done')
             return;
         this._open(request ? `“${shorten(request)}”` : '', doing || 'Working…');
-        this._phase = 'working';
         this.working(true);
-        this._expire(WAIT_STEP_MS);
-    }
-
-    _open(said, doing) {
-        if (!this._frames.length)
-            return;
-        this._doing.clutter_text.line_wrap = false; // one line, until the reply
-        this._doing.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        this._doing.width = -1;
-        this._step = '';
-        this._set(said, doing);
-        this._box.remove_all_transitions();
-        this._box.visible = true;
-        this._box.ease({opacity: 255, duration: FADE_MS, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
-        if (!this._ticker) {
-            this._ticker = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
-                this._index = (this._index + 1) % this._frames.length;
-                this._icon.gicon = this._frames[this._index];
-                return GLib.SOURCE_CONTINUE;
-            });
-        }
-        // Esc, while the pill shows, stops Arcee (and goes no further).
-        this._filter ??= Clutter.Event.add_filter(global.stage, event => {
-            if (event.type() !== Clutter.EventType.KEY_PRESS ||
-                event.get_key_symbol() !== Clutter.KEY_Escape || !fromUser(event))
-                return Clutter.EVENT_PROPAGATE;
-            this._onStop();
-            return Clutter.EVENT_STOP;
-        });
     }
 
     // The voice has stopped; Whisper has the audio.
@@ -173,12 +157,33 @@ export class ListeningCue {
         }
     }
 
-    // A request is running (Stop shown) or not.
+    // What the user said: the request starts.
+    heard(text) {
+        if (!this.visible)
+            return;
+        this._phase = 'working';
+        this._set(`“${shorten(text)}”`, 'Starting…');
+        this._expire(WAIT_HEARD_MS);
+    }
+
+    // A request is running (Stop shown, and the pill stays) or not.
     working(on) {
         this._stop.visible = on;
-        if (on)
+        if (on) {
             this._phase = 'working';
+            this._expire(SILENT_RUN_MS);
+        }
         this._place();
+    }
+
+    // What Arcee is doing about it now.
+    doing(text) {
+        if (!this.visible || !text || this._phase === 'done')
+            return;
+        this._step = text;
+        if (this._control !== 'paused')
+            this._set(null, text);
+        this._expire(SILENT_RUN_MS);
     }
 
     // Arcee's control of the screen: 'active', 'paused' (the user took over) or 'off'.
@@ -197,6 +202,45 @@ export class ListeningCue {
             this._place();
     }
 
+    // Done: Arcee's reply, the pill as big as it needs, until it has been read (or Esc,
+    // or a click anywhere). `request` is shown above it when the pill was not up.
+    reply(text, request = '') {
+        if (!this._frames.length)
+            return;
+        if (!this.visible)
+            this._open(request ? `“${shorten(request)}”` : '', '');
+        this._phase = 'done';
+        this._stop.visible = false;
+        this._resume.visible = false;
+        let words = oneLine(text);
+        if (words.length > REPLY_CHARS)
+            words = `${words.slice(0, REPLY_CHARS - 1)}… (the rest is in Arcee)`;
+        this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
+        this._doing.visible = false;
+        this._reply.set_size(-1, -1);
+        this._reply.text = words;
+        this._reply.visible = true;
+        // As wide as the reply needs, up to REPLY_WIDTH_PX, and as tall as it wraps to at
+        // that width: set both, as the pill's layout asked the label's height without its
+        // width and grew by one line only.
+        const [, natural] = this._reply.get_preferred_width(-1);
+        const width = Math.min(REPLY_WIDTH_PX, Math.ceil(natural));
+        const [, height] = this._reply.get_preferred_height(width);
+        this._reply.set_size(width, Math.ceil(height));
+        this._text.visible = true;
+        this._place();
+        this._expire(Math.min(REPLY_LONGEST_MS, REPLY_MS + words.length * REPLY_MS_PER_CHAR));
+    }
+
+    fail(text) {
+        if (!this.visible)
+            return;
+        this.working(false);
+        this._phase = 'done';
+        this._set(null, text);
+        this._expire(ERROR_MS);
+    }
+
     // Stopped by the user (Esc, Stop): said briefly, then gone.
     stopped() {
         if (!this.visible)
@@ -209,57 +253,6 @@ export class ListeningCue {
         this._phase = 'done';
         this._set(null, 'Stopped');
         this._expire(STOPPED_MS);
-    }
-
-    // What the user said.
-    heard(text) {
-        if (!this.visible)
-            return;
-        this._phase = 'working';
-        this._set(`“${shorten(text)}”`, 'Starting…');
-        this._expire(WAIT_HEARD_MS);
-    }
-
-    // What Arcee is doing about it now.
-    doing(text) {
-        if (!this.visible || !text)
-            return;
-        this._step = text;
-        if (this._control !== 'paused')
-            this._set(null, text);
-        this._expire(WAIT_STEP_MS);
-    }
-
-    // Whether `reply` fits on the cue whole.
-    fits(reply) {
-        return (reply ?? '').replace(/\s+/g, ' ').trim().length <= 2 * TEXT_CHARS;
-    }
-
-    // Done: the reply, for long enough to read it.
-    finish(reply) {
-        if (!this.visible)
-            return;
-        this.working(false);
-        this._phase = 'done';
-        const text = shorten(reply, 2 * TEXT_CHARS);
-        // A reply longer than a line wraps to a second one, at a fixed width.
-        const wraps = text.length > TEXT_CHARS;
-        this._doing.clutter_text.line_wrap = wraps;
-        // Clutter keeps an ellipsized label to one line; the text is already cut short.
-        this._doing.clutter_text.ellipsize = wraps ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END;
-        this._doing.width = wraps ? REPLY_WIDTH_PX : -1;
-        this._set(null, text);
-        this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
-        this._expire(Math.min(REPLY_LONGEST_MS, REPLY_MS + text.length * REPLY_MS_PER_CHAR));
-    }
-
-    fail(text) {
-        if (!this.visible)
-            return;
-        this.working(false);
-        this._phase = 'done';
-        this._set(null, text);
-        this._expire(ERROR_MS);
     }
 
     // How loud the voice is (0..1): the ring swells a little with it.
@@ -297,7 +290,6 @@ export class ListeningCue {
 
     // Hidden for the moment of a screenshot: Arcee reads the user's screen, not its own.
     setShown(shown) {
-        this._shown = shown;
         this._box.opacity = shown && this.visible ? 255 : 0;
     }
 
@@ -312,14 +304,50 @@ export class ListeningCue {
         this._box.destroy();
     }
 
+    _open(said, doing) {
+        if (!this._frames.length)
+            return;
+        this._step = '';
+        this._reply.visible = false;
+        this._doing.visible = true;
+        this._set(said, doing);
+        this._box.remove_all_transitions();
+        this._box.visible = true;
+        this._box.ease({opacity: 255, duration: FADE_MS, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
+        if (!this._ticker) {
+            this._ticker = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
+                this._index = (this._index + 1) % this._frames.length;
+                this._icon.gicon = this._frames[this._index];
+                return GLib.SOURCE_CONTINUE;
+            });
+        }
+        this._filter ??= Clutter.Event.add_filter(global.stage, (event, actor) => this._onEvent(event, actor));
+    }
+
+    // Esc stops a request (and goes no further); with only a reply showing, Esc or a
+    // click anywhere but the pill's buttons puts it away (the click still lands).
+    _onEvent(event, actor) {
+        if (!fromUser(event))
+            return Clutter.EVENT_PROPAGATE;
+        const type = event.type();
+        if (type === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
+            this._onStop();
+            return Clutter.EVENT_STOP;
+        }
+        if (PRESSES.has(type) && this._phase === 'done' && !(actor && this.contains(actor)))
+            this.hide();
+        return Clutter.EVENT_PROPAGATE;
+    }
+
     // `said` null keeps what is there.
     _set(said, doing) {
         if (said !== null) {
             this._said.text = said;
             this._said.visible = Boolean(said);
         }
-        const wraps = this._doing.clutter_text.line_wrap;
-        this._doing.text = shorten(doing, wraps ? 2 * TEXT_CHARS : TEXT_CHARS);
+        this._doing.text = shorten(doing);
+        this._doing.visible = Boolean(this._doing.text);
+        this._reply.visible = false;
         this._text.visible = Boolean(this._said.text || this._doing.text);
         this._place();
     }

@@ -8,7 +8,6 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
@@ -383,16 +382,18 @@ class ArceeIndicator extends PanelMenu.Button {
         this._onStep('');
         const reply = done.reply || (done.status === 'stopped' ? 'Stopped.' : `Ended: ${done.status}.`);
         this._say(this._statusTitle.text, shorten(reply, 400));
-        // A spoken request's reply is on the cue, where GNOME would put its banner too;
-        // one too long for the cue goes to a notification as a typed one's does.
-        const onCue = this._spoken && this._cue.visible && this._cue.fits(reply);
-        if (onCue)
-            this._cue.finish(reply);
-        else
+        // The reply goes on the pill, typed or spoken, until it has been read; not when
+        // the menu or the app is in front showing it already. No notification banner.
+        const appInFront = global.display.focus_window?.get_gtk_application_id?.() === APP_ID;
+        if (done.status === 'stopped') {
+            if (this._spoken)
+                this._cue.stopped();
+        } else if (this._spoken || !(this.menu.isOpen || appInFront)) {
+            this._cue.reply(reply, this._spoken ? '' : this._request);
+        } else {
             this._cue.hide();
+        }
         this._spoken = false;
-        if (!this.menu.isOpen && !onCue)
-            Main.notify('Arcee', shorten(reply, 200));
     }
 
     // GNOME's light style draws menus light; the panel's colours were made for a dark one.
