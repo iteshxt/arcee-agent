@@ -16,6 +16,7 @@ import contextlib
 import io
 import logging
 import tarfile
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,11 @@ FRAME: Final = 1280  # 80 ms at 16 kHz
 END_SILENCE_S: Final = 0.7
 MAX_REQUEST_S: Final = 20.0
 NO_REQUEST_S: Final = 6.0
+# The spotter runs only while the VAD hears speech: fed the last 0.8 s on the way in
+# (the VAD is sure of speech a moment after it starts), and kept on 0.6 s after it.
+# Running it on every frame cost 3.5% of a core in a quiet room; the VAD costs 0.7%.
+PREROLL_FRAMES: Final = 10
+HANGOVER_FRAMES: Final = 8
 
 
 def models_dir() -> Path:
@@ -224,6 +230,9 @@ class WakeListener:
         stream = spotter.create_stream()
         hearing: bytearray | None = None  # the request after the wake word
         heard_for = 0.0
+        recent: deque[list[float]] = deque(maxlen=PREROLL_FRAMES)
+        spotting = False
+        quiet = 0
         while True:
             try:
                 chunk = await audio.readexactly(FRAME * 2)
@@ -242,33 +251,59 @@ class WakeListener:
                     vad.pop()
                     hearing = None
                     self._on_request(pcm)
-                    stream = spotter.create_stream()
                 elif heard_for >= NO_REQUEST_S and not vad.is_speech_detected():
                     hearing = None
                     vad.reset()
                     self._on_request(b"")
-                    stream = spotter.create_stream()
                 elif heard_for >= MAX_REQUEST_S:
                     vad.flush()
                     pcm = _pcm(vad.front.samples) if not vad.empty() else bytes(hearing)
                     vad.reset()
                     hearing = None
                     self._on_request(pcm)
-                    stream = spotter.create_stream()
                 continue
-            stream.accept_waveform(RATE, frame)
-            while spotter.is_ready(stream):
-                spotter.decode_stream(stream)
-                found = spotter.get_result(stream)
-                if not found:
+            # Tier one's own gate: the VAD (0.7% of a core) hears every frame; the
+            # spotter (3.5%) only while someone speaks, from a little before.
+            recent.append(frame)
+            vad.accept_waveform(frame)
+            while not vad.empty():  # speech before any wake word is not kept
+                vad.pop()
+            if vad.is_speech_detected():
+                quiet = 0
+                if not spotting:
+                    spotting = True
+                    stream = spotter.create_stream()
+                    feed = list(recent)  # the start of "hey", heard before the VAD was sure
+                else:
+                    feed = [frame]
+            elif spotting:
+                quiet += 1
+                feed = [frame]
+                if quiet > HANGOVER_FRAMES:
+                    spotting = False
                     continue
-                spotter.reset_stream(stream)
-                if found == STOP:
-                    self._on_stop()
-                elif found == WAKE:
-                    self._on_wake()
-                    hearing, heard_for = bytearray(), 0.0
-                    vad.reset()
+            else:
+                continue
+            for piece in feed:
+                stream.accept_waveform(RATE, piece)
+            found = _spot(spotter, stream)
+            if found == STOP:
+                self._on_stop()
+            elif found == WAKE:
+                self._on_wake()
+                hearing, heard_for, spotting = bytearray(), 0.0, False
+                vad.reset()
+
+
+def _spot(spotter: Any, stream: Any) -> str:
+    """The keyword the spotter heard in what it was fed, or ""."""
+    found = ""
+    while spotter.is_ready(stream):
+        spotter.decode_stream(stream)
+        if result := spotter.get_result(stream):
+            found = result
+            spotter.reset_stream(stream)
+    return found
 
 
 def _pcm(values: Any) -> bytes:

@@ -12,6 +12,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+import {ListeningCue} from './cue.js';
+
 const AGENT_INTERFACE = `
 <node>
   <interface name="me.iteshxt.Arcee.Agent">
@@ -66,6 +68,8 @@ class ArceeIndicator extends PanelMenu.Button {
     _init(path, onStep) {
         super._init(0.5, 'Arcee', false);
         this._onStep = onStep;
+        // The ring at the top centre while Arcee listens (the wake word, or the mic).
+        this._cue = new ListeningCue(path);
         this.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(`${path}/icons/arcee.svg`),
             style_class: 'system-status-icon',
@@ -105,6 +109,7 @@ class ArceeIndicator extends PanelMenu.Button {
     destroy() {
         for (const id of this._signals ?? [])
             this._agent.disconnectSignal(id);
+        this._cue.destroy();
         super.destroy();
     }
 
@@ -230,6 +235,9 @@ class ArceeIndicator extends PanelMenu.Button {
         this._wave.visible = on;
         this._levels.fill(0);
         this._entry.hint_text = on ? 'Listening… (press the mic to finish)' : 'Ask Arcee…';
+        // The cue stays after the voice stops, until Arcee has the words (Heard).
+        if (on)
+            this._cue.show();
         if (on)
             this._mic.add_style_class_name('listening');
         else
@@ -237,6 +245,7 @@ class ArceeIndicator extends PanelMenu.Button {
     }
 
     _onLevel(loudness) {
+        this._cue.level(loudness);
         this._levels.shift();
         this._levels.push(Math.min(1, Math.sqrt(loudness) * 2.5));
         this._bars.forEach((bar, i) => {
@@ -246,6 +255,7 @@ class ArceeIndicator extends PanelMenu.Button {
 
     _onHeard(json) {
         // arceed runs what it heard; only a failure is shown here.
+        this._cue.hide();
         const heard = JSON.parse(json);
         if (heard.error)
             this._say('', heard.error);
