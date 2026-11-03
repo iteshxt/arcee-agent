@@ -262,3 +262,37 @@ class TestControl:
         assert saved.data == {"id": note_id}
         assert missing.error == "memory is not available in this session"
         store.close()
+
+
+def test_chrome_is_google_chrome_not_a_chrome_web_app(tmp_path: Path) -> None:
+    # A Chrome web app's launcher is chrome-<code>-Default.desktop; "Chrome" opened one.
+    from arcee.tools.apps import best_match
+
+    folder = tmp_path / "applications"
+    desktop(folder, "chrome-ihkapihaclhfklhahobacckocenmhodn-Default.desktop", "Name=Cinemode")
+    desktop(folder, "google-chrome.desktop", "Name=Google Chrome\nKeywords=web;browser;")
+    apps = installed_apps([folder])
+
+    for asked in ("Chrome", "chrome", "Google Chrome", "google-chrome"):
+        found = best_match(apps, asked)
+        assert found is not None
+        assert found.name == "Google Chrome", asked
+    cinemode = best_match(apps, "Cinemode")
+    assert cinemode is not None
+    assert cinemode.name == "Cinemode"
+
+
+def test_an_exact_name_beats_an_id_ending(tmp_path: Path) -> None:
+    from arcee.tools.apps import best_match
+
+    folder = tmp_path / "applications"
+    desktop(folder, "nvidia-settings.desktop", "Name=NVIDIA X Server Settings")
+    desktop(folder, "org.gnome.Settings.desktop", "Name=Settings")
+    desktop(folder, "com.microsoft.VSCode.desktop", "Name=Visual Studio Code\nKeywords=vscode;")
+    apps = installed_apps([folder])
+
+    settings, code = best_match(apps, "Settings"), best_match(apps, "VS Code")
+    assert settings is not None
+    assert settings.name == "Settings"
+    assert code is not None
+    assert code.name == "Visual Studio Code"
