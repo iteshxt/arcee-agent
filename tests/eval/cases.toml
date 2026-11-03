@@ -502,3 +502,23 @@ id = "open-browser-then-site"
 scenario = "open-only"
 request = "Open Chrome and go to YouTube."
 expect = { any_of = ["browser.navigate", "browser.tabs"] }
+
+# --- media: what is already playing ---------------------------------------------
+
+[[case]]
+id = "media-pause"
+scenario = "media"
+request = "Pause the music."
+expect = { any_of = ["media.control"], args_contain = { action = "pause" } }
+
+[[case]]
+id = "media-next"
+scenario = "media"
+request = "Skip to the next song."
+expect = { any_of = ["media.control"], args_contain = { action = "next" } }
+
+[[case]]
+id = "media-what"
+scenario = "media"
+request = "What song is this?"
+expect = { any_of = ["media.now_playing"] }
