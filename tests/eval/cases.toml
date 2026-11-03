@@ -574,3 +574,17 @@ id = "mail-draft"
 scenario = "mail"
 request = "Draft an email to hr@example.com asking for Friday off, but don't send it."
 expect = { any_of = ["mail.draft"] }
+
+# --- windows: the app's window, named loosely ---------------------------------------
+
+[[case]]
+id = "window-maximized"
+scenario = "windows"
+request = "Chrome window, make it maximized."
+expect = { any_of = ["window.act", "window.list", "ui.windows"], args_contain = { window = "chrome" } }
+
+[[case]]
+id = "window-fullscreen"
+scenario = "windows"
+request = "Make this Chrome window full screen."
+expect = { any_of = ["window.act", "window.list", "ui.windows"] }
