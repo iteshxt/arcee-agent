@@ -23,7 +23,7 @@ from arcee.context.store import MemoryRow, Store, data_dir  # noqa: E402
 
 # A fact the user tells Arcee here matters to them.
 TOLD_IMPORTANCE: Final = 0.8
-Runner = Callable[..., None]  # (work, done[, failed]), as Background.run
+Runner = Callable[..., object]  # (work, done[, failed]), as Background.run
 
 
 async def _with_store(work: Callable[[Store], Any]) -> Any:

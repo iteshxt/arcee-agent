@@ -1,7 +1,7 @@
 # 0015. Voice in two tiers: the wake word here (sherpa-onnx), the request on Groq
 
 Date: 2026-11-03
-Status: accepted; amended 2026-11-03 (two tiers, no local speech-to-text)
+Status: accepted; amended 2026-11-03 (two tiers, no local speech-to-text; training)
 
 ## Context
 
@@ -36,6 +36,20 @@ Voice works the way phone assistants do, in two tiers (the user's call, 2026-11-
    `whisper-large-v3-turbo`, as the mic button's does. Nothing before it is stored or
    sent. A stalled request gives up after 8 s and is tried once more.
 
+**Training, for voices the spotter misses** (amended, at the user's word). The
+spotter is an English model and "Arcee" is not English: on the user's built-in mic,
+which clips and hisses, it heard 2 of 4 "Hey Arcee"s with any spelling and at any
+threshold, while Whisper heard all four. So the wake word can be trained to the
+user's voice, as phone assistants set themselves up: three "Hey Arcee"s and one
+ordinary sentence. What is kept is their sound (24 log-mel bands per 20 ms, rounded;
+no audio, nothing that plays back), in the models folder. Speech wakes Arcee when a
+stretch of it is close enough to one of the three by subsequence dynamic time
+warping; "close enough" is set between how far apart the samples were and how close
+the sentence came. It runs alongside the spotter, in plain Python (no numpy), only
+while the VAD hears speech. "Arcee stop" stays with the spotter. The app offers
+training when the wake word is first turned on; arceed holds the listener meanwhile
+(`HoldWake`) and takes up the result without restarting.
+
 A local speech-to-text model was built and measured (Moonshine base: 274 MB, about
 0.4 s a request on the CPU) and dropped: Whisper on Groq is more accurate with names
 and needs no download, and the wake word already keeps everything before it on the
@@ -48,8 +62,11 @@ older release supports Python 3.14.
 
 - Voice for 43 MB in the package and a 7 MB download; the requests themselves use
   the Groq speech allowance, and need the network.
-- No custom wake-word training: phrases can be changed in settings, at some cost in
-  false accepts compared with a trained model. The threshold is tunable.
+- No model training: the spotter takes phrases as text, at some cost in false
+  accepts compared with a trained model. Where it misses a voice, the user's own
+  samples (templates, not a trained network) make up for it; they are as good as the
+  samples, so a new mic or room may need training again. False accepts from the
+  user's own speech are untested beyond the one sentence asked for.
 - sherpa-onnx is a C++ library behind Python bindings: a crash there takes arceed
   down, so the listener runs where a failure restarts cleanly (systemd restarts
   arceed) and the mic button keeps working without it.

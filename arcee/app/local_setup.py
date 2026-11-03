@@ -27,7 +27,7 @@ ABOUT: Final = {
     "lfm3-omni": "Arcee's local model: reads your requests, sees and hears. Needed.",
     "lfm3": "The same size with step-by-step thinking, for harder requests. Helpful.",
 }
-Runner = Callable[..., None]  # (work, done[, failed]), as Background.run
+Runner = Callable[..., object]  # (work, done[, failed]), as Background.run
 
 
 class LocalSetupDialog(Adw.Dialog):

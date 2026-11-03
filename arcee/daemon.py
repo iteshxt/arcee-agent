@@ -140,6 +140,9 @@ class Speech(Protocol):
 # How long the wake-word listener waits before trying again after it fails (the mic
 # unplugged, PipeWire restarting).
 WAKE_RETRY_S = 10.0
+# The wake word held while the user trains it: it comes back by itself after this, in
+# case whatever held it went away without saying so.
+HOLD_WAKE_S = 180.0
 
 
 async def keep_listening(service: AgentService) -> None:
@@ -181,6 +184,7 @@ class AgentService(ServiceInterface):
         # The wake-word listener, when the user turned it on; paused for the mic button.
         self.wake: WakeListener | None = None
         self._hearing: asyncio.Future[None] | None = None  # a woken request, transcribing
+        self._held: asyncio.TimerHandle | None = None  # HoldWake's own end
         self._task: asyncio.Task[None] | None = None
         self._request = ""
         self._step = ""
@@ -225,6 +229,21 @@ class AgentService(ServiceInterface):
         if self.wake is not None:
             self.wake.paused = True
         self._listening = asyncio.ensure_future(self._listen(self._recorder))
+
+    @method()
+    def HoldWake(self, hold: DBusBool) -> None:
+        """Stop hearing the wake word (while it is trained), or hear it again."""
+        if self._held is not None:
+            self._held.cancel()
+            self._held = None
+        if self.wake is not None:
+            self.wake.paused = hold
+            if not hold:
+                self.wake.reload()  # what was trained meanwhile
+        if hold:
+            self._held = asyncio.get_running_loop().call_later(
+                HOLD_WAKE_S, lambda: self.HoldWake(False)
+            )
 
     @method()
     def StopListening(self) -> None:
