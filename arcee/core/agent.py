@@ -165,6 +165,17 @@ class _Stuck:
     reason: str
 
 
+# For a spoken request. "Go to Cron" (Whisper's "Chrome") led to a file listing: told
+# the words came from speech, the model can read them as the user meant them.
+SPOKEN: Final = (
+    "This request was spoken and transcribed, so a word may be misheard. If a name in it "
+    "matches nothing here (no app, site, file or folder of that name), read it as the "
+    'closest-sounding thing that does exist and fits: "go to Cron" is "go to '
+    'Chrome", "open crow" is "open Chrome". Ask only when two readings are '
+    "equally likely."
+)
+
+
 @dataclass(slots=True)
 class _State:
     messages: list[Message]
@@ -196,6 +207,8 @@ class _State:
     handoffs: list[Handoff] = field(default_factory=list[Handoff])
     # What Arcee remembers that matters for the request or the current step.
     memory: str = ""
+    # The request was transcribed from speech: a word may be a mishearing.
+    spoken: bool = False
 
 
 class Agent:
@@ -247,8 +260,8 @@ class Agent:
             self._emit(Guarded(state.steps, f"memory unavailable ({error})"))
             state.memory = ""
 
-    async def run(self, request: str, *, task_id: str = "t_1") -> Outcome:
-        state = _State([Message("user", request)])
+    async def run(self, request: str, *, task_id: str = "t_1", spoken: bool = False) -> Outcome:
+        state = _State([Message("user", request)], spoken=spoken)
         state.task_tier = min(self._start_tier(request), len(self._ladder) - 1)
         state.base_tier = state.tier = state.task_tier
         ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
@@ -437,12 +450,18 @@ class Agent:
         plan: PlannerOutput | None = None,
         index: int = 0,
         memory: str = "",
+        spoken: bool = False,
     ) -> ToolRequest:
         """The exact request the Core gets for `messages`; the eval suite uses it too."""
         tools = self._registry.select(filters_for(messages)) if offered is None else offered
         guidance = "\n\n".join(
             block
-            for block in (memory, plan_brief(plan, index), self._examples_for(messages))
+            for block in (
+                SPOKEN if spoken else "",
+                memory,
+                plan_brief(plan, index),
+                self._examples_for(messages),
+            )
             if block
         )
         return ToolRequest(
@@ -492,7 +511,12 @@ class Agent:
         )
         completion = await model.respond(
             self.core_request(
-                view, offered, plan=state.plan, index=state.index, memory=state.memory
+                view,
+                offered,
+                plan=state.plan,
+                index=state.index,
+                memory=state.memory,
+                spoken=state.spoken,
             )
         )
         self._emit(
