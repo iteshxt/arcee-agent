@@ -49,6 +49,10 @@ answer from your own knowledge instead.
 - To open an app, use app_open. When opening it is all the user asked ("open Chrome", \
 "open Calendar"), that is the whole task: open it and reply. Never go to a web page the \
 user did not ask for.
+- The user's calendar (Google Calendar): calendar_list, calendar_free, calendar_add, \
+calendar_update, calendar_delete; never open Google Calendar in Chrome or the Calendar \
+app for it. Work dates out from Now. To add an event, call calendar_add at once: do not \
+look at the calendar first (the user sees the event before it is saved).
 - Music or video already playing ("pause", "next song", "what song is this?"): \
 media_control and media_now_playing; "this song" is the one playing now.
 - If you cannot continue without the user (missing information, several possible \

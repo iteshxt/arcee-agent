@@ -33,6 +33,7 @@ BROWSER: Final = ("browser.*",)
 DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
 WEB: Final = ("web.*",)
 MEDIA: Final = ("media.*",)
+CALENDAR: Final = ("calendar.*",)
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -113,6 +114,12 @@ _QUESTION: Final = _words(
 _MEDIA_REQUEST: Final = _words(
     r"\b(pause|unpause|resume|play(ing)?|next (song|track|video)|previous (song|track)|"
     r"skip|song|track|music|playing|spotify|stop the (music|song|video)|who sings)\b"
+)
+# The user's calendar: offered beside whatever else the request needs ("check my calendar
+# and email Rahul"), never dropped for a browser request ("in Google Calendar").
+_CALENDAR_REQUEST: Final = _words(
+    r"\b(calendar|schedule|agenda|meetings?|appointments?|events?|busy|free (time|on|at|"
+    r"this|tomorrow|today)|am i free|reschedule|book (a|an|time)|remind me on|holidays?)\b"
 )
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
@@ -202,8 +209,11 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
         filters += BROWSER
     if web:
         filters += WEB
-    if _MEDIA_REQUEST.search(request) or "media" in {c.split("_", 1)[0] for c in _called(messages)}:
+    namespaces = {c.split("_", 1)[0] for c in _called(messages)}
+    if _MEDIA_REQUEST.search(request) or "media" in namespaces:
         filters += MEDIA
+    if _CALENDAR_REQUEST.search(request) or "calendar" in namespaces:
+        filters += CALENDAR
     return filters
 
 

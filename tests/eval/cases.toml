@@ -522,3 +522,29 @@ id = "media-what"
 scenario = "media"
 request = "What song is this?"
 expect = { any_of = ["media.now_playing"] }
+
+# --- calendar: Google Calendar through GOA, not the browser ------------------------
+
+[[case]]
+id = "calendar-tomorrow"
+scenario = "calendar"
+request = "Do I have anything on my calendar tomorrow?"
+expect = { any_of = ["calendar.list"] }
+
+[[case]]
+id = "calendar-free"
+scenario = "calendar"
+request = "When am I free on Friday afternoon?"
+expect = { any_of = ["calendar.free", "calendar.list"] }
+
+[[case]]
+id = "calendar-add"
+scenario = "calendar"
+request = "Add a dentist appointment tomorrow at 10:30."
+expect = { any_of = ["calendar.add"], args_contain = { title = "dentist", start = "10:30" } }
+
+[[case]]
+id = "calendar-search"
+scenario = "calendar"
+request = "When is my next dentist appointment?"
+expect = { any_of = ["calendar.list"], args_contain = { query = "dentist" } }
