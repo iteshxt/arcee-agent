@@ -23,6 +23,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
+from arcee.app.formatting import show_markdown  # noqa: E402
+
 BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
 # The ring's two loops, rendered once by tools/make_art.py. Drawing it live (1,100
@@ -308,7 +310,11 @@ class AgentPage(Gtk.Box):
     # --- the conversation -------------------------------------------------------------
 
     def _add(self, text: str, style: str, halign: Gtk.Align = Gtk.Align.START) -> None:
-        label = Gtk.Label(label=text, wrap=True, xalign=0, selectable=True, halign=halign)
+        label = Gtk.Label(wrap=True, xalign=0, selectable=True, halign=halign)
+        if style == "body":
+            show_markdown(label, text)  # Arcee's replies come in Markdown
+        else:
+            label.set_text(text)  # what the user said, errors and notes, as they are
         label.add_css_class(style)
         if style == "arcee-you":
             label.set_margin_start(48)
