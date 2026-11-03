@@ -1,13 +1,17 @@
-"""Web tools (spec section 11): `web.search` and `web.fetch`, no API keys.
+"""Web tools (spec section 11): `web.search`, `web.news` and `web.fetch`, no API keys.
 
-Search uses DuckDuckGo's plain HTML page, and Wikipedia's search when DuckDuckGo
-refuses (its HTTP 202 is a bot check, not "accepted") or cannot be reached; fetching
-extracts a page's readable text without running JavaScript. After two failed lookups
-in a task the tools say the web is not answering, so the Core answers from what it
-knows: one question took 13 failed searches and fetches before it did. Both results
-are untrusted content. Fetching refuses addresses on this machine or the local
-network, so a page cannot point Arcee at the user's own services (Ollama, routers,
-dev servers).
+Search uses DuckDuckGo's plain HTML page, then Wikipedia's search when DuckDuckGo
+refuses (its HTTP 202 is a bot check, not "accepted") or cannot be reached. Bing's RSS
+feed and Mojeek were tried as general fallbacks and dropped: Bing's ranked badly and
+once returned porn for a celebrity question; Mojeek blocks automated requests.
+`web.news` reads Google News' RSS: today's top headlines, or a topic's, in the user's
+region. Fetching extracts a page's readable text without running JavaScript.
+
+After two failed lookups in a task the tools say the web is not answering, so the Core
+answers from what it knows: one question took 13 failed searches and fetches before it
+did. All results are untrusted content. Fetching refuses addresses on this machine or
+the local network, so a page cannot point Arcee at the user's own services (Ollama,
+routers, dev servers).
 """
 
 import asyncio
@@ -18,6 +22,7 @@ import socket
 from html.parser import HTMLParser
 from typing import Any, Final, cast
 from urllib.parse import parse_qs, urlparse
+from xml.etree import ElementTree
 
 import httpx
 from pydantic import Field
@@ -28,6 +33,8 @@ SEARCH_URL: Final = "https://html.duckduckgo.com/html/"
 SEARXNG_ENV: Final = "ARCEE_SEARXNG_URL"
 USER_AGENT: Final = "Mozilla/5.0 (X11; Linux x86_64) Arcee/0.1"
 WIKIPEDIA_SEARCH: Final = "https://en.wikipedia.org/w/rest.php/v1/search/page"
+NEWS_TOP: Final = "https://news.google.com/rss"
+NEWS_SEARCH: Final = "https://news.google.com/rss/search"
 # Wikimedia asks automated clients for a name and a way to reach whoever runs them.
 WIKIPEDIA_AGENT: Final = "Arcee/0.3 (https://iteshxt.me; desktop agent)"
 # Failed web lookups in one task before the tools stop trying.
@@ -151,6 +158,17 @@ async def _duckduckgo(client: httpx.AsyncClient, query: str) -> list[dict[str, s
     return parse_results(response.text)
 
 
+def _rss_items(xml: str) -> list[ElementTree.Element]:
+    try:
+        return ElementTree.fromstring(xml).findall(".//item")
+    except ElementTree.ParseError as exc:
+        raise SearchRefusedError("the feed was not readable") from exc
+
+
+def _text(item: ElementTree.Element, tag: str) -> str:
+    return " ".join(re.sub(r"<[^>]+>", " ", item.findtext(tag) or "").split())
+
+
 async def _wikipedia(client: httpx.AsyncClient, query: str, n: int) -> list[dict[str, str]]:
     """Wikipedia's own search: no key, and dependable for who, what and how questions."""
     response = await _get(
@@ -240,6 +258,77 @@ def _real_url(href: str) -> str:
     if parsed.netloc.endswith("duckduckgo.com") and (target := parse_qs(parsed.query).get("uddg")):
         return target[0]
     return href
+
+
+# --- web.news -------------------------------------------------------------------
+
+
+class NewsArgs(ToolArgs):
+    topic: str = Field(default="", description="What the news should be about; empty for top")
+    n: int = Field(default=8, ge=1, le=20, description="How many headlines")
+
+
+def news_region(lang: str | None = None) -> dict[str, str]:
+    """Google News' region from the system language: en_IN gives India's English edition."""
+    code = (lang or os.environ.get("LANG") or "en_US").split(".")[0]
+    language, _, country = code.partition("_")
+    language, country = (language or "en").lower(), (country or "US").upper()
+    if language in {"c", "posix"}:
+        language, country = "en", "US"
+    return {"hl": f"{language}-{country}", "gl": country, "ceid": f"{country}:{language}"}
+
+
+class WebNews(Tool[NewsArgs]):
+    name = "web.news"
+    read_only = True
+    description = (
+        "Today's news headlines from Google News, with source and time: the top stories, "
+        "or those about a topic."
+    )
+    usage = Usage(
+        when='The user asks for news: "the latest news", "what happened today", "news about '
+        'the elections".',
+        avoid="Background or facts that are not news: web.search.",
+        mistakes="Fetching Google News' links (they are redirects): web.search a headline "
+        "to read more.",
+        example='web.news(topic="cricket")',
+    )
+    args_model = NewsArgs
+    untrusted = True
+    timeout_s = 20
+
+    def __init__(self, *, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client
+
+    async def run(self, args: NewsArgs, ctx: ToolContext) -> ToolResult:
+        if FAILURES.spent(ctx.task_id):
+            return ToolResult.fail(GIVE_UP)
+        params = news_region()
+        url = NEWS_TOP
+        if topic := args.topic.strip():
+            params["q"] = topic
+            url = NEWS_SEARCH
+        async with _maybe_owned(self._client) as client:
+            try:
+                response = await _get(client, url, params=params)
+                if response.status_code != 200:
+                    raise SearchRefusedError(f"Google News answered HTTP {response.status_code}")
+                items = _rss_items(response.text)
+            except (SearchRefusedError, httpx.HTTPError) as exc:
+                reason = exc if isinstance(exc, SearchRefusedError) else type(exc).__name__
+                return FAILURES.failed(ctx.task_id, f"news failed: {reason}")
+        headlines = [
+            {
+                "title": _text(i, "title"),
+                "source": _text(i, "source"),
+                "published": _text(i, "pubDate"),
+                "url": _text(i, "link"),
+            }
+            for i in items[: args.n]
+        ]
+        what = f"about {topic!r}" if topic else "top stories"
+        data = {"edition": params["gl"], "count": len(headlines), "headlines": headlines}
+        return ToolResult.ok(f"{len(headlines)} headlines, {what}", data=data)
 
 
 # --- web.fetch ------------------------------------------------------------------
