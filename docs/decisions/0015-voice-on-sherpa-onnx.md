@@ -47,7 +47,10 @@ stretch of it is close enough to one of the three by subsequence dynamic time
 warping; "close enough" is set between how far apart the samples were and how close
 the sentence came. It runs alongside the spotter, in plain Python (no numpy), only
 while the VAD hears speech, over enough of it for the longest sample (a pause
-between "hey" and "Arcee" included). "Arcee stop" stays with the spotter. Training
+between "hey" and "Arcee" included). Training asks for "Arcee stop" twice as well,
+matched the same way and kept apart from the wake word; the spotter still hears it
+too, and a woken request that is only "stop" (Whisper's "Arcee stopped.") stops what
+runs instead of running. Training
 is a page of first-run setup and can be done again from the Voice settings; arceed
 holds the listener meanwhile (`HoldWake`) and takes up the result without
 restarting.

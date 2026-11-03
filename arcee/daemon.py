@@ -14,6 +14,7 @@ import contextlib
 import itertools
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -143,6 +144,17 @@ WAKE_RETRY_S = 10.0
 # The wake word held while the user trains it: it comes back by itself after this, in
 # case whatever held it went away without saying so.
 HOLD_WAKE_S = 180.0
+# Said after the wake word (or Whisper's take on "Arcee stop": "Arcee stopped."), these
+# stop what is running instead of becoming a request.
+STOP_WORDS: Final = re.compile(
+    r"^(hey\s+)?((arcee|rc|r\s?c|our\s?c)\W*)?(stop(ped)?|cancel|never\s?mind|enough|"
+    r"that'?s (all|enough)|quiet|shut up|hold on|wait)(\s+(it|now|please|that|arcee))*$",
+    re.IGNORECASE,
+)
+
+
+def is_stop(text: str) -> bool:
+    return bool(STOP_WORDS.match(re.sub(r"[^\w\s']", " ", text).strip()))
 
 
 async def keep_listening(service: AgentService) -> None:
@@ -185,6 +197,7 @@ class AgentService(ServiceInterface):
         self.wake: WakeListener | None = None
         self._hearing: asyncio.Future[None] | None = None  # a woken request, transcribing
         self._held: asyncio.TimerHandle | None = None  # HoldWake's own end
+        self._dismissed = False  # the mic button's recording was cancelled
         self._task: asyncio.Task[None] | None = None
         self._request = ""
         self._step = ""
@@ -205,9 +218,29 @@ class AgentService(ServiceInterface):
 
     @method()
     def Cancel(self) -> None:
+        """Stop everything under way: the request running, and one being heard or
+        transcribed (Esc, Stop, or "Arcee stop")."""
+        self._stop_task()
+        dropped = False
+        if self.wake is not None and self.wake.drop():
+            dropped = True
+        if self._recorder is not None:
+            self._dismissed = True
+            self._recorder.stop()
+            dropped = True
+        if self._hearing is not None and not self._hearing.done():
+            self._hearing.cancel()
+            dropped = True
+        if dropped:
+            self.Listening(False)
+
+    def _stop_task(self) -> bool:
+        """Stop the request running, if one is; whether one was."""
         if self.busy and self._task is not None:
             self._runner.stopped = True
             self._task.cancel()
+            return True
+        return False
 
     @method()
     def Quit(self) -> None:
@@ -226,6 +259,7 @@ class AgentService(ServiceInterface):
         if self._listening is not None and not self._listening.done():
             return
         self._recorder = self._make_recorder(self._level)
+        self._dismissed = False
         if self.wake is not None:
             self.wake.paused = True
         self._listening = asyncio.ensure_future(self._listen(self._recorder))
@@ -341,6 +375,8 @@ class AgentService(ServiceInterface):
             if self.wake is not None:
                 self.wake.paused = False
         self.Listening(False)
+        if self._dismissed:
+            return  # cancelled: nothing is sent or run
         await self._hear(audio if spoke else b"")
 
     # --- the wake word (WakeListener's callbacks) ---------------------------------------
@@ -374,10 +410,16 @@ class AgentService(ServiceInterface):
                 time.monotonic() - started,
                 type(self._transcriber).__name__,
             )
+        text = heard.get("text", "").strip()
+        if text and is_stop(text):
+            heard = {"error": "Stopped." if self._stop_task() else "Nothing to stop."}
+            text = ""
+        elif text and self.busy:
+            heard = {"error": f"Still working on: {self._request}. Say “Arcee stop” first."}
+            text = ""
         self.Heard(json.dumps(heard))
         # What was heard runs here, once, whether the panel or the app is open.
-        text = heard.get("text", "").strip()
-        if text and not self.busy:
+        if text:
             self._request = text
             self._task = asyncio.ensure_future(self._run(text, spoken=True))
 

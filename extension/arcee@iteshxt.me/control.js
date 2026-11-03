@@ -1,10 +1,9 @@
 // While Arcee drives the screen it holds a control session: the screen edges glow,
-// a pill at the top centre says so and offers Stop, and the screen and input methods
-// work only inside it, so nothing reads or drives the desktop unseen (decision 0010).
-// The glow is Arcee's sunrise orange; the pill says what Arcee is doing right now.
-// The user's own mouse or keyboard pauses the session at once: their input always
-// goes through, the glow turns blue (the user's colour), and the pill offers Resume
-// or Stop.
+// Arcee's pill at the top centre (cue.js) says what it is doing and offers Stop, and
+// the screen and input methods work only inside it, so nothing reads or drives the
+// desktop unseen (decision 0010). The glow is Arcee's sunrise orange. The user's own
+// mouse or keyboard pauses the session at once: their input always goes through, the
+// glow turns blue (the user's colour), and the pill offers Resume or Stop. Esc stops.
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -33,9 +32,10 @@ export class ControlSession {
         this.state = 'off';
         this.owner = null;
         this._glows = [];
-        this._pill = null;
-        this._step = '';
-        this._below = 0; // where the voice cue ends, when it is on screen
+        // Told each change of state ('active', 'paused', 'off'): the pill shows it.
+        this.onState = _state => {};
+        // Whether `actor` is the pill's: pressing its buttons is not taking control.
+        this.isOwnActor = _actor => false;
     }
 
     begin(owner, reason) {
@@ -47,7 +47,7 @@ export class ControlSession {
         this.owner = owner;
         this.state = 'active';
         this._showGlow();
-        this._showPill(reason || 'Arcee is working');
+        this._restyle();
         this._filter = Clutter.Event.add_filter(global.stage, (event, actor) =>
             this._onEvent(event, actor));
         // The owner exiting, even by a crash, ends its session.
@@ -67,20 +67,6 @@ export class ControlSession {
         if (this.state === 'paused')
             throw new Error('paused: the user took control');
         this.touch();
-    }
-
-    setStep(doing) {
-        this._step = doing;
-        if (this._pill)
-            this._restyle();
-    }
-
-    // The voice cue at the top centre ends at `bottom` (0: it is gone). The pill sits
-    // below it, and leaves saying the step to it.
-    setBelow(bottom) {
-        this._below = bottom;
-        if (this._pill)
-            this._restyle();
     }
 
     touch() {
@@ -124,17 +110,14 @@ export class ControlSession {
         for (const glow of this._glows)
             glow.destroy();
         this._glows = [];
-        Main.layoutManager.removeChrome(this._pill);
-        this._pill.destroy();
-        this._pill = null;
+        this.onState('off');
     }
 
     // Hidden for the moment of a screenshot: the glow over the screen edges spoiled
-    // OCR of the top bar, and the pill's own words are not the user's screen.
+    // OCR of the top bar.
     setShown(shown) {
-        for (const actor of [...this._glows, this._pill])
-            if (actor)
-                actor.visible = shown;
+        for (const glow of this._glows)
+            glow.visible = shown;
     }
 
     _onEvent(event, actor) {
@@ -144,8 +127,12 @@ export class ControlSession {
         const device = event.get_source_device();
         if (!device || device.get_device_node() === null)
             return Clutter.EVENT_PROPAGATE;
-        if (actor && this._pill?.contains(actor))
+        if (actor && this.isOwnActor(actor))
             return Clutter.EVENT_PROPAGATE;
+        if (event.type() === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
+            this.stop(); // Esc stops Arcee, and goes no further
+            return Clutter.EVENT_STOP;
+        }
         if (USER_EVENTS.has(event.type())) {
             this.pause();
         } else if (event.type() === Clutter.EventType.MOTION) {
@@ -179,20 +166,6 @@ export class ControlSession {
         }
     }
 
-    _showPill(reason) {
-        this._reason = reason;
-        this._label = new St.Label({text: reason, y_align: Clutter.ActorAlign.CENTER});
-        this._resume = new St.Button({style_class: 'arcee-pill-button', label: 'Resume'});
-        this._resume.connect('clicked', () => this.resume());
-        const stop = new St.Button({style_class: 'arcee-pill-button arcee-stop', label: 'Stop'});
-        stop.connect('clicked', () => this.stop());
-        this._pill = new St.BoxLayout({style_class: 'arcee-pill', reactive: true});
-        for (const child of [this._label, this._resume, stop])
-            this._pill.add_child(child);
-        Main.layoutManager.addTopChrome(this._pill);
-        this._restyle();
-    }
-
     _restyle() {
         const paused = this.state === 'paused';
         for (const glow of this._glows) {
@@ -201,18 +174,6 @@ export class ControlSession {
             else
                 glow.remove_style_class_name('paused');
         }
-        this._resume.visible = paused;
-        const step = this._below ? 'Arcee is using the screen' : this._step || this._reason;
-        this._label.text = paused ? 'Arcee paused: you have control' : step;
-        if (paused)
-            this._pill.add_style_class_name('paused');
-        else
-            this._pill.remove_style_class_name('paused');
-        // Centred below the top bar of the primary monitor, once its size is known.
-        const monitor = Main.layoutManager.primaryMonitor;
-        const [, width] = this._pill.get_preferred_width(-1);
-        this._pill.set_position(
-            Math.round(monitor.x + (monitor.width - width) / 2),
-            this._below ? this._below + 6 : monitor.y + Main.panel.height + 8);
+        this.onState(this.state);
     }
 }

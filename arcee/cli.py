@@ -621,7 +621,8 @@ async def voice_test(seconds: float, file: str | None) -> int:
 
 
 async def voice_train(forget: bool) -> int:
-    """Train the wake word on the user's voice: three "Hey Arcee"s and a sentence."""
+    """Train the wake word on the user's voice: three "Hey Arcee"s, two "Arcee stop"s
+    and a sentence."""
     from arcee import voice_local, wake_match
     from arcee.voice import VoiceError
 
@@ -643,11 +644,16 @@ async def voice_train(forget: bool) -> int:
             print(f"  {n}/{wake_match.SAMPLES}  say “Hey Arcee”... ", end="", flush=True)
             samples.append(await voice_local.record_phrase(vad=vad))
             print(f"got it ({len(samples[-1]) / 16000:.1f} s)")
+        stops: list[list[float]] = []
+        for n in range(1, wake_match.STOP_SAMPLES + 1):
+            print(f"  {n}/{wake_match.STOP_SAMPLES}  say “Arcee stop”... ", end="", flush=True)
+            stops.append(await voice_local.record_phrase(vad=vad))
+            print(f"got it ({len(stops[-1]) / 16000:.1f} s)")
         print("\n  Now an ordinary sentence, for example “Hey, what's the weather like")
         print("  today?”... ", end="", flush=True)
         other = await voice_local.record_phrase(vad=vad)
         print("got it\n")
-        training = wake_match.train(samples, other)
+        training = wake_match.train(samples, other, stops)
     except VoiceError as exc:
         print(f"\nNot trained: {exc}. Run it again to retry.")
         await wake_match.hold_wake(False)
@@ -657,6 +663,10 @@ async def voice_train(forget: bool) -> int:
     print(
         f"Trained. Your samples were {training.spread:.3f} apart; the sentence came to "
         f"{training.other:.3f}; it wakes at {training.trained.threshold:.3f} or closer."
+    )
+    print(
+        f"“Arcee stop”: {training.stop_spread:.3f} apart; it stops at "
+        f"{training.trained.stop_threshold:.3f} or closer."
     )
     print("Kept: the sound of the samples (not the audio), in", wake_match.trained_path())
     return 0

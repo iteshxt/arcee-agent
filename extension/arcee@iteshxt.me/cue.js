@@ -1,13 +1,16 @@
-// The voice cue: when Arcee hears "hey Arcee" (or the mic is pressed), its ring appears
-// at the top centre of the screen, pulsing with the voice. Beside it, what the user
-// said and what Arcee is doing about it, step by step, then its reply for a moment: a
-// spoken request can be followed without opening the panel. The ring is the app's
+// Arcee's pill at the top centre: when Arcee hears "hey Arcee" (or the mic is pressed),
+// its ring appears, pulsing with the voice. Beside it, what the user said and what
+// Arcee is doing about it, step by step, then its reply for a moment: a spoken request
+// can be followed without opening the panel. While a request runs it has a Stop button;
+// while Arcee holds the screen (control.js) it shows too, typed requests included, and
+// offers Resume once the user takes over. Esc, while it shows, stops everything. The ring is the app's
 // active loop, as frames (icons/cue/NN.png, from tools/make_art.py): GNOME 50's shell
 // has no sprite-sheet animation, so the frames are shown one after another, and only
 // while the cue is on screen.
 //
-// It takes no clicks, so Arcee's own clicks near the top of the screen go through to
-// the window under it, and it hides for Arcee's screenshots (`setShown`).
+// Only its buttons take clicks, and only the user's (not Arcee's own virtual pointer):
+// Arcee's clicks near the top of the screen go through to the window under it. It
+// hides for Arcee's screenshots (`setShown`).
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -38,17 +41,28 @@ const REPLY_MS = 5000;
 const REPLY_MS_PER_CHAR = 45;
 const REPLY_LONGEST_MS = 12000;
 const ERROR_MS = 3500;
+const STOPPED_MS = 1200;
 
 function shorten(text, length = TEXT_CHARS) {
     const line = (text ?? '').replace(/\s+/g, ' ').trim();
     return line.length > length ? `${line.slice(0, length - 1)}…` : line;
 }
 
+// Whether `event` came from the user's own mouse or keyboard, not Arcee's virtual ones
+// (which have no device node).
+function fromUser(event) {
+    return event?.get_source_device()?.get_device_node() != null;
+}
+
 export class ListeningCue {
-    // `onPlaced(bottom)` hears where the cue ends on screen (0 once it is gone), so the
-    // control session's pill can sit below it.
-    constructor(path, onPlaced = () => {}) {
-        this._onPlaced = onPlaced;
+    // `onStop` for its Stop button and Esc, `onResume` for Resume.
+    constructor(path, {onStop = () => {}, onResume = () => {}} = {}) {
+        this._onStop = onStop;
+        this._onResume = onResume;
+        this._phase = ''; // 'listening', 'transcribing', 'working', 'done'
+        this._step = '';
+        this._control = 'off';
+        this._filter = null;
         const folder = Gio.File.new_for_path(`${path}/icons/cue`);
         this._frames = [];
         for (let i = 0; ; i++) {
@@ -77,11 +91,22 @@ export class ListeningCue {
         });
         this._text.add_child(this._said);
         this._text.add_child(this._doing);
+        this._resume = new St.Button({
+            style_class: 'arcee-cue-button', label: 'Resume', visible: false,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._stop = new St.Button({
+            style_class: 'arcee-cue-button arcee-cue-stop', visible: false,
+            y_align: Clutter.ActorAlign.CENTER, accessible_name: 'Stop Arcee',
+            child: new St.Icon({icon_name: 'media-playback-stop-symbolic', icon_size: 12}),
+        });
+        this._resume.connect('clicked', () => fromUser(Clutter.get_current_event()) && this._onResume());
+        this._stop.connect('clicked', () => fromUser(Clutter.get_current_event()) && this._onStop());
         this._box = new St.BoxLayout({
             style_class: 'arcee-cue', reactive: false, opacity: 0, visible: false,
         });
-        this._box.add_child(this._ring);
-        this._box.add_child(this._text);
+        for (const child of [this._ring, this._text, this._resume, this._stop])
+            this._box.add_child(child);
         // Over the windows, but not chrome: no input region, so clicks pass through.
         Main.layoutManager.uiGroup.add_child(this._box);
     }
@@ -90,14 +115,36 @@ export class ListeningCue {
         return this._box.visible;
     }
 
+    // Whether `actor` is part of the pill (its buttons).
+    contains(actor) {
+        return this._box.contains(actor);
+    }
+
     // Woken (or the mic pressed): the ring, listening.
     show() {
+        this._open('', 'Listening…');
+        this._phase = 'listening';
+        this._expire(WAIT_LISTENING_MS);
+    }
+
+    // Shown for a request already running (Arcee took the screen for a typed one).
+    follow(request, doing) {
+        if (this.visible)
+            return;
+        this._open(request ? `“${shorten(request)}”` : '', doing || 'Working…');
+        this._phase = 'working';
+        this.working(true);
+        this._expire(WAIT_STEP_MS);
+    }
+
+    _open(said, doing) {
         if (!this._frames.length)
             return;
         this._doing.clutter_text.line_wrap = false; // one line, until the reply
         this._doing.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         this._doing.width = -1;
-        this._set('', 'Listening…');
+        this._step = '';
+        this._set(said, doing);
         this._box.remove_all_transitions();
         this._box.visible = true;
         this._box.ease({opacity: 255, duration: FADE_MS, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
@@ -108,19 +155,67 @@ export class ListeningCue {
                 return GLib.SOURCE_CONTINUE;
             });
         }
-        this._expire(WAIT_LISTENING_MS);
+        // Esc, while the pill shows, stops Arcee (and goes no further).
+        this._filter ??= Clutter.Event.add_filter(global.stage, event => {
+            if (event.type() !== Clutter.EventType.KEY_PRESS ||
+                event.get_key_symbol() !== Clutter.KEY_Escape || !fromUser(event))
+                return Clutter.EVENT_PROPAGATE;
+            this._onStop();
+            return Clutter.EVENT_STOP;
+        });
     }
 
     // The voice has stopped; Whisper has the audio.
     transcribing() {
-        if (this.visible)
+        if (this.visible && this._phase === 'listening') {
+            this._phase = 'transcribing';
             this._set('', 'Getting your words…');
+        }
+    }
+
+    // A request is running (Stop shown) or not.
+    working(on) {
+        this._stop.visible = on;
+        if (on)
+            this._phase = 'working';
+        this._place();
+    }
+
+    // Arcee's control of the screen: 'active', 'paused' (the user took over) or 'off'.
+    control(state) {
+        this._control = state;
+        const paused = state === 'paused';
+        if (paused)
+            this._box.add_style_class_name('paused');
+        else
+            this._box.remove_style_class_name('paused');
+        this._resume.visible = paused;
+        // Only while the request runs: once done, the pill keeps its reply.
+        if (this.visible && this._phase === 'working')
+            this._set(null, paused ? 'Paused: you have control' : this._step || 'Working…');
+        else
+            this._place();
+    }
+
+    // Stopped by the user (Esc, Stop): said briefly, then gone.
+    stopped() {
+        if (!this.visible)
+            return;
+        if (this._phase === 'done') {
+            this.hide(); // only a reply showing: Esc just puts it away
+            return;
+        }
+        this.working(false);
+        this._phase = 'done';
+        this._set(null, 'Stopped');
+        this._expire(STOPPED_MS);
     }
 
     // What the user said.
     heard(text) {
         if (!this.visible)
             return;
+        this._phase = 'working';
         this._set(`“${shorten(text)}”`, 'Starting…');
         this._expire(WAIT_HEARD_MS);
     }
@@ -129,7 +224,9 @@ export class ListeningCue {
     doing(text) {
         if (!this.visible || !text)
             return;
-        this._set(null, text);
+        this._step = text;
+        if (this._control !== 'paused')
+            this._set(null, text);
         this._expire(WAIT_STEP_MS);
     }
 
@@ -142,6 +239,8 @@ export class ListeningCue {
     finish(reply) {
         if (!this.visible)
             return;
+        this.working(false);
+        this._phase = 'done';
         const text = shorten(reply, 2 * TEXT_CHARS);
         // A reply longer than a line wraps to a second one, at a fixed width.
         const wraps = text.length > TEXT_CHARS;
@@ -157,6 +256,8 @@ export class ListeningCue {
     fail(text) {
         if (!this.visible)
             return;
+        this.working(false);
+        this._phase = 'done';
         this._set(null, text);
         this._expire(ERROR_MS);
     }
@@ -170,6 +271,10 @@ export class ListeningCue {
     }
 
     hide() {
+        if (this._filter) {
+            Clutter.Event.remove_filter(this._filter);
+            this._filter = null;
+        }
         if (!this.visible)
             return;
         this._clearLimit();
@@ -184,7 +289,8 @@ export class ListeningCue {
                     GLib.source_remove(this._ticker);
                     this._ticker = 0;
                 }
-                this._onPlaced(0);
+                this._stop.visible = this._resume.visible = false;
+                this._phase = '';
             },
         });
     }
@@ -196,6 +302,9 @@ export class ListeningCue {
     }
 
     destroy() {
+        if (this._filter)
+            Clutter.Event.remove_filter(this._filter);
+        this._filter = null;
         this._clearLimit();
         if (this._ticker)
             GLib.source_remove(this._ticker);
@@ -219,10 +328,8 @@ export class ListeningCue {
     _place() {
         const monitor = Main.layoutManager.primaryMonitor;
         const [, width] = this._box.get_preferred_width(-1);
-        const [, height] = this._box.get_preferred_height(width);
         const y = monitor.y + Main.panel.height + GAP_PX;
         this._box.set_position(Math.round(monitor.x + (monitor.width - width) / 2), y);
-        this._onPlaced(y + height);
     }
 
     _expire(ms) {

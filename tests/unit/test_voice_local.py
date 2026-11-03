@@ -225,15 +225,16 @@ async def test_speech_reaches_the_spotter_with_what_came_just_before() -> None:
 class Trained:
     """A stand-in trained wake word: heard at its `after`th check, and only then."""
 
-    def __init__(self, after: int) -> None:
+    def __init__(self, after: int, said: str = "wake") -> None:
         self.after = after
+        self.said = said
         self.checks = 0
         self.shortest = 1
         self.window = 80
 
-    def heard(self, recent: list[list[float]]) -> bool:
+    def match(self, recent: list[list[float]]) -> str:
         self.checks += 1
-        return self.checks == self.after
+        return self.said if self.checks == self.after else ""
 
 
 async def test_a_trained_wake_word_wakes_when_the_spotter_does_not() -> None:
@@ -298,3 +299,30 @@ async def test_the_missing_models_download_with_progress_over_all_of_them(
     assert fetched == ["wake", "vad"]
     assert seen[0] == pytest.approx(3 / 7)  # half of the 6 MB, of 7 MB in all
     assert seen[-1] == 1.0
+
+
+async def test_a_trained_arcee_stop_stops() -> None:
+    events: list[Any] = []
+    stopping = listener(events)
+    stopping.trained = Trained(after=2, said="stop")  # pyright: ignore[reportAttributeAccessIssue]
+
+    await stopping._listen(audio(8), Spotter({}), Vad(speech_frames=None))
+
+    assert events == ["stop"]
+
+
+async def test_a_request_being_heard_can_be_dropped() -> None:
+    events: list[Any] = []
+    woken = listener(events)
+    reader = asyncio.StreamReader()
+    reader.feed_data(array.array("h", [1000] * FRAME * 3).tobytes())
+    task = asyncio.ensure_future(woken._listen(reader, Spotter({2: WAKE}), Vad(speech_frames=6)))
+    await asyncio.sleep(0.01)
+    assert woken.drop()  # Esc while the request is being said
+
+    reader.feed_data(array.array("h", [1000] * FRAME * 8).tobytes())
+    reader.feed_eof()
+    await task
+
+    assert events == ["wake"]  # no request: nothing is transcribed or run
+    assert not woken.drop()  # nothing being heard now

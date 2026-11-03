@@ -225,6 +225,14 @@ class WakeListener:
         self._command = command
         self.paused = False  # the mic button records on its own meanwhile
         self.trained: wake_match.Trained | None = None  # the user's own, when trained
+        self._hearing = False
+        self._drop = False
+
+    def drop(self) -> bool:
+        """Throw away the request being heard (Esc, Stop); whether there was one."""
+        if self._hearing:
+            self._drop = True
+        return self._hearing
 
     def reload(self) -> None:
         """Take up a newly trained (or forgotten) wake word."""
@@ -268,6 +276,10 @@ class WakeListener:
             if self.paused:
                 continue
             frame = samples(chunk)
+            if hearing is not None and self._drop:
+                hearing, self._hearing, self._drop = None, False, False
+                vad.reset()
+                continue
             if hearing is not None:
                 hearing += chunk
                 heard_for += FRAME / RATE
@@ -276,17 +288,17 @@ class WakeListener:
                 if not vad.empty():  # a whole utterance has ended
                     pcm = _pcm(vad.front.samples)
                     vad.pop()
-                    hearing = None
+                    hearing, self._hearing = None, False
                     self._on_request(pcm)
                 elif heard_for >= NO_REQUEST_S and not vad.is_speech_detected():
-                    hearing = None
+                    hearing, self._hearing = None, False
                     vad.reset()
                     self._on_request(b"")
                 elif heard_for >= MAX_REQUEST_S:
                     vad.flush()
                     pcm = _pcm(vad.front.samples) if not vad.empty() else bytes(hearing)
                     vad.reset()
-                    hearing = None
+                    hearing, self._hearing = None, False
                     self._on_request(pcm)
                 continue
             # Tier one's own gate: the VAD (0.7% of a core) hears every frame; the
@@ -320,17 +332,16 @@ class WakeListener:
                 for piece in feed:
                     heard.push(piece)
                 frames_spotted += 1
-                if (
-                    frames_spotted % MATCH_EVERY == 0
-                    and len(heard.frames) >= trained.shortest
-                    and trained.heard(list(heard.frames))
-                ):
-                    found = WAKE
+                if frames_spotted % MATCH_EVERY == 0 and len(heard.frames) >= trained.shortest:
+                    found = {"wake": WAKE, "stop": STOP}.get(trained.match(list(heard.frames)), "")
+                    if found:
+                        heard = wake_match.Features(heard.frames.maxlen or wake_match.WINDOW)
             if found == STOP:
                 self._on_stop()
             elif found == WAKE:
                 self._on_wake()
                 hearing, heard_for, spotting = bytearray(), 0.0, False
+                self._hearing, self._drop = True, False
                 vad.reset()
 
 

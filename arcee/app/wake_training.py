@@ -1,7 +1,8 @@
 # pyright: basic, reportMissingImports=false, reportMissingModuleSource=false
 """Training "Hey Arcee" on the user's voice (wake_match), as phone assistants do.
 
-Three times "Hey Arcee", then one ordinary sentence; each is heard until the user
+Three times "Hey Arcee", twice "Arcee stop", then one ordinary sentence; each is heard
+until the user
 stops speaking, and the trainer moves on by itself. People say it differently (run
 together, or "hey… Arcee" with a pause), so it is said the user's own way and matched
 to that. arceed stops listening for the wake word meanwhile, and takes up what was
@@ -26,9 +27,9 @@ from arcee.voice import VoiceError  # noqa: E402
 Runner = Callable[..., Any]  # (work, done[, failed]) -> its future, as Background.run
 SENTENCE: Final = "“Hey, what's the weather like today?”"
 ABOUT: Final = (
-    "You will say “Hey Arcee” three times, then one ordinary sentence. Say it the way "
-    "you naturally do, run together or with a pause, from where you usually sit. It "
-    "takes about half a minute."
+    "You will say “Hey Arcee” three times, “Arcee stop” twice, then one ordinary "
+    "sentence. Say them the way you naturally do, run together or with a pause, from "
+    "where you usually sit. It takes about half a minute."
 )
 
 
@@ -62,7 +63,7 @@ class WakeTrainer(Gtk.Box):
         )
         self._steps = Gtk.Box(spacing=10, halign=Gtk.Align.CENTER)
         self._dots: list[Gtk.Image] = []
-        for _ in range(wake_match.SAMPLES + 1):
+        for _ in range(wake_match.SAMPLES + wake_match.STOP_SAMPLES + 1):
             dot = Gtk.Image(icon_name="radio-symbolic", pixel_size=14)
             self._dots.append(dot)
             self._steps.append(dot)
@@ -110,9 +111,9 @@ class WakeTrainer(Gtk.Box):
         self._icon_style("success")
         self._heading.set_label("Arcee knows your voice")
         self._text.set_label(
-            "Say “Hey Arcee” whenever you need it. If it misses you, or wakes when you did "
-            "not call it, train it again: in a new room, with a new mic, or to say it "
-            "another way."
+            "Say “Hey Arcee” whenever you need it, and “Arcee stop” to stop it. If it "
+            "misses you, or wakes when you did not call it, train it again: in a new room, "
+            "with a new mic, or to say it another way."
         )
         self._show_dots(len(self._dots))
         self._button.set_label("Train again")
@@ -146,13 +147,21 @@ class WakeTrainer(Gtk.Box):
                     f"{n + 1} of {wake_match.SAMPLES}, your own way, then stop.",
                 )
                 samples.append(await voice_local.record_phrase(self._loudness, vad=vad))
+            stops: list[list[float]] = []
+            for n in range(wake_match.STOP_SAMPLES):
+                self._say(
+                    wake_match.SAMPLES + n,
+                    "Say “Arcee stop”",
+                    f"{n + 1} of {wake_match.STOP_SAMPLES}: what you will say to stop a task.",
+                )
+                stops.append(await voice_local.record_phrase(self._loudness, vad=vad))
             self._say(
-                wake_match.SAMPLES,
+                wake_match.SAMPLES + wake_match.STOP_SAMPLES,
                 "Now say something else",
                 f"An ordinary sentence, such as {SENTENCE} This shows Arcee what is not its name.",
             )
             other = await voice_local.record_phrase(self._loudness, vad=vad)
-            training = wake_match.train(samples, other)
+            training = wake_match.train(samples, other, stops)
             wake_match.save(training.trained)
             return training
         finally:

@@ -117,3 +117,35 @@ def test_a_slow_or_paused_wake_word_is_matched_whole() -> None:
 
     assert quick.window == wake_match.WINDOW
     assert paused.window > len(paused.templates[0])
+
+
+def test_arcee_stop_is_trained_apart_from_the_wake_word() -> None:
+    wake = [sweep(300, 1200, s, seed=i) for i, s in enumerate((0.8, 0.9, 0.85))]
+    stop = [sweep(2000, 3500, s, seed=10 + i) for i, s in enumerate((0.7, 0.75))]
+    sentence = sweep(5000, 900, 1.5, seed=7)
+
+    training = train(wake, sentence, stop)
+    trained = training.trained
+
+    assert training.stop_spread < trained.stop_threshold < training.stop_other
+    assert trained.match(log_mel(silence(0.3) + sweep(2000, 3500, 0.72, seed=20))) == "stop"
+    assert trained.match(log_mel(silence(0.3) + sweep(300, 1200, 0.9, seed=21))) == "wake"
+    assert trained.match(log_mel(sweep(5000, 900, 1.2, seed=22))) == ""
+    wake_match.save(trained)
+    loaded = wake_match.load()
+    assert loaded is not None
+    assert len(loaded.stops) == 2
+    assert loaded.stop_threshold == trained.stop_threshold
+
+
+def test_a_wake_word_trained_before_arcee_stop_still_loads() -> None:
+    import json
+
+    word = log_mel(sweep(300, 1200, 0.8))
+    wake_match.trained_path().parent.mkdir(parents=True, exist_ok=True)
+    old = {"threshold": 0.2, "templates": [normalise(word)]}  # no "stops" yet
+    wake_match.trained_path().write_text(json.dumps(old))
+    loaded = wake_match.load()
+    assert loaded is not None
+    assert loaded.stops == []
+    assert loaded.match(word) == "wake"
