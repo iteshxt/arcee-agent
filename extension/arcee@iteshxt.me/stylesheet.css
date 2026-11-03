@@ -278,10 +278,10 @@
 /* The listening cue at the top centre: Arcee's ring on a soft dark disc, so it reads
    over light and dark windows alike. */
 .arcee-cue {
-  border-radius: 999px;
-  padding: 3px 6px 3px 3px;
-  spacing: 8px;
-  background-color: rgba(12, 9, 6, 0.6);
+  border-radius: 22px;
+  padding: 4px 7px 4px 4px;
+  spacing: 9px;
+  background-color: rgba(12, 9, 6, 0.66);
   box-shadow: 0 1px 6px rgba(255, 122, 26, 0.22);
 }
 
@@ -293,12 +293,19 @@
 .arcee-cue-said {
   color: #f6f1ec;
   font-weight: bold;
-  font-size: 9pt;
+  font-size: 10.5pt;
 }
 
 .arcee-cue-doing {
   color: #ffb36b;
-  font-size: 8.5pt;
+  font-size: 9.75pt;
+}
+
+/* Arcee's answer: easy to read, as long as it needs. */
+.arcee-cue-reply {
+  color: #f3e7dc;
+  font-size: 10pt;
+  padding: 2px 0 3px 0;
 }
 
 /* The user has taken the screen back: the user's blue, as the glow. */
@@ -312,11 +319,11 @@
 
 .arcee-cue-button {
   border-radius: 999px;
-  padding: 3px 10px;
-  min-height: 18px;
+  padding: 4px 12px;
+  min-height: 20px;
   background-color: rgba(255, 255, 255, 0.12);
   color: #f2f2f2;
-  font-size: 8.5pt;
+  font-size: 9.75pt;
   font-weight: bold;
 }
 
@@ -325,7 +332,7 @@
 }
 
 .arcee-cue-stop {
-  padding: 6px;
+  padding: 7px;
   min-height: 0;
   background-color: rgba(192, 57, 43, 0.9);
 }
