@@ -17,14 +17,17 @@ import Pango from 'gi://Pango';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-const SIZE = 67; // the ring: 30% smaller than its first 96 px, at the user's word
+// Small, at the user's word: noticeable, out of the way. The ring is about the size of
+// the top bar's own icons, and the cue a slim pill just below the bar.
+const SIZE = 30;
 // The ring's own box, fixed, so the cue centres before its first frame has loaded
 // (measured then, it was 16 px wide and sat off centre).
 const RING_BOX = SIZE;
 const FRAME_MS = 95; // the loop's own pace
 const FADE_MS = 160;
-const GAP_PX = 12;
-const TEXT_CHARS = 70;
+const GAP_PX = 6;
+const TEXT_CHARS = 60; // a line
+const REPLY_WIDTH_PX = 380; // the reply wraps to two lines at this width
 // How long the cue waits for what comes next before it goes by itself: for the words
 // after the wake word, for the request to start, for its next step.
 const WAIT_LISTENING_MS = 30000;
@@ -91,6 +94,9 @@ export class ListeningCue {
     show() {
         if (!this._frames.length)
             return;
+        this._doing.clutter_text.line_wrap = false; // one line, until the reply
+        this._doing.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        this._doing.width = -1;
         this._set('', 'Listening…');
         this._box.remove_all_transitions();
         this._box.visible = true;
@@ -137,6 +143,12 @@ export class ListeningCue {
         if (!this.visible)
             return;
         const text = shorten(reply, 2 * TEXT_CHARS);
+        // A reply longer than a line wraps to a second one, at a fixed width.
+        const wraps = text.length > TEXT_CHARS;
+        this._doing.clutter_text.line_wrap = wraps;
+        // Clutter keeps an ellipsized label to one line; the text is already cut short.
+        this._doing.clutter_text.ellipsize = wraps ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END;
+        this._doing.width = wraps ? REPLY_WIDTH_PX : -1;
         this._set(null, text);
         this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
         this._expire(Math.min(REPLY_LONGEST_MS, REPLY_MS + text.length * REPLY_MS_PER_CHAR));
@@ -197,7 +209,8 @@ export class ListeningCue {
             this._said.text = said;
             this._said.visible = Boolean(said);
         }
-        this._doing.text = shorten(doing, 2 * TEXT_CHARS);
+        const wraps = this._doing.clutter_text.line_wrap;
+        this._doing.text = shorten(doing, wraps ? 2 * TEXT_CHARS : TEXT_CHARS);
         this._text.visible = Boolean(this._said.text || this._doing.text);
         this._place();
     }

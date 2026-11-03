@@ -213,6 +213,6 @@ export class ControlSession {
         const [, width] = this._pill.get_preferred_width(-1);
         this._pill.set_position(
             Math.round(monitor.x + (monitor.width - width) / 2),
-            this._below ? this._below + 8 : monitor.y + Main.panel.height + 8);
+            this._below ? this._below + 6 : monitor.y + Main.panel.height + 8);
     }
 }
