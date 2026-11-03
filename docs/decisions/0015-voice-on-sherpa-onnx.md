@@ -1,7 +1,7 @@
-# 0015. Local voice on sherpa-onnx, with models downloaded on request
+# 0015. Voice in two tiers: the wake word here (sherpa-onnx), the request on Groq
 
 Date: 2026-11-03
-Status: accepted
+Status: accepted; amended 2026-11-03 (two tiers, no local speech-to-text)
 
 ## Context
 
@@ -24,26 +24,30 @@ as text, so "hey Arcee" and "Arcee stop" need no training.
 
 ## Decision
 
-1. Voice runs on sherpa-onnx, a dependency of the package (43 MB).
-2. The models are not in the package: the app downloads them from sherpa-onnx's
-   releases on GitHub after the user agrees, showing their size, into
-   `~/.local/share/arcee/models/`, keeping only the files used. The keyword spotter
-   and voice activity detector are small; the speech-to-text model is chosen by
-   measured accuracy and speed on this machine's CPU (the GPU is Ollama's).
-3. Listening for the wake word is off until the user turns it on. When on, arceed
-   reads the microphone through `pw-record`, as the mic button does, and nothing but
-   the keyword spotter sees the audio until it hears "hey Arcee"; then the voice
-   activity detector cuts the request out and the local model transcribes it.
-   "Arcee stop" cancels whatever is running. Audio never leaves the machine and is
-   not stored.
-4. Groq's Whisper stays as the speech-to-text the user may choose instead (more
-   accurate, not local), and as the fallback until the local models are downloaded.
-5. Spoken replies (Piper voice through sherpa-onnx) are a setting, off by default.
+Voice works the way phone assistants do, in two tiers (the user's call, 2026-11-03):
+
+1. **Tier one, on this computer: the wake word.** sherpa-onnx (a dependency, 43 MB)
+   runs a small keyword spotter over the microphone; it is all that hears the audio
+   until "hey Arcee". Silero VAD then cuts out the request that follows (0.7 s of
+   silence ends it). "Arcee stop" cancels whatever runs, with no transcription. The
+   two models (7 MB) are downloaded from sherpa-onnx's releases on GitHub when the user
+   turns the wake word on, after asking with their size. Listening is off until then.
+2. **Tier two, on Groq: the request.** Only the audio after the wake word goes to Groq's
+   `whisper-large-v3-turbo`, as the mic button's does. Nothing before it is stored or
+   sent. A stalled request gives up after 8 s and is tried once more.
+
+A local speech-to-text model was built and measured (Moonshine base: 274 MB, about
+0.4 s a request on the CPU) and dropped: Whisper on Groq is more accurate with names
+and needs no download, and the wake word already keeps everything before it on the
+machine.
+
+Spoken replies are open: sherpa-onnx 2.0.1 has no frontend for Piper voices, and no
+older release supports Python 3.14.
 
 ## Consequences
 
-- Fully local voice for 43 MB in the package plus a few hundred MB of models,
-  downloaded only by people who use voice.
+- Voice for 43 MB in the package and a 7 MB download; the requests themselves use
+  the Groq speech allowance, and need the network.
 - No custom wake-word training: phrases can be changed in settings, at some cost in
   false accepts compared with a trained model. The threshold is tunable.
 - sherpa-onnx is a C++ library behind Python bindings: a crash there takes arceed

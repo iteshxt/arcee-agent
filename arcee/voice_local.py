@@ -1,12 +1,12 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeStubs=false
-"""Voice on this computer (decision 0015): a wake word, and speech-to-text, via sherpa-onnx.
+"""The wake word, the first of voice's two tiers (decision 0015), via sherpa-onnx.
 
-The models are downloaded on request (`download`) into the data folder, keeping only
-the files used. `LocalTranscriber` turns a recording into text with Moonshine base,
-on the CPU (the GPU is Ollama's): about 0.4 s for a 5-second request. `WakeListener`
-reads the microphone through `pw-record`; only the keyword spotter sees the audio
-until it hears "hey Arcee", then Silero VAD cuts out the request, which is
-transcribed here. "Arcee stop" stops what is running. Nothing is stored or sent.
+Tier one runs here: `WakeListener` reads the microphone through `pw-record`, and only
+a small keyword spotter sees the audio until it hears "hey Arcee"; Silero VAD then
+cuts out the request that follows. Tier two is Groq's Whisper, which transcribes that
+request, and only that: nothing before the wake word is stored or sent. "Arcee stop"
+stops what is running, with no transcription at all. The two small models (7 MB)
+are downloaded on request (`download`) into the data folder.
 """
 
 import array
@@ -53,19 +53,6 @@ SPOTTER: Final = VoiceModel(
     ),
     6,
 )
-SPEECH: Final = VoiceModel(
-    "speech",
-    "turns what you say into text, on this computer",
-    f"{RELEASES}/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2",
-    (
-        "preprocess.onnx",
-        "encode.int8.onnx",
-        "uncached_decode.int8.onnx",
-        "cached_decode.int8.onnx",
-        "tokens.txt",
-    ),
-    286,
-)
 VAD: Final = VoiceModel(
     "vad",
     "finds where you start and stop speaking",
@@ -73,7 +60,7 @@ VAD: Final = VoiceModel(
     ("silero_vad.onnx",),
     1,
 )
-MODELS: Final = (SPOTTER, SPEECH, VAD)
+MODELS: Final = (SPOTTER, VAD)
 
 # The wake phrases in the spotter's word pieces (its bpe.model, encoded once). "Arcee"
 # is not an English word, so each phrase comes in spellings that sound alike, all
@@ -157,40 +144,6 @@ def _unpack(model: VoiceModel, data: bytes, target: Path) -> None:
 def samples(pcm: bytes) -> list[float]:
     """16-bit little-endian PCM to floats in [-1, 1]."""
     return [s / 32768 for s in array.array("h", pcm)]
-
-
-class LocalTranscriber:
-    """Moonshine base on the CPU; the same interface as the Groq `Transcriber`."""
-
-    def __init__(self) -> None:
-        self._recognizer: Any = None
-
-    def _load(self) -> Any:
-        if self._recognizer is None:
-            if not installed(SPEECH):
-                raise VoiceError("the speech model is not downloaded (Models page, Voice)")
-            import sherpa_onnx
-
-            d = model_path(SPEECH)
-            self._recognizer = sherpa_onnx.OfflineRecognizer.from_moonshine(
-                preprocessor=str(d / "preprocess.onnx"),
-                encoder=str(d / "encode.int8.onnx"),
-                uncached_decoder=str(d / "uncached_decode.int8.onnx"),
-                cached_decoder=str(d / "cached_decode.int8.onnx"),
-                tokens=str(d / "tokens.txt"),
-                num_threads=4,
-            )
-        return self._recognizer
-
-    def _transcribe(self, pcm: bytes) -> str:
-        recognizer = self._load()
-        stream = recognizer.create_stream()
-        stream.accept_waveform(RATE, samples(pcm))
-        recognizer.decode_stream(stream)
-        return str(stream.result.text).strip()
-
-    async def transcribe(self, pcm: bytes) -> str:
-        return await asyncio.to_thread(self._transcribe, pcm)
 
 
 def make_spotter(phrases: str = KEYWORDS) -> Any:

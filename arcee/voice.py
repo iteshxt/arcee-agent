@@ -29,6 +29,10 @@ from arcee.context.store import data_dir
 KEY_ENV: Final = "GROQ_API_KEY_TTS"
 TRANSCRIBE_URL: Final = "https://api.groq.com/openai/v1/audio/transcriptions"
 MODEL: Final = "whisper-large-v3-turbo"
+# A few seconds of speech comes back in under a second. A request that hung for 20 s
+# once lost what was said: give up sooner and try once more.
+TRANSCRIBE_TIMEOUT_S: Final = 8.0
+TRANSCRIBE_ATTEMPTS: Final = 2
 RATE: Final = 16_000
 CHUNK_S: Final = 0.05
 CHUNK_BYTES: Final = int(RATE * CHUNK_S) * 2  # 16-bit mono
@@ -204,21 +208,28 @@ class Transcriber:
         key = os.environ.get(KEY_ENV)
         if not key:
             raise VoiceError(f"set {KEY_ENV} in .env to speak to Arcee")
-        client = self._client or httpx.AsyncClient(timeout=30)
+        client = self._client or httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT_S)
+        wav = to_wav(pcm)
         try:
-            response = await client.post(
-                TRANSCRIBE_URL,
-                headers={"Authorization": f"Bearer {key}"},
-                data={
-                    "model": MODEL,
-                    "response_format": "json",
-                    "temperature": "0",
-                    "prompt": VOCABULARY,
-                },
-                files={"file": ("speech.wav", to_wav(pcm), "audio/wav")},
-            )
-        except httpx.HTTPError as exc:
-            raise VoiceError(f"could not reach Groq: {type(exc).__name__}") from exc
+            for attempt in range(TRANSCRIBE_ATTEMPTS):
+                try:
+                    response = await client.post(
+                        TRANSCRIBE_URL,
+                        headers={"Authorization": f"Bearer {key}"},
+                        data={
+                            "model": MODEL,
+                            "response_format": "json",
+                            "temperature": "0",
+                            "prompt": VOCABULARY,
+                        },
+                        files={"file": ("speech.wav", wav, "audio/wav")},
+                    )
+                    break
+                except httpx.HTTPError as exc:
+                    if attempt + 1 == TRANSCRIBE_ATTEMPTS:
+                        raise VoiceError(f"could not reach Groq: {type(exc).__name__}") from exc
+            else:  # pragma: no cover - the loop always breaks or raises
+                raise VoiceError("could not reach Groq")
         finally:
             if self._client is None:
                 await client.aclose()

@@ -132,18 +132,9 @@ def doing(event: Event) -> str | None:
 
 
 class Speech(Protocol):
-    """What turns recorded speech into text: Groq's Whisper or the local model."""
+    """What turns recorded speech into text: Groq's Whisper (a fake in tests)."""
 
     async def transcribe(self, pcm: bytes) -> str: ...
-
-
-def pick_transcriber(speech: str) -> Speech:
-    """The local model when chosen and downloaded (kept loaded), else Groq's Whisper."""
-    from arcee.voice_local import SPEECH, LocalTranscriber, installed
-
-    if speech == "local" and installed(SPEECH):
-        return LocalTranscriber()
-    return Transcriber()
 
 
 # How long the wake-word listener waits before trying again after it fails (the mic
@@ -475,11 +466,9 @@ async def watch_shell_stop(bus: MessageBus, service: AgentService) -> None:
     )
 
 
-async def serve(
-    runner: TaskRunner, bus: MessageBus, *, speech: str = "groq", listen: bool = False
-) -> None:
+async def serve(runner: TaskRunner, bus: MessageBus, *, listen: bool = False) -> None:
     """Export the service on `bus` and run until the bus disconnects."""
-    service = AgentService(runner, transcriber=pick_transcriber(speech))
+    service = AgentService(runner)
     service.on_quit = bus.disconnect
     bus.export(OBJECT_PATH, service)
     await watch_shell_stop(bus, service)
@@ -508,7 +497,7 @@ async def _main() -> None:
     )
     bus = await MessageBus(bus_type=BusType.SESSION).connect()
     try:
-        await serve(runner, bus, speech=settings.speech, listen=settings.listen)
+        await serve(runner, bus, listen=settings.listen)
     finally:
         await runner.aclose()
 

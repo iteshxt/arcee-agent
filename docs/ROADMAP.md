@@ -162,8 +162,8 @@ Before starting: check Python 3.14 wheels for faster-whisper/CTranslate2 and onn
 - [x] Digest after every task, in the background, on the Core's cheap model: a summary and up to five lasting facts, updating known facts instead of repeating them
 - [ ] Nightly day and week summaries
 - [x] Memory page: each fact with its source and date, edit, forget with Undo, tell Arcee something, export JSON, and a switch to stop learning
-- [x] Wake word, VAD and speech-to-text on this computer through sherpa-onnx (decision 0015): "hey Arcee" and "Arcee stop" by keyword spotting (no training), Silero VAD, Moonshine base (0.34-0.57 s a request once loaded); models downloaded on request from the app; Groq Whisper as the alternative
-- [ ] The voice gate measured with the user's own voice (end of speech to transcript under 1.5 s)
+- [x] Voice in two tiers (decision 0015): "hey Arcee" and "Arcee stop" heard on this computer by sherpa-onnx keyword spotting (no training), Silero VAD cutting out the request, which alone goes to Groq's Whisper; the 7 MB of models downloaded from the app. A local speech-to-text model (Moonshine) was built, measured and dropped
+- [ ] The voice gate measured with the user's own voice (end of speech to transcript under 1.5 s; Groq answered in 0.4-0.8 s for 2.6-3.5 s requests, once hung for 20 s, now retried after 8 s)
 - [ ] Spoken replies: sherpa-onnx 2.0.1 has no Piper frontend (espeak-ng), and no older release supports Python 3.14; speech-dispatcher or another route
 - [ ] Follow-up mode, optional per-user verifier
 
