@@ -34,6 +34,7 @@ DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
 WEB: Final = ("web.*",)
 MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
+MAIL: Final = ("mail.*",)
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -82,9 +83,11 @@ _GROUPS: Final = (
         ),
     ),
 )
+# Mail is the mail tools' (Gmail over IMAP, decision 0017), not the browser's: only
+# "in Chrome", a site or the page itself bring the browser.
 _BROWSER_REQUEST: Final = _words(
-    r"\b(browser|chrome|tabs?|gmail|e-?mails?|mail|inbox|youtube|my account|"
-    r"log ?in|sign ?in|click|this page|the page|open page|site i)\b"
+    r"\b(browser|chrome|tabs?|youtube|my account|log ?in|sign ?in|click|this page|the page|"
+    r"open page|site i)\b"
 )
 _WEB_REQUEST: Final = _words(
     r"\b(web|websites?|internet|google|search (the|for|online)|look up|news|weather|"
@@ -120,6 +123,10 @@ _MEDIA_REQUEST: Final = _words(
 _CALENDAR_REQUEST: Final = _words(
     r"\b(calendar|schedule|agenda|meetings?|appointments?|events?|busy|free (time|on|at|"
     r"this|tomorrow|today)|am i free|reschedule|book (a|an|time)|remind me on|holidays?)\b"
+)
+_MAIL_REQUEST: Final = _words(
+    r"\b(e-?mails?|mails?|gmail|inbox|unread|drafts?|reply|forward|newsletters?|"
+    r"attachments?|sent me|wrote to me|message from)\b"
 )
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
@@ -180,6 +187,18 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
         for call in m.tool_calls
         if (name := call.name.split("_", 1)[0]) in _NAMESPACE_GROUP
     }
+    namespaces = {c.split("_", 1)[0] for c in _called(messages)}
+    # The user's own services (mail, calendar, music): a request about them is recognised,
+    # and needs no local tools unless it names files ("save the email to Documents").
+    services = [
+        group
+        for group, pattern, namespace in (
+            (MEDIA, _MEDIA_REQUEST, "media"),
+            (CALENDAR, _CALENDAR_REQUEST, "calendar"),
+            (MAIL, _MAIL_REQUEST, "mail"),
+        )
+        if pattern.search(request) or namespace in namespaces
+    ]
     browser = BROWSER in used or bool(_BROWSER_REQUEST.search(request))
     web = WEB in used or bool(_WEB_REQUEST.search(request))
     words = _ADDRESS.sub(" ", request)  # example.com is not a file extension
@@ -189,9 +208,9 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
     just_open = bool(_JUST_OPEN.search(words)) and not _ADDRESS.search(request)
     if just_open and _BROWSER_APP.search(words):
         browser = False  # "Open Chrome": the app, and nothing to do in a page
-    if (browser or web) and not _CLEARLY_LOCAL.search(words):
+    if (browser or web or services) and not _CLEARLY_LOCAL.search(words):
         local = [g for g in local if g in used or (just_open and g == APPS)]
-    if not local and not (browser or web) and not used:
+    if not local and not (browser or web or services) and not used:
         if _CHAT.search(request):
             return CONTROL
         if _QUESTION.search(request):
@@ -209,11 +228,8 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
         filters += BROWSER
     if web:
         filters += WEB
-    namespaces = {c.split("_", 1)[0] for c in _called(messages)}
-    if _MEDIA_REQUEST.search(request) or "media" in namespaces:
-        filters += MEDIA
-    if _CALENDAR_REQUEST.search(request) or "calendar" in namespaces:
-        filters += CALENDAR
+    for group in services:
+        filters += group
     return filters
 
 

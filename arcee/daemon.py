@@ -114,6 +114,13 @@ DOING: Final = {
     "calendar_add": "Adding {} to your calendar",
     "calendar_update": "Changing {}",
     "calendar_delete": "Deleting {}",
+    "mail_list": "Checking your inbox",
+    "mail_search": "Searching your mail for {}",
+    "mail_read": "Reading the email",
+    "mail_attachments": "Saving the attachments",
+    "mail_draft": "Writing a draft",
+    "mail_send": "Sending the email",
+    "mail_update": "Tidying your mail",
 }
 THINKING: Final = "Thinking…"
 SUBJECT_ARGS: Final = ("name", "app", "url", "query", "path", "what", "target", "title")

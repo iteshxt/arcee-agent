@@ -16,6 +16,7 @@ from arcee.tools.files import (
     FsUsage,
     FsWrite,
 )
+from arcee.tools.mail import mail_tools
 from arcee.tools.media import MediaControl, MediaNowPlaying
 from arcee.tools.memory import Memory, memory_tools
 from arcee.tools.registry import Registry
@@ -55,6 +56,7 @@ def builtin_registry(
             MediaControl(),
             MediaNowPlaying(),
             *calendar_tools(),
+            *mail_tools(),
             WebFetch(),
             *browser_tools(browser),
             *desktop_tools(),
