@@ -6,7 +6,8 @@ a small keyword spotter sees the audio until it hears "hey Arcee"; Silero VAD th
 cuts out the request that follows. Tier two is Groq's Whisper, which transcribes that
 request, and only that: nothing before the wake word is stored or sent. "Arcee stop"
 stops what is running, with no transcription at all. The two small models (7 MB)
-are downloaded on request (`download`) into the data folder.
+are downloaded on request (`download`) into the data folder. A wake word the user
+trained to their own voice (wake_match) is heard alongside the spotter.
 """
 
 import array
@@ -24,6 +25,7 @@ from typing import Any, Final
 
 import httpx
 
+from arcee import wake_match
 from arcee.context.store import data_dir
 from arcee.voice import RATE, RECORD_COMMAND, VoiceError
 
@@ -86,6 +88,8 @@ NO_REQUEST_S: Final = 6.0
 # Running it on every frame cost 3.5% of a core in a quiet room; the VAD costs 0.7%.
 PREROLL_FRAMES: Final = 10
 HANGOVER_FRAMES: Final = 8
+# A trained wake word (wake_match) is checked every this many frames of speech (160 ms).
+MATCH_EVERY: Final = 2
 
 
 def models_dir() -> Path:
@@ -205,11 +209,17 @@ class WakeListener:
         self._on_level = on_level
         self._command = command
         self.paused = False  # the mic button records on its own meanwhile
+        self.trained: wake_match.Trained | None = None  # the user's own, when trained
+
+    def reload(self) -> None:
+        """Take up a newly trained (or forgotten) wake word."""
+        self.trained = wake_match.load()
 
     async def run(self) -> None:
         if missing_models := [m.name for m in (SPOTTER, VAD) if not installed(m)]:
             raise VoiceError(f"voice models not downloaded: {', '.join(missing_models)}")
         spotter, vad = await asyncio.to_thread(lambda: (make_spotter(self._keywords), make_vad()))
+        self.reload()
         try:
             process = await asyncio.create_subprocess_exec(
                 *self._command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
@@ -228,6 +238,8 @@ class WakeListener:
         from arcee.voice import level
 
         stream = spotter.create_stream()
+        heard = wake_match.Features()  # the speech so far, for a trained wake word
+        frames_spotted = 0
         hearing: bytearray | None = None  # the request after the wake word
         heard_for = 0.0
         recent: deque[list[float]] = deque(maxlen=PREROLL_FRAMES)
@@ -273,6 +285,7 @@ class WakeListener:
                 if not spotting:
                     spotting = True
                     stream = spotter.create_stream()
+                    heard, frames_spotted = wake_match.Features(), 0
                     feed = list(recent)  # the start of "hey", heard before the VAD was sure
                 else:
                     feed = [frame]
@@ -287,12 +300,67 @@ class WakeListener:
             for piece in feed:
                 stream.accept_waveform(RATE, piece)
             found = _spot(spotter, stream)
+            if (trained := self.trained) is not None and not found:
+                for piece in feed:
+                    heard.push(piece)
+                frames_spotted += 1
+                if (
+                    frames_spotted % MATCH_EVERY == 0
+                    and len(heard.frames) >= trained.shortest
+                    and trained.heard(list(heard.frames))
+                ):
+                    found = WAKE
             if found == STOP:
                 self._on_stop()
             elif found == WAKE:
                 self._on_wake()
                 hearing, heard_for, spotting = bytearray(), 0.0, False
                 vad.reset()
+
+
+# Training (wake_match) waits this long for each phrase to start.
+PHRASE_WAIT_S: Final = 8.0
+
+
+async def record_phrase(
+    on_level: Callable[[float], None] = lambda loudness: None,
+    command: tuple[str, ...] = RECORD_COMMAND,
+    vad: Any = None,
+) -> list[float]:
+    """One spoken phrase from the microphone, cut out by the VAD, as samples."""
+    from arcee.voice import level
+
+    vad = vad if vad is not None else await asyncio.to_thread(make_vad)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        )
+    except FileNotFoundError as exc:
+        raise VoiceError("pw-record is missing (PipeWire's tools)") from exc
+    assert process.stdout is not None
+    waited = 0.0
+    try:
+        while True:
+            try:
+                chunk = await process.stdout.readexactly(FRAME * 2)
+            except asyncio.IncompleteReadError as exc:
+                raise VoiceError("the microphone stopped") from exc
+            on_level(level(chunk))
+            vad.accept_waveform(samples(chunk))
+            if not vad.empty():
+                phrase = list(vad.front.samples)
+                vad.pop()
+                vad.reset()
+                return phrase
+            waited += FRAME / RATE
+            if waited >= PHRASE_WAIT_S and not vad.is_speech_detected():
+                raise VoiceError("I did not hear anything")
+            if waited >= PHRASE_WAIT_S + MAX_REQUEST_S:
+                raise VoiceError("that went on too long")
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            process.terminate()
+        await process.wait()
 
 
 def _spot(spotter: Any, stream: Any) -> str:

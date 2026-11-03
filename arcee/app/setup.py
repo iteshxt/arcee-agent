@@ -26,7 +26,7 @@ WEBSITE: Final = "https://iteshxt.me"
 APP_ICON: Final = "me.iteshxt.Arcee"
 
 # Run work off the GTK thread; the callback gets its result back on it.
-Runner = Callable[..., None]  # (work, done[, failed]), as Background.run
+Runner = Callable[..., object]  # (work, done[, failed]), as Background.run
 
 
 class SetupDialog(Adw.Dialog):

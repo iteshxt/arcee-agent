@@ -530,6 +530,138 @@ async def browser_reload() -> int:
     return 0
 
 
+async def voice_test(seconds: float, file: str | None) -> int:
+    """Record (or read) a few seconds and show what tier one hears: speech, words, wake."""
+    import wave
+
+    from arcee import voice_local, wake_match
+    from arcee.voice import RECORD_COMMAND, Transcriber, VoiceError
+
+    if missing := voice_local.missing():
+        print(f"voice models not downloaded: {', '.join(m.name for m in missing)}")
+        return 2
+    saved = data_dir() / "voice-test.wav"
+    if file:
+        with wave.open(file) as w:
+            pcm = w.readframes(w.getnframes())
+    else:
+        print(f'Recording {seconds:g} s: say "Hey Arcee" three times, with a pause between...')
+        process = await asyncio.create_subprocess_exec(
+            *RECORD_COMMAND, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        )
+        assert process.stdout is not None
+        pcm = await process.stdout.readexactly(int(seconds * 16000) * 2)
+        process.terminate()
+        await process.wait()
+        with wave.open(str(saved), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(pcm)
+        print(f"saved: {saved} (stays on this computer)")
+    samples = voice_local.samples(pcm)
+
+    # Speech: what the VAD cut out, and what Whisper hears in each piece.
+    vad = voice_local.make_vad()
+    pieces: list[list[float]] = []
+    for start in range(0, len(samples), voice_local.FRAME):
+        vad.accept_waveform(samples[start : start + voice_local.FRAME])
+        while not vad.empty():
+            pieces.append(list(vad.front.samples))
+            vad.pop()
+    vad.flush()
+    while not vad.empty():
+        pieces.append(list(vad.front.samples))
+        vad.pop()
+    print(f"\nspeech: {len(pieces)} piece(s) heard")
+    transcriber = Transcriber()
+    for n, piece in enumerate(pieces, 1):
+        try:
+            words = await transcriber.transcribe(voice_local._pcm(piece))  # pyright: ignore[reportPrivateUsage]
+        except VoiceError as exc:
+            words = f"(not transcribed: {exc})"
+        print(f"  {n}. {len(piece) / 16000:.1f} s: {words!r}")
+
+    # The wake word: each spelling, at the listener's sensitivity and lower ones.
+    print(
+        "\nwake word (times heard, by spelling and threshold; the listener uses "
+        f"{voice_local.THRESHOLD}):"
+    )
+    lines = [line for line in voice_local.KEYWORDS.splitlines() if "@HEY_ARCEE" in line]
+    for line in lines:
+        tokens = line.split(" @")[0]
+        counts: list[str] = []
+        for threshold in (voice_local.THRESHOLD, 0.15, 0.1, 0.06):
+            spotter = voice_local.make_spotter(f"{tokens} :1.5 #{threshold} @HIT\n")
+            stream = spotter.create_stream()
+            hits = 0
+            for start in range(0, len(samples) + 8000, voice_local.FRAME):
+                piece = samples[start : start + voice_local.FRAME] or [0.0] * voice_local.FRAME
+                stream.accept_waveform(16000, piece)
+                while spotter.is_ready(stream):
+                    spotter.decode_stream(stream)
+                    if spotter.get_result(stream):
+                        hits += 1
+                        spotter.reset_stream(stream)
+            counts.append(f"{threshold}: {hits}")
+        print(f"  {tokens:24} " + "   ".join(counts))
+    voice_local.make_spotter()  # the listener's own keywords file back as it was
+    if (trained := wake_match.load()) is not None:
+        heard = wake_match.log_mel(samples)
+        closest = min(
+            trained.closest(wake_match.normalise(heard[i : i + wake_match.WINDOW]))
+            for i in range(0, max(1, len(heard) - wake_match.WINDOW + 1), 8)
+        )
+        verdict = "wakes" if closest <= trained.threshold else "does not wake"
+        print(
+            f"\nyour trained wake word: closest {closest:.3f} "
+            f"(wakes at {trained.threshold:.3f} or less): {verdict}"
+        )
+    return 0
+
+
+async def voice_train(forget: bool) -> int:
+    """Train the wake word on the user's voice: three "Hey Arcee"s and a sentence."""
+    from arcee import voice_local, wake_match
+    from arcee.voice import VoiceError
+
+    if forget:
+        wake_match.forget()
+        await wake_match.hold_wake(False)  # arceed takes it up
+        print("Forgotten: the wake word is heard by the general model only.")
+        return 0
+    if missing := voice_local.missing():
+        print(f"voice models not downloaded: {', '.join(m.name for m in missing)}")
+        return 2
+    vad = voice_local.make_vad()
+    print("Training “Hey Arcee” on your voice. Speak as you normally would, from where")
+    print("you usually sit. (Arcee stops listening for it until this is done.)\n")
+    await wake_match.hold_wake(True)
+    try:
+        samples: list[list[float]] = []
+        for n in range(1, wake_match.SAMPLES + 1):
+            print(f"  {n}/{wake_match.SAMPLES}  say “Hey Arcee”... ", end="", flush=True)
+            samples.append(await voice_local.record_phrase(vad=vad))
+            print(f"got it ({len(samples[-1]) / 16000:.1f} s)")
+        print("\n  Now an ordinary sentence, for example “Hey, what's the weather like")
+        print("  today?”... ", end="", flush=True)
+        other = await voice_local.record_phrase(vad=vad)
+        print("got it\n")
+        training = wake_match.train(samples, other)
+    except VoiceError as exc:
+        print(f"\nNot trained: {exc}. Run it again to retry.")
+        await wake_match.hold_wake(False)
+        return 1
+    wake_match.save(training.trained)
+    await wake_match.hold_wake(False)  # arceed hears it from now on
+    print(
+        f"Trained. Your samples were {training.spread:.3f} apart; the sentence came to "
+        f"{training.other:.3f}; it wakes at {training.trained.threshold:.3f} or closer."
+    )
+    print("Kept: the sound of the samples (not the audio), in", wake_match.trained_path())
+    return 0
+
+
 async def memory_learn(core: str, host: str, limit: int, facts: bool) -> int:
     """Digest past tasks that have no summary: what memory would have learned then."""
     from arcee.context.digest import digest_task
@@ -603,6 +735,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="neither recall memory nor remember this task (tests, throwaway runs)",
     )
+
+    voice_cmd = sub.add_parser(
+        "voice-test", help="record a few seconds and show what the wake word listener hears"
+    )
+    voice_cmd.add_argument("--seconds", type=float, default=10.0)
+    voice_cmd.add_argument("--file", help="analyse this recording (16 kHz mono WAV) instead")
+
+    train_cmd = sub.add_parser("voice-train", help='train "Hey Arcee" to your voice')
+    train_cmd.add_argument("--forget", action="store_true", help="forget the trained wake word")
 
     learn_cmd = sub.add_parser(
         "memory-learn", help="learn from past tasks that have no summary yet (memory)"
@@ -680,6 +821,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(browser_check())
         if args.command == "browser-reload":
             return asyncio.run(browser_reload())
+        if args.command == "voice-train":
+            return asyncio.run(voice_train(args.forget))
+        if args.command == "voice-test":
+            return asyncio.run(voice_test(args.seconds, args.file))
         if args.command == "memory-learn":
             facts = args.facts or args.core != "local"
             return asyncio.run(memory_learn(args.core, _host(args.host), args.n, facts))

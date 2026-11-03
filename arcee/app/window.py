@@ -8,6 +8,7 @@ restarted when it is idle, so the next request uses them.
 """
 
 import asyncio
+import concurrent.futures
 import os
 import subprocess
 import sys
@@ -76,14 +77,18 @@ class Background:
         work: Coroutine[Any, Any, T],
         done: Callable[[T], None],
         failed: Callable[[BaseException], None] = lambda exc: None,
-    ) -> None:
+    ) -> concurrent.futures.Future[T]:
+        """Run `work`; its future, which `cancel()` stops (and then calls neither)."""
         future = asyncio.run_coroutine_threadsafe(work, self._loop)
 
         def finish(f: Any) -> None:
+            if f.cancelled():
+                return
             exc = f.exception()
             GLib.idle_add(lambda: (failed(exc) if exc else done(f.result())) and False)
 
         future.add_done_callback(finish)
+        return future
 
 
 def restart_daemon_when_idle(background: Background, told: Callable[[str], None]) -> None:

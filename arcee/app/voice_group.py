@@ -16,10 +16,11 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from arcee import voice_local  # noqa: E402
+from arcee import voice_local, wake_match  # noqa: E402
+from arcee.app.wake_training import WakeTrainingDialog  # noqa: E402
 from arcee.voice_local import MODELS, VoiceModel, installed  # noqa: E402
 
-Runner = Callable[..., None]  # (work, done[, failed]), as Background.run
+Runner = Callable[..., Any]  # (work, done[, failed]), as Background.run
 
 
 class VoiceGroup(Adw.PreferencesGroup):
@@ -51,6 +52,43 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._listen.add_suffix(self._progress)
         self.add(self._listen)
 
+        # Training: the spotter's English model misses "Arcee" in some voices and mics.
+        self._train = Adw.ActionRow(title="Your voice")
+        self._forget = Gtk.Button(
+            icon_name="user-trash-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text="Forget the training",
+        )
+        self._forget.add_css_class("flat")
+        self._forget.connect("clicked", lambda _b: self._forget_training())
+        self._train_button = Gtk.Button(valign=Gtk.Align.CENTER)
+        self._train_button.connect("clicked", lambda _b: self._open_training())
+        self._train.add_suffix(self._forget)
+        self._train.add_suffix(self._train_button)
+        self.add(self._train)
+        self._show_training()
+
+    def _show_training(self) -> None:
+        trained = wake_match.trained_path().is_file()
+        self._train.set_subtitle(
+            "Trained: “Hey Arcee” is matched to how you say it."
+            if trained
+            else "Not trained. If “Hey Arcee” does not wake it, say it a few times so Arcee "
+            "learns how you say it."
+        )
+        self._train_button.set_label("Train again…" if trained else "Train…")
+        self._forget.set_visible(trained)
+        self._train.set_sensitive(self._settings.listen)
+
+    def _open_training(self) -> None:
+        WakeTrainingDialog(self._run, self._show_training).present(self.get_root())
+
+    def _forget_training(self) -> None:
+        wake_match.forget()
+        self._run(wake_match.hold_wake(False), lambda _none: None)  # arceed forgets it too
+        self._show_training()
+        self._toast("Forgot the training.")
+
     def _on_listen(self, row: Adw.SwitchRow, _param: Any) -> None:
         on = row.get_active()
         if on == self._settings.listen:
@@ -63,6 +101,7 @@ class VoiceGroup(Adw.PreferencesGroup):
             return
         self._settings.listen = on
         self._saved()  # arceed starts again with the listener on or off
+        self._show_training()
 
     def _confirm(self, models: list[VoiceModel]) -> None:
         size = sum(m.size_mb for m in models)
@@ -97,6 +136,8 @@ class VoiceGroup(Adw.PreferencesGroup):
             self._listen.set_sensitive(True)
             self._progress.set_visible(False)
             self._listen.set_active(True)  # now that the models are here
+            if not wake_match.trained_path().is_file():
+                self._open_training()  # as phones do when the assistant is first turned on
 
         def failed(error: BaseException) -> None:
             self._listen.set_sensitive(True)

@@ -220,3 +220,61 @@ async def test_speech_reaches_the_spotter_with_what_came_just_before() -> None:
     await task
 
     assert spotter.frame == 5  # the four quiet frames before it, then the fifth
+
+
+class Trained:
+    """A stand-in trained wake word: heard at its `after`th check, and only then."""
+
+    def __init__(self, after: int) -> None:
+        self.after = after
+        self.checks = 0
+        self.shortest = 1
+
+    def heard(self, recent: list[list[float]]) -> bool:
+        self.checks += 1
+        return self.checks == self.after
+
+
+async def test_a_trained_wake_word_wakes_when_the_spotter_does_not() -> None:
+    events: list[Any] = []
+    woken = listener(events)
+    woken.trained = Trained(after=2)  # pyright: ignore[reportAttributeAccessIssue]
+
+    await woken._listen(audio(12), Spotter({}), Vad(speech_frames=3))
+
+    assert events == ["wake", ("request", 3 * FRAME * 2)]
+
+
+async def test_a_trained_wake_word_is_only_checked_while_someone_speaks() -> None:
+    events: list[Any] = []
+    quiet = listener(events)
+    trained = Trained(after=1)
+    quiet.trained = trained  # pyright: ignore[reportAttributeAccessIssue]
+
+    await quiet._listen(audio(10), Spotter({}), Vad(speech_frames=3, talking=False))
+
+    assert trained.checks == 0
+    assert events == []
+
+
+async def test_a_phrase_is_recorded_until_the_speaker_stops() -> None:
+    script = "import sys; sys.stdout.buffer.write(b'\\x10\\x00' * 1280 * 6)"
+    vad = Vad(speech_frames=4)
+    levels: list[float] = []
+
+    phrase = await voice_local.record_phrase(
+        levels.append, command=("python3", "-c", script), vad=vad
+    )
+
+    assert len(phrase) == 4 * FRAME
+    assert len(levels) == 4
+
+
+async def test_no_phrase_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(voice_local, "PHRASE_WAIT_S", 2 * FRAME / 16000)
+    script = "import sys; sys.stdout.buffer.write(b'\\x00\\x00' * 1280 * 6)"
+
+    with pytest.raises(VoiceError, match="did not hear anything"):
+        await voice_local.record_phrase(
+            command=("python3", "-c", script), vad=Vad(speech_frames=None, talking=False)
+        )

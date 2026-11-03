@@ -305,3 +305,31 @@ async def test_waking_without_a_request_says_so(bus_address: str) -> None:
     assert not service.busy
     bus.disconnect()
     service_bus.disconnect()
+
+
+async def test_training_holds_the_wake_word_then_it_takes_up_what_was_trained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from arcee import daemon, wake_match
+    from arcee.voice_local import WakeListener
+
+    service = AgentService(FakeRunner(), transcriber=FakeTranscriber())  # pyright: ignore[reportArgumentType]
+    listener = WakeListener(
+        on_wake=lambda: None, on_request=lambda _pcm: None, on_stop=lambda: None
+    )
+    service.wake = listener
+    trained = wake_match.Trained([[[1.0]]], 0.2)
+    monkeypatch.setattr(wake_match, "load", lambda: trained)
+
+    service.HoldWake(True)
+    assert listener.paused
+    assert listener.trained is None
+
+    service.HoldWake(False)
+    assert not listener.paused
+    assert listener.trained is trained
+
+    monkeypatch.setattr(daemon, "HOLD_WAKE_S", 0.05)
+    service.HoldWake(True)  # and nothing says it is done: it comes back by itself
+    await asyncio.sleep(0.15)
+    assert not listener.paused
