@@ -205,8 +205,11 @@ class _State:
     prelude: int = 1
     start: int = 1
     handoffs: list[Handoff] = field(default_factory=list[Handoff])
-    # What Arcee remembers that matters for the request or the current step.
+    # What Arcee remembers that matters for the request or the current step, and the
+    # conversation's earlier turns when the request continues one.
     memory: str = ""
+    # The conversation's earlier requests: their tools are offered again ("and tomorrow?").
+    earlier: Sequence[str] = ()
     # The request was transcribed from speech: a word may be a mishearing.
     spoken: bool = False
 
@@ -260,14 +263,25 @@ class Agent:
             self._emit(Guarded(state.steps, f"memory unavailable ({error})"))
             state.memory = ""
 
-    async def run(self, request: str, *, task_id: str = "t_1", spoken: bool = False) -> Outcome:
-        state = _State([Message("user", request)], spoken=spoken)
+    async def run(
+        self,
+        request: str,
+        *,
+        task_id: str = "t_1",
+        spoken: bool = False,
+        conversation: str = "",
+        earlier: Sequence[str] = (),
+    ) -> Outcome:
+        """`conversation`: the earlier turns this request continues (Conversation.render),
+        and `earlier` their requests."""
+        state = _State([Message("user", request)], spoken=spoken, earlier=earlier)
         state.task_tier = min(self._start_tier(request), len(self._ladder) - 1)
         state.base_tier = state.tier = state.task_tier
         ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
         try:
             async with asyncio.timeout(self._limits.max_seconds):
                 await self._remember(state, request, task_id)
+                state.memory = "\n\n".join(x for x in (conversation, state.memory) if x)
                 planned = self._planner is not None and self._plan_if(request)
                 if planned and (failed := await self._plan(state, request)):
                     return failed
@@ -345,7 +359,7 @@ class Agent:
 
     def _offered(self, state: _State, step: PlanStep | None) -> list[AnyTool]:
         """The step's tools, the request's tool groups and the control tools."""
-        request_tools = self._registry.select(filters_for(state.messages))
+        request_tools = self._registry.select(filters_for(state.messages, earlier=state.earlier))
         if step is None:
             return request_tools
         # A step's tools are the Planner's hint, not a limit: the groups the request

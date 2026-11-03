@@ -13,11 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from arcee.context.conversation import Conversation, Turn
 from arcee.context.digest import digest_task
 from arcee.context.examples import ExampleLibrary
 from arcee.context.recall import recall
 from arcee.context.store import Store, data_dir
-from arcee.core.agent import DEFAULT_LIMITS, Agent, Event, Limits, Planned
+from arcee.core.agent import DEFAULT_LIMITS, Agent, Event, Limits, Planned, ToolRan
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
 from arcee.core.planner import Planner, needs_plan
@@ -126,20 +127,29 @@ class TaskRunner:
         on_event: Callable[[Event], None],
         *,
         spoken: bool = False,
+        conversation: Conversation | None = None,
     ) -> TaskResult:
         """Run `request` to its end and record it. A cancel is recorded, then re-raised;
         `stopped` names the cancel the user asked for (Stop) instead of an interrupt.
-        `spoken`: the request was transcribed from speech, so words may be misheard."""
+        `spoken`: the request was transcribed from speech, so words may be misheard.
+        `conversation`: the turns it continues; it is added to it as the next one."""
         if not self._usable:
             _, problem = await self.check()
             if problem:
                 raise ModelUnavailableError(problem)
         plans: list[PlannerOutput] = []
+        did: list[str] = []
 
         def record(event: Event) -> None:
             if isinstance(event, Planned):
                 plans.append(event.plan)
+            if isinstance(event, ToolRan) and event.result.status == "ok":
+                did.append(f"{event.result.tool}: {event.result.summary}")
             on_event(event)
+
+        def turn(status: str, reply: str) -> None:
+            if conversation is not None:
+                conversation.add(Turn(request, reply, status, tuple(did)))
 
         planner = (
             None
@@ -165,12 +175,19 @@ class TaskRunner:
         started = time.monotonic()
         self.stopped = False
         try:
-            outcome = await agent.run(request, task_id=task_id, spoken=spoken)
+            outcome = await agent.run(
+                request,
+                task_id=task_id,
+                spoken=spoken,
+                conversation=conversation.render() if conversation else "",
+                earlier=conversation.requests() if conversation else (),
+            )
         except ModelUnavailableError as exc:
             await self._finish(task_id, "failed", f"model unavailable: {exc}", plans)
             raise
         except asyncio.CancelledError:
             status = "stopped" if self.stopped else "cancelled"
+            turn(status, "")
             await asyncio.shield(self._finish(task_id, status, "", plans))
             raise
         except Exception as exc:
@@ -185,6 +202,7 @@ class TaskRunner:
             model_calls=outcome.model_calls,
             plan=plans[-1] if plans else None,
         )
+        turn(outcome.status, outcome.reply)
         if self.memory:
             self._digest_later(task_id)
         return TaskResult(

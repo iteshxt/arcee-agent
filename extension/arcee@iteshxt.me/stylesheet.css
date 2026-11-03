@@ -301,6 +301,13 @@
   font-size: 9.75pt;
 }
 
+/* Under the last reply: the conversation is open. */
+.arcee-cue-hint {
+  color: rgba(246, 241, 236, 0.5);
+  font-size: 8.5pt;
+  padding-top: 3px;
+}
+
 /* Arcee's answer: easy to read, as long as it needs. */
 .arcee-cue-reply {
   color: #f3e7dc;

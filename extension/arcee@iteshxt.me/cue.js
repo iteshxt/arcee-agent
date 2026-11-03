@@ -1,8 +1,11 @@
 // Arcee's pill at the top centre: when Arcee hears "hey Arcee" (or the mic is pressed),
 // its ring appears, pulsing with the voice. Beside it, what the user said and what
 // Arcee is doing about it, step by step, for as long as the request runs; then Arcee's
-// reply, the pill growing to hold it, until the user has read it (Esc, or a click
-// anywhere, puts it away). A spoken request can be followed without opening the panel.
+// reply, the pill growing to hold it. The pill is the conversation: it stays, with the
+// last reply, until the user closes it (Esc, or a click anywhere), and "hey Arcee"
+// while it shows goes on with the same conversation (arceed gives the next request
+// the turns before it; closing the pill ends it). A spoken request can be followed
+// without opening the panel.
 // While a request runs it has a Stop button; while Arcee holds the screen (control.js)
 // it shows too, typed requests included, and offers Resume once the user takes over.
 // Esc, while a request runs, stops everything.
@@ -41,10 +44,6 @@ const REPLY_WIDTH_PX = 560; // a reply wraps at this width
 const WAIT_LISTENING_MS = 30000;
 const WAIT_HEARD_MS = 60000;
 const SILENT_RUN_MS = 15 * 60000;
-// The reply stays long enough to read, and longer for a longer one.
-const REPLY_MS = 8000;
-const REPLY_MS_PER_CHAR = 60;
-const REPLY_LONGEST_MS = 45000;
 const ERROR_MS = 3500;
 const STOPPED_MS = 1200;
 
@@ -66,10 +65,17 @@ function fromUser(event) {
 const PRESSES = new Set([Clutter.EventType.BUTTON_PRESS, Clutter.EventType.TOUCH_BEGIN]);
 
 export class ListeningCue {
-    // `onStop` for its Stop button and Esc, `onResume` for Resume.
-    constructor(path, {onStop = () => {}, onResume = () => {}} = {}) {
+    // `onStop` for its Stop button and Esc while something runs, `onResume` for Resume,
+    // `onDismiss` when the user closes the pill (the conversation ends).
+    constructor(path, {onStop = () => {}, onResume = () => {}, onDismiss = () => {}} = {}) {
         this._onStop = onStop;
         this._onResume = onResume;
+        this._onDismiss = onDismiss;
+        // A request has run since the pill opened: it stays, as the conversation, with
+        // the last reply to come back to.
+        this._conversation = false;
+        this._lastSaid = '';
+        this._lastReply = '';
         this._phase = ''; // 'listening', 'transcribing', 'working', 'done'
         this._step = '';
         this._control = 'off';
@@ -105,7 +111,11 @@ export class ListeningCue {
             style_class: 'arcee-cue-text', orientation: Clutter.Orientation.VERTICAL,
             y_align: Clutter.ActorAlign.CENTER, visible: false,
         });
-        for (const label of [this._said, this._doing, this._reply])
+        this._hint = new St.Label({
+            style_class: 'arcee-cue-hint', visible: false,
+            text: 'Say “Hey Arcee” to go on  ·  Esc to close',
+        });
+        for (const label of [this._said, this._doing, this._reply, this._hint])
             this._text.add_child(label);
         this._resume = new St.Button({
             style_class: 'arcee-cue-button', label: 'Resume', visible: false,
@@ -140,7 +150,7 @@ export class ListeningCue {
     show() {
         this._open('', 'Listening…');
         this._phase = 'listening';
-        this._expire(WAIT_LISTENING_MS);
+        this._expire(WAIT_LISTENING_MS, () => this._settle());
     }
 
     // Shown for a request already running (Arcee took the screen for a typed one).
@@ -165,7 +175,7 @@ export class ListeningCue {
             return;
         this._phase = 'working';
         this._set(`“${shorten(text)}”`, 'Starting…');
-        this._expire(WAIT_HEARD_MS);
+        this._expire(WAIT_HEARD_MS, () => this._settle());
     }
 
     // A request is running (Stop shown, and the pill stays) or not.
@@ -173,7 +183,8 @@ export class ListeningCue {
         this._stop.visible = on;
         if (on) {
             this._phase = 'working';
-            this._expire(SILENT_RUN_MS);
+            this._conversation = true;
+            this._expire(SILENT_RUN_MS, () => this._settle());
         }
         this._place();
     }
@@ -185,7 +196,7 @@ export class ListeningCue {
         this._step = text;
         if (this._control !== 'paused')
             this._set(null, text);
-        this._expire(SILENT_RUN_MS);
+        this._expire(SILENT_RUN_MS, () => this._settle());
     }
 
     // Arcee's control of the screen: 'active', 'paused' (the user took over) or 'off'.
@@ -204,20 +215,27 @@ export class ListeningCue {
             this._place();
     }
 
-    // Done: Arcee's reply, the pill as big as it needs, until it has been read (or Esc,
-    // or a click anywhere). `request` is shown above it when the pill was not up.
+    // Done: Arcee's reply, the pill as big as it needs. It stays (the conversation goes
+    // on) until the user closes it. `request` is shown above it when the pill was not up.
     reply(text, request = '') {
         if (!this._frames.length)
             return;
         if (!this.visible)
             this._open(request ? `“${shorten(request)}”` : '', '');
-        this._phase = 'done';
-        this._stop.visible = false;
-        this._resume.visible = false;
         // The models write Markdown: shown formatted, its line breaks (lists) kept.
         let words = (text ?? '').trim();
         if (words.length > REPLY_CHARS)
             words = `${words.slice(0, REPLY_CHARS - 1)}… (the rest is in Arcee)`;
+        this._conversation = true;
+        this._lastSaid = this._said.text;
+        this._lastReply = words;
+        this._showReply(words);
+    }
+
+    _showReply(words) {
+        this._phase = 'done';
+        this._stop.visible = false;
+        this._resume.visible = false;
         this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
         this._doing.visible = false;
         this._reply.set_size(-1, -1);
@@ -234,9 +252,36 @@ export class ListeningCue {
         const width = Math.min(REPLY_WIDTH_PX, Math.ceil(natural));
         const [, height] = this._reply.get_preferred_height(width);
         this._reply.set_size(width, Math.ceil(height));
+        this._hint.visible = true;
         this._text.visible = true;
         this._place();
-        this._expire(Math.min(REPLY_LONGEST_MS, REPLY_MS + words.length * REPLY_MS_PER_CHAR));
+        this._clearLimit(); // it stays: the user closes it
+    }
+
+    // Nothing more is coming (no words after the wake word, an error shown, a step
+    // that never ended): back to the conversation's last reply, or gone if there is none.
+    _settle() {
+        if (!this._conversation) {
+            this.hide();
+            return;
+        }
+        if (this._lastReply) {
+            this._said.text = this._lastSaid;
+            this._said.visible = Boolean(this._lastSaid);
+            this._showReply(this._lastReply);
+            return;
+        }
+        this._phase = 'done';
+        this.working(false);
+        this._hint.visible = true;
+        this._place();
+        this._clearLimit();
+    }
+
+    // The user closed the pill: the conversation ends.
+    dismiss() {
+        this.hide();
+        this._onDismiss();
     }
 
     fail(text) {
@@ -245,21 +290,21 @@ export class ListeningCue {
         this.working(false);
         this._phase = 'done';
         this._set(null, text);
-        this._expire(ERROR_MS);
+        this._expire(ERROR_MS, () => this._settle());
     }
 
     // Stopped by the user (Esc, Stop): said briefly, then gone.
     stopped() {
         if (!this.visible)
             return;
-        if (this._phase === 'done') {
-            this.hide(); // only a reply showing: Esc just puts it away
-            return;
-        }
         this.working(false);
         this._phase = 'done';
         this._set(null, 'Stopped');
-        this._expire(STOPPED_MS);
+        this._hint.visible = this._conversation;
+        if (this._conversation)
+            this._clearLimit(); // the conversation goes on
+        else
+            this._expire(STOPPED_MS);
     }
 
     // How loud the voice is (0..1): the ring swells a little with it.
@@ -291,6 +336,8 @@ export class ListeningCue {
                 }
                 this._stop.visible = this._resume.visible = false;
                 this._phase = '';
+                this._conversation = false;
+                this._lastSaid = this._lastReply = '';
             },
         });
     }
@@ -316,6 +363,7 @@ export class ListeningCue {
             return;
         this._step = '';
         this._reply.visible = false;
+        this._hint.visible = false;
         this._doing.visible = true;
         this._set(said, doing);
         this._box.remove_all_transitions();
@@ -331,18 +379,21 @@ export class ListeningCue {
         this._filter ??= Clutter.Event.add_filter(global.stage, (event, actor) => this._onEvent(event, actor));
     }
 
-    // Esc stops a request (and goes no further); with only a reply showing, Esc or a
-    // click anywhere but the pill's buttons puts it away (the click still lands).
+    // Esc stops what runs (and goes no further); once done, Esc or a click anywhere but
+    // the pill's buttons closes it and ends the conversation (the click still lands).
     _onEvent(event, actor) {
         if (!fromUser(event))
             return Clutter.EVENT_PROPAGATE;
         const type = event.type();
         if (type === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
-            this._onStop();
+            if (this._phase === 'done')
+                this.dismiss();
+            else
+                this._onStop();
             return Clutter.EVENT_STOP;
         }
         if (PRESSES.has(type) && this._phase === 'done' && !(actor && this.contains(actor)))
-            this.hide();
+            this.dismiss();
         return Clutter.EVENT_PROPAGATE;
     }
 
@@ -355,6 +406,7 @@ export class ListeningCue {
         this._doing.text = shorten(doing);
         this._doing.visible = Boolean(this._doing.text);
         this._reply.visible = false;
+        this._hint.visible = false;
         this._text.visible = Boolean(this._said.text || this._doing.text);
         this._place();
     }
@@ -367,11 +419,11 @@ export class ListeningCue {
         this._box.set_position(Math.round(monitor.x + (monitor.width - width) / 2), y);
     }
 
-    _expire(ms) {
+    _expire(ms, then = () => this.hide()) {
         this._clearLimit();
         this._limit = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
             this._limit = 0;
-            this.hide();
+            then();
             return GLib.SOURCE_REMOVE;
         });
     }

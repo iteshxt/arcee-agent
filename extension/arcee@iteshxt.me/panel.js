@@ -27,6 +27,7 @@ const AGENT_INTERFACE = `
     <method name="Limits"><arg type="s" direction="out"/></method>
     <method name="StartListening"/>
     <method name="StopListening"/>
+    <method name="EndConversation"/>
     <signal name="Started"><arg type="s"/></signal>
     <signal name="Progress"><arg type="s"/></signal>
     <signal name="Step"><arg type="s"/></signal>
@@ -76,6 +77,8 @@ class ArceeIndicator extends PanelMenu.Button {
         this._cue = new ListeningCue(path, {
             onStop: () => this._stopAll(),
             onResume: resumeControl,
+            // The user closed the pill: the next request starts a new conversation.
+            onDismiss: () => this._agent.EndConversationAsync().catch(logError),
         });
         this._spoken = false; // the request under way is followed on the pill
         this._request = '';
@@ -319,6 +322,8 @@ class ArceeIndicator extends PanelMenu.Button {
         this._step = '';
         this._say(request, 'Working…', true);
         this._request = request;
+        // A request made while the pill shows (typed too) is the conversation's next turn.
+        this._spoken ||= this._cue.visible;
         if (this._spoken) {
             this._cue.heard(request);
             this._cue.working(true);
