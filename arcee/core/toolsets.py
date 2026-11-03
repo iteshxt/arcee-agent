@@ -114,6 +114,17 @@ _MEMORY: Final = _words(
 )
 # "Open X" may mean a file or an app: it brings in both.
 _OPEN: Final = _words(r"\bopen\b")
+# Only opening something ("Open Chrome.", "launch the calculator please"): one clause,
+# nothing to do once it is open. Opening the app is the whole task, so the app tools
+# stay even when it names the browser (they had been dropped for browser requests, and
+# "Open Chrome." made up a page to navigate to: chromium.org).
+_JUST_OPEN: Final = _words(
+    r"^\W*(please\s+|can you\s+|could you\s+)?(open|launch|start|bring up|switch to)\s+"
+    r"(up\s+)?(the\s+|my\s+)?(?!.*\b(and|then|to|with|for|in|on)\b)[\w .+'-]{1,40}?"
+    r"(\s+(app|application))?(\s+(please|for me|now))?\W*$"
+)
+# What a bare "open the browser" names: it needs no browser tools, only the app.
+_BROWSER_APP: Final = _words(r"\b(chrome|chromium|browser|google chrome)\b")
 # In a request about the web, only words that clearly involve this computer add local
 # tools ("save it to a file"); "Ubuntu" in a web search is not about this machine.
 _CLEARLY_LOCAL: Final = _words(
@@ -152,8 +163,11 @@ def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
     local = [g for g, pattern in _GROUPS if g in used or pattern.search(words)]
     if _OPEN.search(words):
         local += [g for g in (FILES, APPS) if g not in local]
+    just_open = bool(_JUST_OPEN.search(words)) and not _ADDRESS.search(request)
+    if just_open and _BROWSER_APP.search(words):
+        browser = False  # "Open Chrome": the app, and nothing to do in a page
     if (browser or web) and not _CLEARLY_LOCAL.search(words):
-        local = [g for g in local if g in used]
+        local = [g for g in local if g in used or (just_open and g == APPS)]
     if not local and not (browser or web) and not used:
         if _CHAT.search(request):
             return CONTROL

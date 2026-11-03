@@ -482,3 +482,23 @@ id = "chat-thanks"
 scenario = "chat"
 request = "Thanks, that's all."
 expect = { any_of = ["reply"] }
+
+# --- open-only: opening an app is the whole task --------------------------------
+
+[[case]]
+id = "open-browser-alone"
+scenario = "open-only"
+request = "Open Chrome."
+expect = { any_of = ["app.open", "app.list"], args_lack = { args = "http" } }
+
+[[case]]
+id = "open-app-alone"
+scenario = "open-only"
+request = "Open the calendar."
+expect = { any_of = ["app.open", "app.list"] }
+
+[[case]]
+id = "open-browser-then-site"
+scenario = "open-only"
+request = "Open Chrome and go to YouTube."
+expect = { any_of = ["browser.navigate", "browser.tabs"] }

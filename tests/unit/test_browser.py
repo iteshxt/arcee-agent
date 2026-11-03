@@ -13,6 +13,7 @@ from arcee.browser.host import EXTENSION_ID, HOST_NAME, encode, read_message, se
 from arcee.browser.setup import install
 from arcee.core.policy import Policy, Tier
 from arcee.core.toolsets import (
+    APPS,
     BROWSER,
     CONTROL,
     FILES,
@@ -268,6 +269,10 @@ class TestTools:
         ("Hey Arcee, thanks", CONTROL),
         ("Will it rain in Mumbai tomorrow?", CONTROL + WEB),
         ("What's the weather like today?", CONTROL + WEB),
+        # Opening an app on its own keeps the app tools; the browser alone needs no page.
+        ("Open Chrome.", FILES + APPS + CONTROL + WAIT),
+        ("Open Chrome and go to YouTube", CONTROL + WAIT + BROWSER),
+        ("Open YouTube", APPS + CONTROL + WAIT + BROWSER),
     ],
 )
 def test_tool_groups_follow_the_request(request_text: str, expected: tuple[str, ...]) -> None:

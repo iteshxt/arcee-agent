@@ -235,7 +235,8 @@ class BrowserNavigate(_BrowserTool[NavigateArgs]):
     description = "Open an address in the current Chrome tab and wait for it to load."
     usage = Usage(
         when="The user asks to go to a site, or you have a link to open in the browser.",
-        avoid="You only need the page's text: web.fetch is faster and needs no browser.",
+        avoid="You only need the page's text: web.fetch is faster and needs no browser. "
+        'Only opening the browser ("open Chrome"): app.open, with no page.',
         example='browser.navigate(url="https://mail.google.com")',
     )
     args_model = NavigateArgs
