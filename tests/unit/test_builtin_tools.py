@@ -291,6 +291,7 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
 
     assert [tool.name for tool in tools] == [
         "fs.list",
+        "fs.usage",
         "fs.read",
         "fs.search",
         "fs.trash",
@@ -337,3 +338,22 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "control.replan",
     ]
     assert all(tool.usage.when for tool in tools)
+
+
+async def test_fs_usage_adds_up_folders_largest_first(tmp_path: Path) -> None:
+    from arcee.tools.files import FsUsage, UsageArgs
+
+    (tmp_path / "big").mkdir()
+    (tmp_path / "big" / "a.bin").write_bytes(b"x" * 400_000)
+    (tmp_path / "small").mkdir()
+    (tmp_path / "small" / "b.bin").write_bytes(b"x" * 20_000)
+    (tmp_path / "swapfile").write_bytes(b"x" * 900_000)  # a big file is no folder
+
+    result = await FsUsage().run(UsageArgs(path=str(tmp_path)), ToolContext("t", tmp_path))
+
+    assert result.status == "ok"
+    assert result.data is not None
+    assert [e["path"] for e in result.data["largest"]] == ["~/big", "~/small"]
+    assert result.data["path"] == "~"
+    assert result.summary.startswith("~: ")
+    assert "largest ~/big" in result.summary

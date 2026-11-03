@@ -73,7 +73,8 @@ class FsList(Tool[ListArgs]):
         "size, or its biggest, newest or oldest files.",
         avoid="You already listed this folder in this task: use that result.",
         mistakes="Counting or comparing by hand: read `count`, `by_type` and `total_size`; "
-        "for the biggest or newest pass sort and limit and take the first entry.",
+        "for the biggest or newest pass sort and limit and take the first entry. Folder "
+        "sizes (which folders use the most space): fs.usage.",
         example='fs.list(path="~/Downloads", sort="largest", limit=1)',
     )
     args_model = ListArgs
@@ -173,6 +174,81 @@ def _size(n: float) -> str:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     raise AssertionError("unreachable")
+
+
+# --- fs.usage -------------------------------------------------------------------
+
+DU_COMMAND: Final = ("du", "--one-file-system", "--max-depth=1", "--block-size=1", "--")
+
+
+class UsageArgs(ToolArgs):
+    path: str = Field(default="~", description="The folder to measure; / for the whole disk")
+    limit: int = Field(default=10, ge=1, le=50, description="How many of the largest to return")
+
+
+class FsUsage(Tool[UsageArgs]):
+    name = "fs.usage"
+    read_only = True
+    description = (
+        "How much disk space each folder inside a folder takes, contents included, largest "
+        "first (du), with the total. For / it measures the system disk."
+    )
+    usage = Usage(
+        when='What takes up space: "which folders use the most space", "what is filling my '
+        'disk", "how big is my Videos folder".',
+        avoid="Free space left on the disk: system.status. Files of one folder by size: fs.list.",
+        mistakes="Using fs.list for folder sizes: its sizes are of files only, so a big file "
+        "(a swapfile) looks bigger than every folder.",
+        example='fs.usage(path="~", limit=5)',
+    )
+    args_model = UsageArgs
+    timeout_s = 120  # / takes a while
+
+    async def run(self, args: UsageArgs, ctx: ToolContext) -> ToolResult:
+        folder = resolve(args.path, ctx)
+        if not folder.is_dir():
+            return ToolResult.fail(f"{display(folder, ctx)} is not a folder")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *DU_COMMAND,
+                str(folder),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            return ToolResult.fail("du is not installed")
+        out, err = await process.communicate()
+        sizes = _du(out.decode(errors="replace"), folder)
+        if folder not in sizes:
+            return ToolResult.fail(f"could not measure {display(folder, ctx)}")
+        total = sizes.pop(folder)
+        largest = sorted(sizes.items(), key=lambda item: item[1], reverse=True)[: args.limit]
+        # Folders it may not read (other users', the system's) are left out, as du does.
+        unreadable = err.decode(errors="replace").count("Permission denied")
+        data: dict[str, Any] = {
+            "path": display(folder, ctx),
+            "total": _size(total) + (" (at least)" if unreadable else ""),
+            "largest": [{"path": display(p, ctx), "size": _size(n)} for p, n in largest],
+            "unreadable": unreadable,
+        }
+        if largest:
+            top, size = largest[0]
+            largest_one = f"{display(top, ctx)} ({_size(size)})"
+            summary = f"{display(folder, ctx)}: {_size(total)}; largest {largest_one}"
+        else:
+            summary = f"{display(folder, ctx)}: {_size(total)}, no folders inside"
+        return ToolResult.ok(summary, data=data)
+
+
+def _du(output: str, folder: Path) -> dict[Path, int]:
+    """du's "<bytes>\t<path>" lines: each subfolder, and the folder itself."""
+    sizes: dict[Path, int] = {}
+    for line in output.splitlines():
+        number, _, path = line.partition("\t")
+        if number.isdigit() and path:
+            sizes[Path(path)] = int(number)
+    # Files directly inside count in the total but are not listed: du lists folders.
+    return {p: n for p, n in sizes.items() if p == folder or p.parent == folder}
 
 
 # --- fs.read --------------------------------------------------------------------

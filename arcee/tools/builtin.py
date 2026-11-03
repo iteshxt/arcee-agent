@@ -12,6 +12,7 @@ from arcee.tools.files import (
     FsRead,
     FsSearch,
     FsTrash,
+    FsUsage,
     FsWrite,
 )
 from arcee.tools.memory import Memory, memory_tools
@@ -34,6 +35,7 @@ def builtin_registry(
     return Registry(
         [
             FsList(),
+            FsUsage(),
             FsRead(),
             FsSearch(),
             FsTrash(),

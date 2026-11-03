@@ -54,7 +54,8 @@ _GROUPS: Final = (
             r"\b(files?|folders?|director(y|ies)|paths?|documents|downloads|desktop|pictures|"
             r"photos?|music|videos?|pdfs?|notes?|readme|rename|move|copy|delete|remove|trash|"
             r"save|write|read|list|find|locate|where|biggest|largest|newest|latest|oldest|"
-            r"backup|clean|zip|installers?|todo|resume|cv)\b|~/|\.\w{2,4}\b"
+            r"backup|clean|zip|installers?|todo|resume|cv|tak(e|es|ing) up|filling|"
+            r"most space)\b|~/|\.\w{2,4}\b"
         ),
     ),
     (
