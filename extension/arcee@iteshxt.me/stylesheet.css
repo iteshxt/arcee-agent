@@ -307,3 +307,12 @@
 .arcee-menu.arcee-light .arcee-stop:hover {
   background-color: #e74c3c;
 }
+
+/* The listening cue at the top centre: Arcee's ring on a soft dark disc, so it reads
+   over light and dark windows alike. */
+.arcee-cue {
+  border-radius: 999px;
+  padding: 8px;
+  background-color: rgba(12, 9, 6, 0.62);
+  box-shadow: 0 2px 14px rgba(255, 122, 26, 0.35);
+}

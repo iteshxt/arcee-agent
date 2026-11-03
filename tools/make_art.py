@@ -451,12 +451,38 @@ def _render(svg: Path, png: Path, px: int) -> None:
     subprocess.run(["/usr/bin/python3", "-c", code, str(svg), str(png), str(px)], check=True)
 
 
+CUE_PX = 160  # shown at 96 logical px, sharp at 1.5x scale
+
+
+def cue_frames() -> None:
+    """The top-centre cue's frames for the GNOME Shell extension: the active loop
+    (dark look), cut down to CUE_PX. GNOME 50's shell has no sprite-sheet animation, so
+    the extension shows these one after another."""
+    from PIL import ImageSequence
+
+    source = ROOT / "arcee" / "app" / "assets" / "wave-active-dark.webp"
+    out = ROOT / "extension" / "arcee@iteshxt.me" / "icons" / "cue"
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.png"):
+        old.unlink()
+    with Image.open(source) as image:
+        for i, frame in enumerate(ImageSequence.Iterator(image)):
+            small = frame.convert("RGBA").resize((CUE_PX, CUE_PX), Image.Resampling.LANCZOS)
+            small.save(out / f"{i:02d}.png", optimize=True)
+    total = sum(f.stat().st_size for f in out.glob("*.png"))
+    print(f"extension/.../icons/cue: {len(list(out.glob('*.png')))} frames, {total // 1024} KB")
+
+
 if __name__ == "__main__":
     import sys
 
+    if "--cue" in sys.argv:  # --cue: the shell cue's frames alone, from the loops
+        cue_frames()
+        sys.exit()
     if "--icons" not in sys.argv:  # --icons: the icons alone (the loops take longer)
         assets = ROOT / "arcee" / "app" / "assets"
         for shade in ("dark", "light"):
             webp(IDLE, shade, assets / f"wave-idle-{shade}.webp")
             webp(ACTIVE, shade, assets / f"wave-active-{shade}.webp")
+        cue_frames()
     icons()
