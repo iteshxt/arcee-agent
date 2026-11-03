@@ -109,9 +109,14 @@ DOING: Final = {
     "media_control": "Controlling the music",
     "media_now_playing": "Checking what's playing",
     "fs_usage": "Measuring folder sizes",
+    "calendar_list": "Checking your calendar",
+    "calendar_free": "Looking for free time",
+    "calendar_add": "Adding {} to your calendar",
+    "calendar_update": "Changing {}",
+    "calendar_delete": "Deleting {}",
 }
 THINKING: Final = "Thinking…"
-SUBJECT_ARGS: Final = ("name", "app", "url", "query", "path", "what", "target")
+SUBJECT_ARGS: Final = ("name", "app", "url", "query", "path", "what", "target", "title")
 SUBJECT_CHARS: Final = 40
 
 

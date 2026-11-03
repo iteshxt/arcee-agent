@@ -2,6 +2,7 @@
 
 from arcee.tools.apps import AppList, AppOpen
 from arcee.tools.browser import BrowserSession, browser_tools
+from arcee.tools.calendar import calendar_tools
 from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
 from arcee.tools.desktop import desktop_tools
 from arcee.tools.files import (
@@ -53,6 +54,7 @@ def builtin_registry(
             WebWeather(),
             MediaControl(),
             MediaNowPlaying(),
+            *calendar_tools(),
             WebFetch(),
             *browser_tools(browser),
             *desktop_tools(),
