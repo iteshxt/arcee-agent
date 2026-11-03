@@ -72,7 +72,8 @@ _GROUPS: Final = (
             r"screen|keyboard|shortcuts?|press(es|ing)?|typ(e|ing) (it )?in(to)?|"
             r"(the|its|that|this) app|in (the )?(files|nautilus|settings|text editor|"
             r"calculator|calendar)( app)?|files app|settings app|calendar app|text editor|"
-            r"calculator|nautilus|minimi[sz]e|maximi[sz]e|full ?screen|close|quit)\b"
+            r"calculator|nautilus|minimi[sz](e|ed|ing)|maximi[sz](e|ed|ing)|full ?screen|close|"
+            r"quit)\b"
         ),
     ),
     (
@@ -147,12 +148,23 @@ _JUST_OPEN: Final = _words(
 )
 # What a bare "open the browser" names: it needs no browser tools, only the app.
 _BROWSER_APP: Final = _words(r"\b(chrome|chromium|browser|google chrome)\b")
+# Done to the browser's window ("make the Chrome window maximized"), nothing in a page:
+# the window tools, not the browser's (a small model clicked in the page instead).
+_WINDOW_ONLY: Final = _words(
+    r"\b(minimi[sz](e|ed|ing)|maximi[sz](e|ed|ing)|full ?screen|resize|snap|move (it|the window))\b"
+)
+_IN_PAGE: Final = _words(
+    r"\b(tabs?|pages?|sites?|website|links?|urls?|search|youtube|gmail|scroll|type|fill|"
+    r"sign ?in|log ?in)\b|https?://|www\."
+)
 # In a request about the web, only words that clearly involve this computer add local
 # tools ("save it to a file"); "Ubuntu" in a web search is not about this machine.
 _CLEARLY_LOCAL: Final = _words(
     r"\b(save|write|files?|folders?|documents|downloads|desktop|my computer|this computer)\b|~/"
     # Window verbs ("close chrome", "minimise it"); closing a tab stays in the browser.
-    r"|\b(minimi[sz]e|maximi[sz]e|full ?screen|quit)\b|\bclose\b(?![^.,;]{0,30}\btabs?\b)"
+    # "Make the Chrome window maximized": its window, not a page in it.
+    r"|\b(minimi[sz](e|ed|ing)|maximi[sz](e|ed|ing)|full ?screen|quit|windows?)\b"
+    r"|\bclose\b(?![^.,;]{0,30}\btabs?\b)"
 )
 _ADDRESS: Final = _words(r"https?://\S+|\bwww\.\S+|\b[\w-]+\.(com|org|net|io|in|dev|ai)\b\S*")
 _NAMESPACE_GROUP: Final = {
@@ -208,6 +220,9 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
     just_open = bool(_JUST_OPEN.search(words)) and not _ADDRESS.search(request)
     if just_open and _BROWSER_APP.search(words):
         browser = False  # "Open Chrome": the app, and nothing to do in a page
+    window_only = bool(_WINDOW_ONLY.search(words)) and not _IN_PAGE.search(request)
+    if window_only and _BROWSER_APP.search(words) and BROWSER not in used:
+        browser = False
     if (browser or web or services) and not _CLEARLY_LOCAL.search(words):
         local = [g for g in local if g in used or (just_open and g == APPS)]
     if not local and not (browser or web or services) and not used:

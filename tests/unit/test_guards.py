@@ -76,6 +76,7 @@ def test_a_reply_that_gives_up_without_looking_is_sent_back_to_the_tools() -> No
         "I don't have access to real-time weather information.",
         "I need to know your location. Could you please tell me your city?",
         "I need to know which song you're referring to.",
+        "Which Chrome window do you want to maximize? Please tell me its ID.",
     ):
         review = review_reply(reply, asked, names)
         assert review is not None

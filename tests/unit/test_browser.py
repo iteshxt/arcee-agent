@@ -16,6 +16,7 @@ from arcee.core.toolsets import (
     APPS,
     BROWSER,
     CONTROL,
+    DESKTOP,
     FILES,
     LOCAL,
     MAIL,
@@ -275,6 +276,8 @@ class TestTools:
         ("Open Chrome.", FILES + APPS + CONTROL + WAIT),
         ("Open Chrome and go to YouTube", CONTROL + WAIT + BROWSER),
         ("Open YouTube", APPS + CONTROL + WAIT + BROWSER),
+        # Its window, not a page in it: the window tools stay.
+        ("Chrome window, make it maximized.", DESKTOP + CONTROL),
     ],
 )
 def test_tool_groups_follow_the_request(request_text: str, expected: tuple[str, ...]) -> None:

@@ -87,7 +87,9 @@ class WindowAct(_WindowTool[WindowArgs]):
     usage = Usage(
         when="The user asks to show, hide, enlarge or close a window.",
         avoid="Quitting a whole app with all its windows: app.close.",
-        mistakes="Closing a window that may hold unsaved work without being asked to.",
+        mistakes="Asking the user which window or for its id: the app's name is enough "
+        '(window="Chrome"), or window.list shows them. Closing a window that may hold unsaved '
+        "work without being asked to.",
         example='window.act(window="Calculator", action="minimize")',
     )
     args_model = WindowArgs
