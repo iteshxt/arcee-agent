@@ -17,7 +17,16 @@ from arcee.models.base import Completion, ModelProfile, WireCall
 from arcee.models.fake import FakeAdapter
 from arcee.tools.base import ToolContext
 from arcee.tools.builtin import builtin_registry
-from arcee.tools.web import FetchArgs, SearchArgs, WebFetch, WebSearch, extract_text
+from arcee.tools.web import (
+    FetchArgs,
+    NewsArgs,
+    SearchArgs,
+    WebFetch,
+    WebNews,
+    WebSearch,
+    extract_text,
+    news_region,
+)
 
 CTX = ToolContext(task_id="t_1", home=Path("/home/u"))
 DDG = """<div class="result"><a class="result__a"
@@ -285,3 +294,48 @@ async def test_injected_text_makes_the_next_action_need_confirmation(tmp_path: P
     # fs.list is normally automatic; after the flagged read it had to be confirmed.
     assert [r.tool for r in user.confirmations] == ["fs.list"]
     assert any(isinstance(e, Guarded) and "instruction-like" in e.what for e in events)
+
+
+NEWS_RSS = """<?xml version="1.0"?><rss><channel>
+<item><title>Midterm results due tonight</title><link>https://news.google.com/rss/articles/x</link>
+<pubDate>Tue, 03 Nov 2026 10:00:00 GMT</pubDate>
+<source url="https://a.example">The Hindu</source></item>
+<item><title>Rain in Mumbai</title><link>https://news.google.com/rss/articles/y</link>
+<pubDate>Tue, 03 Nov 2026 09:00:00 GMT</pubDate>
+<source url="https://b.example">NDTV</source></item>
+</channel></rss>"""
+
+
+async def test_news_gives_headlines_with_source_and_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANG", "en_IN.UTF-8")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=NEWS_RSS)
+
+    top = await WebNews(client=client(handler)).run(NewsArgs(), ToolContext("t_n", Path("/h")))
+    about = await WebNews(client=client(handler)).run(
+        NewsArgs(topic="mumbai rain", n=1), ToolContext("t_n2", Path("/h"))
+    )
+
+    assert top.summary == "2 headlines, top stories"
+    assert top.data is not None
+    assert top.data["edition"] == "IN"
+    assert top.data["headlines"][0] == {
+        "title": "Midterm results due tonight",
+        "source": "The Hindu",
+        "published": "Tue, 03 Nov 2026 10:00:00 GMT",
+        "url": "https://news.google.com/rss/articles/x",
+    }
+    assert seen[0].url.path == "/rss"
+    assert seen[0].url.params["ceid"] == "IN:en"
+    assert about.summary == "1 headlines, about 'mumbai rain'"
+    assert seen[1].url.path == "/rss/search"
+    assert seen[1].url.params["q"] == "mumbai rain"
+
+
+def test_the_news_edition_follows_the_system_language() -> None:
+    assert news_region("en_IN.UTF-8") == {"hl": "en-IN", "gl": "IN", "ceid": "IN:en"}
+    assert news_region("de_DE.UTF-8") == {"hl": "de-DE", "gl": "DE", "ceid": "DE:de"}
+    assert news_region("C.UTF-8") == {"hl": "en-US", "gl": "US", "ceid": "US:en"}
