@@ -3,6 +3,8 @@
 Kept in ~/.config/arcee/settings.json. Only choices that make Arcee more careful
 are offered for actions: asking before everything, or always asking before a
 given tool. Nothing here can let a tool skip a confirmation it would otherwise ask.
+Personal data going to a cloud model (decision 0017) is a privacy choice, not an
+action's: the user may let it go without asking.
 """
 
 import json
@@ -14,6 +16,9 @@ from typing import Any, Final, Literal, cast
 from arcee.core.policy import Policy, Tier
 
 Core = Literal["groq", "local"]
+# Mail, calendar and contacts to a cloud model: ask each time, always, or never.
+Sharing = Literal["ask", "always", "off"]
+SHARINGS: Final[tuple[Sharing, ...]] = ("ask", "always", "off")
 CORES: Final[tuple[Core, ...]] = ("groq", "local")
 
 
@@ -41,6 +46,9 @@ class Settings:
     # Arcee turned its GNOME Shell extension on once (after the login that loaded it).
     # Never again after that: an extension the user turns off stays off.
     extension_turned_on: bool = False
+    # Personal data (mail, calendar, contacts) read for a task, to a cloud model: "ask"
+    # each time (the user's choice, 2026-11-04), "always", or "off" (never).
+    personal_to_cloud: Sharing = "ask"
 
     def policy(self) -> Policy:
         return Policy(
@@ -58,6 +66,7 @@ def load(path: Path | None = None) -> Settings:
         return Settings()
     core = raw.get("core")
     asks = raw.get("always_ask")
+    sharing = raw.get("personal_to_cloud")
     return Settings(
         core=core if core in CORES else "groq",
         confirm_all=raw.get("confirm_all") is True,
@@ -66,6 +75,7 @@ def load(path: Path | None = None) -> Settings:
         extension_turned_on=raw.get("extension_turned_on") is True,
         memory=raw.get("memory") is not False,
         listen=raw.get("listen") is True,
+        personal_to_cloud=sharing if sharing in SHARINGS else "ask",
     )
 
 

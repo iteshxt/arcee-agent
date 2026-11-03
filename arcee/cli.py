@@ -205,6 +205,7 @@ async def run(
         presence=presence,
         policy=settings.policy(),
         memory=memory and settings.memory,
+        sharing=settings.personal_to_cloud,
     )
     try:
         notes, problem = await runner.check()

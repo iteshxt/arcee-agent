@@ -89,7 +89,9 @@ class OpenAICompatAdapter(ModelAdapter):
         key = os.environ.get(env)
         if not key:
             raise ModelUnavailableError(f"set {env} (in .env) to use {name}")
-        return cls(profile, key, base_url=url, budget=budget)
+        adapter = cls(profile, key, base_url=url, budget=budget)
+        adapter.label = {"groq": "Groq", "openrouter": "OpenRouter"}.get(name, name)
+        return adapter
 
     async def _send(self, request: RawRequest) -> Completion:
         body: dict[str, Any] = {

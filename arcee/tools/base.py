@@ -152,6 +152,10 @@ class Tool[A: ToolArgs](ABC):
     # so the agent may block an exact repeat. Anything else (a click, a typed search, a
     # wait) may change what later looks return, and lets them run again.
     read_only: ClassVar[bool] = False
+    # Reads the user's personal data (mail, calendar, contacts), in their words ("your
+    # emails"). Before it goes to a cloud model Arcee asks, or not, as the user chose
+    # (decision 0017, Settings.personal_to_cloud). Empty: not personal.
+    personal: ClassVar[str] = ""
 
     def changes_things(self, args: A) -> bool:
         """Whether this call may change what later reads return."""

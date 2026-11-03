@@ -35,10 +35,16 @@ from arcee.app.voice_group import VoiceGroup  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
 from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
-from arcee.settings import Core, load, save  # noqa: E402
+from arcee.settings import Core, Sharing, load, save  # noqa: E402
 from arcee.voice import SpeechUsage  # noqa: E402
 
-APP_ID: Final = "me.iteshxt.Arcee"  # under the developer's own domain, iteshxt.me
+APP_ID: Final = "me.iteshxt.Arcee"
+# Settings.personal_to_cloud, as the Permissions page offers it.
+SHARING_CHOICES: Final[tuple[tuple[Sharing, str], ...]] = (
+    ("ask", "Ask each time"),
+    ("always", "Always allow"),
+    ("off", "Never"),
+)  # under the developer's own domain, iteshxt.me
 BUDGET_REFRESH_S: Final = 5
 HISTORY_LIMIT: Final = 50
 # Automatic actions the user may make ask first, in their words. Deleting, sending,
@@ -549,6 +555,22 @@ class ArceeWindow(Adw.ApplicationWindow):
         everything.add(all_row)
         page.add(everything)
 
+        # Personal data to a cloud model (decision 0017): a privacy choice, not an action's.
+        privacy = Adw.PreferencesGroup(
+            title="Privacy",
+            description="To answer about your mail, calendar or contacts, the model reads them. "
+            "On a local model they stay on this computer; on Groq they are sent to Groq.",
+        )
+        sharing = Adw.ComboRow(
+            title="Mail, calendar and contacts to a cloud model",
+            model=Gtk.StringList.new([label for _, label in SHARING_CHOICES]),
+        )
+        values = [value for value, _ in SHARING_CHOICES]
+        sharing.set_selected(values.index(self._settings.personal_to_cloud))
+        sharing.connect("notify::selected", self._on_sharing)
+        privacy.add(sharing)
+        page.add(privacy)
+
         always = Adw.PreferencesGroup(
             title="Always ask before", description="Actions that otherwise run without asking."
         )
@@ -567,7 +589,14 @@ class ArceeWindow(Adw.ApplicationWindow):
             always.add(row)
             self._ask_rows[tool] = row
         page.add(always)
+
         return page
+
+    def _on_sharing(self, row: Adw.ComboRow, _param: Any) -> None:
+        value = SHARING_CHOICES[row.get_selected()][0]
+        if value != self._settings.personal_to_cloud:
+            self._settings.personal_to_cloud = value
+            self._saved()
 
     def _on_ask_all(self, row: Adw.SwitchRow, _param: Any) -> None:
         if self._syncing:

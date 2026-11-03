@@ -77,6 +77,12 @@ BROKEN_CALL_NUDGE: Final = (
 MAX_CLARIFY: Final = 2
 
 
+# Personal data to a cloud model: ask each time, always, or never (decision 0017).
+type Sharing = Literal["ask", "always", "off"]
+SHARE_YES: Final = "Go ahead"
+SHARE_NO: Final = "No"
+
+
 class Asker(Protocol):
     """Puts a question to the user and returns the answer."""
 
@@ -210,6 +216,10 @@ class _State:
     memory: str = ""
     # The conversation's earlier requests: their tools are offered again ("and tomorrow?").
     earlier: Sequence[str] = ()
+    # Personal data (mail, calendar) has been read in this task, and whether the user let
+    # it go to the cloud model (asked once per task).
+    personal_read: bool = False
+    shared: bool = False
     # The request was transcribed from speech: a word may be a mishearing.
     spoken: bool = False
 
@@ -233,6 +243,7 @@ class Agent:
         clock: Callable[[], datetime] = datetime.now,
         presence: Presence | None = None,
         recall: Callable[[str, str], Awaitable[str]] | None = None,
+        sharing: Sharing = "ask",
     ) -> None:
         """`recall(query, task_id)` returns what Arcee remembers for a query (memory)."""
         if not ladder:
@@ -246,6 +257,7 @@ class Agent:
         self._registry = registry
         self._executor = executor
         self._asker = asker
+        self._sharing = sharing  # personal data to a cloud model (decision 0017)
         self._home = home
         self._limits = limits
         self._emit = on_event
@@ -420,6 +432,10 @@ class Agent:
                 self._answer(state, call, _repeat_note(None if visible else earlier))
                 self._emit(Guarded(state.steps, f"blocked a repeat of {valid.tool.name}"))
                 await self._strike(state, "repeated an earlier call")
+                continue
+            if valid.tool.personal and (refused := await self._may_share(state, valid.tool)):
+                self._answer(state, call, json.dumps({"status": "refused", "error": refused}))
+                self._emit(Guarded(state.steps, f"{valid.tool.name}: {refused}"))
                 continue
             changes_things = valid.tool.changes_things(valid.args) or (
                 self._executor.gate.tier(valid, model_asked=state.confirm_next) is not Tier.AUTO
@@ -637,12 +653,52 @@ class Agent:
         state.strikes = 0
         await self._switch(state, state.base_tier)
 
+    async def _may_share(self, state: _State, tool: AnyTool) -> str | None:
+        """None when `tool`'s personal data may go to the model reading it; else why not.
+
+        On this computer's model it always may. For a cloud model the user's setting
+        decides: ask (once per task), always, or never (decision 0017).
+        """
+        adapter = self._ladder[state.tier]
+        state.personal_read = True
+        if adapter.profile.cost_tier == "local" or state.shared or self._sharing == "always":
+            return None
+        if self._sharing == "off":
+            return (
+                f"the user does not let {tool.personal} go to {adapter.label}: say so, and that "
+                "a local model (Settings, Models) can read them"
+            )
+        if await self._ask_to_share(tool.personal, adapter.label):
+            state.shared = True  # once per task
+            return None
+        return f"the user said no to {tool.personal} going to {adapter.label}: say so, without it"
+
+    async def _ask_to_share(self, what: str, where: str) -> bool:
+        answer = await self._asker.ask(
+            f"This needs {what} to go to {where}. Go ahead?", (SHARE_YES, SHARE_NO)
+        )
+        return answer.strip().lower() in {SHARE_YES.lower(), "yes", "y", "allow", "ok"}
+
     async def _switch(self, state: _State, tier: int) -> None:
         """Move to `tier`, unloading the current model when the new tier is another model.
 
         On 4 GB of VRAM two models rarely fit next to the desktop, so the old one
-        is unloaded at once instead of waiting for Ollama to evict it.
+        is unloaded at once instead of waiting for Ollama to evict it. Personal data read
+        on this computer goes to a cloud tier only as the user allows: else it stays.
         """
+        target = self._ladder[tier]
+        if (
+            state.personal_read
+            and not state.shared
+            and target.profile.cost_tier != "local"
+            and self._ladder[state.tier].profile.cost_tier == "local"
+        ):
+            if self._sharing == "off" or (
+                self._sharing == "ask"
+                and not await self._ask_to_share("what it read", target.label)
+            ):
+                return
+            state.shared = True
         current = self._ladder[state.tier]
         if tier != state.tier and current.profile.model != self._ladder[tier].profile.model:
             await current.unload()

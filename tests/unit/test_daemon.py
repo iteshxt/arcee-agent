@@ -419,3 +419,49 @@ async def test_requests_share_the_conversation_until_it_is_ended(bus_address: st
     assert json.loads(await agent.call_status())["turns"] == 0
     bus.disconnect()
     service_bus.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("said", "kind", "options", "answer"),
+    [
+        ("Yes.", "confirm", [], "yes"),
+        ("Yeah, go ahead", "confirm", [], "yes"),
+        ("Nope.", "confirm", [], "no"),
+        ("Maybe later", "confirm", [], None),
+        ("Yes please.", "ask", ["Go ahead", "No"], "Go ahead"),
+        ("No.", "ask", ["Go ahead", "No"], "No"),
+        ("The second one", "ask", ["Events", "Family"], "Family"),
+        ("Family.", "ask", ["Events", "Family"], "Family"),
+        ("Hmm, not sure", "ask", ["Go ahead", "No"], "Hmm, not sure"),
+        ("At five in the evening", "ask", [], "At five in the evening"),
+    ],
+)
+def test_spoken_answers(said: str, kind: str, options: list[str], answer: str | None) -> None:
+    from arcee.daemon import spoken_answer
+
+    assert spoken_answer(said, kind, options) == answer
+
+
+async def test_a_question_is_answered_by_voice(bus_address: str) -> None:
+    service_bus = await connect(bus_address)
+    transcriber = FakeTranscriber()
+    service = AgentService(FakeRunner(), transcriber=transcriber)  # pyright: ignore[reportArgumentType]
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    bus, agent = await client(bus_address)
+    answered: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    agent.on_answered(answered.set_result)
+
+    asking = asyncio.ensure_future(
+        service.ask("This needs your emails to go to Groq. Go ahead?", ["Go ahead", "No"])
+    )
+    await asyncio.sleep(0.05)
+    transcriber.text = "Yes, go ahead."
+    service.on_wake()
+    service.on_request(b"pcm")
+
+    assert await asyncio.wait_for(asking, 5) == "Go ahead"
+    assert await asyncio.wait_for(answered, 5) == "q1"  # the pill and the app close it
+    assert not service.busy  # an answer is not a new request
+    bus.disconnect()
+    service_bus.disconnect()

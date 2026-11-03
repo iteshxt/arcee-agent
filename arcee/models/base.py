@@ -162,6 +162,8 @@ class ModelAdapter(ABC):
 
     def __init__(self, profile: ModelProfile, *, clock: Clock = SYSTEM_CLOCK) -> None:
         self.profile = profile
+        # Who runs it, in the user's words ("Groq"): named when personal data would go there.
+        self.label = "this computer" if profile.cost_tier == "local" else "the cloud model"
         self._clock = clock
         # Seconds the last call spent waiting on rate budgets and backoff, for the UI.
         self.last_wait_s = 0.0

@@ -62,13 +62,19 @@ function fromUser(event) {
     return event?.get_source_device()?.get_device_node() != null;
 }
 
+const HINT = 'Say “Hey Arcee” to go on  ·  Esc to close';
 const PRESSES = new Set([Clutter.EventType.BUTTON_PRESS, Clutter.EventType.TOUCH_BEGIN]);
 
 export class ListeningCue {
     // `onStop` for its Stop button and Esc while something runs, `onResume` for Resume,
     // `onDismiss` when the user closes the pill (the conversation ends).
-    constructor(path, {onStop = () => {}, onResume = () => {}, onDismiss = () => {}} = {}) {
+    // `onAnswer(id, answer)` when the user clicks an answer to Arcee's question.
+    constructor(path, {
+        onStop = () => {}, onResume = () => {}, onDismiss = () => {}, onAnswer = () => {},
+    } = {}) {
         this._onStop = onStop;
+        this._onAnswer = onAnswer;
+        this._questionId = null;
         this._onResume = onResume;
         this._onDismiss = onDismiss;
         // A request has run since the pill opened: it stays, as the conversation, with
@@ -111,12 +117,11 @@ export class ListeningCue {
             style_class: 'arcee-cue-text', orientation: Clutter.Orientation.VERTICAL,
             y_align: Clutter.ActorAlign.CENTER, visible: false,
         });
-        this._hint = new St.Label({
-            style_class: 'arcee-cue-hint', visible: false,
-            text: 'Say “Hey Arcee” to go on  ·  Esc to close',
-        });
-        for (const label of [this._said, this._doing, this._reply, this._hint])
-            this._text.add_child(label);
+        this._hint = new St.Label({style_class: 'arcee-cue-hint', visible: false, text: HINT});
+        // Arcee's question's answers, as buttons under it.
+        this._answers = new St.BoxLayout({style_class: 'arcee-cue-answers', visible: false});
+        for (const child of [this._said, this._doing, this._reply, this._answers, this._hint])
+            this._text.add_child(child);
         this._resume = new St.Button({
             style_class: 'arcee-cue-button', label: 'Resume', visible: false,
             y_align: Clutter.ActorAlign.CENTER,
@@ -191,7 +196,8 @@ export class ListeningCue {
 
     // What Arcee is doing about it now.
     doing(text) {
-        if (!this.visible || !text || this._phase === 'done')
+        // Not over a reply, nor over a question waiting for its answer.
+        if (!this.visible || !text || this._phase === 'done' || this._phase === 'asking')
             return;
         this._step = text;
         if (this._control !== 'paused')
@@ -238,6 +244,68 @@ export class ListeningCue {
         this._resume.visible = false;
         this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
         this._doing.visible = false;
+        this._renderReply(words);
+        this._hint.text = HINT;
+        this._hint.visible = true;
+        this._place();
+        this._clearLimit(); // it stays: the user closes it
+    }
+
+    // Arcee asks (a confirmation, or a question with choices): the question, its answers
+    // as buttons, and the voice works too ("hey Arcee", then the answer). False when
+    // the pill is not up (the panel asks instead).
+    ask(question) {
+        if (!this.visible)
+            return false;
+        this._questionId = question.id;
+        this._phase = 'asking';
+        this._clearLimit();
+        const confirm = question.kind === 'confirm';
+        const choices = confirm ? ['Yes', 'No'] : (question.options ?? []).slice(0, 4);
+        this._answers.destroy_all_children();
+        for (const [n, choice] of choices.entries()) {
+            const value = confirm ? ['yes', 'no'][n] : choice;
+            const button = new St.Button({
+                style_class: `arcee-cue-button${n === 0 ? ' arcee-cue-primary' : ''}`, label: choice,
+            });
+            button.connect('clicked', () => {
+                if (fromUser(Clutter.get_current_event()))
+                    this._onAnswer(question.id, value);
+            });
+            this._answers.add_child(button);
+        }
+        let text = question.text ?? '';
+        if (question.preview?.length)
+            text += `\n${question.preview.slice(0, 4).map(p => `- ${p}`).join('\n')}`;
+        this._doing.visible = false;
+        this._renderReply(text);
+        this._answers.visible = choices.length > 0;
+        this._hint.text = choices.length
+            ? 'Click, or say “Hey Arcee” and your answer' : 'Say “Hey Arcee” and your answer';
+        this._hint.visible = true;
+        this._place();
+        return true;
+    }
+
+    // The question was answered (here, by voice, or in the panel or the app).
+    answered(questionId) {
+        if (this._questionId !== questionId)
+            return;
+        this._questionId = null;
+        this._answers.visible = false;
+        this._answers.destroy_all_children();
+        this._hint.text = HINT;
+        if (this.visible && this._phase === 'asking') {
+            this._phase = 'working';
+            this._reply.visible = false;
+            this._hint.visible = false;
+            this._set(null, this._step || 'Going on…');
+            this._expire(SILENT_RUN_MS, () => this._settle());
+        }
+    }
+
+    // `words` (Markdown) on the reply label: as wide as they need, up to REPLY_WIDTH_PX.
+    _renderReply(words) {
         this._reply.set_size(-1, -1);
         try {
             this._reply.clutter_text.set_markup(toPango(words));
@@ -252,10 +320,7 @@ export class ListeningCue {
         const width = Math.min(REPLY_WIDTH_PX, Math.ceil(natural));
         const [, height] = this._reply.get_preferred_height(width);
         this._reply.set_size(width, Math.ceil(height));
-        this._hint.visible = true;
         this._text.visible = true;
-        this._place();
-        this._clearLimit(); // it stays: the user closes it
     }
 
     // Nothing more is coming (no words after the wake word, an error shown, a step
@@ -407,6 +472,7 @@ export class ListeningCue {
         this._doing.visible = Boolean(this._doing.text);
         this._reply.visible = false;
         this._hint.visible = false;
+        this._answers.visible = false;
         this._text.visible = Boolean(this._said.text || this._doing.text);
         this._place();
     }

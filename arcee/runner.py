@@ -18,7 +18,7 @@ from arcee.context.digest import digest_task
 from arcee.context.examples import ExampleLibrary
 from arcee.context.recall import recall
 from arcee.context.store import Store, data_dir
-from arcee.core.agent import DEFAULT_LIMITS, Agent, Event, Limits, Planned, ToolRan
+from arcee.core.agent import DEFAULT_LIMITS, Agent, Event, Limits, Planned, Sharing, ToolRan
 from arcee.core.executor import Executor
 from arcee.core.gate import Gate
 from arcee.core.planner import Planner, needs_plan
@@ -75,6 +75,7 @@ class TaskRunner:
         store: Store | None = None,
         policy: Policy | None = None,
         memory: bool = True,
+        sharing: Sharing = "ask",
     ) -> None:
         """`memory`: recall what Arcee remembers into each request, and digest each
         finished task into a summary and facts (decision 0014). Off for evals."""
@@ -84,6 +85,7 @@ class TaskRunner:
         self.planner_model = planner_for(core, host)
         share_budget(self.ladder, self.planner_model)
         self.memory = memory
+        self.sharing: Sharing = sharing  # personal data to a cloud model (decision 0017)
         self.digest_model = digest_model_for(core, host)
         share_budget(self.ladder, self.digest_model)
         # Digests still running: aclose waits for them before closing the store.
@@ -170,6 +172,7 @@ class TaskRunner:
             on_event=record,
             presence=self.presence,
             recall=self._recall if self.memory else None,
+            sharing=self.sharing,
         )
         task_id = await self.store.start_task(request)
         started = time.monotonic()
