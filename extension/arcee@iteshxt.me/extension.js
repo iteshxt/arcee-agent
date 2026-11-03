@@ -130,6 +130,9 @@ class ShellBridge {
         this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         this._time = 0;
+        // Arcee's other things on screen (the voice cue), hidden with the pill for a
+        // screenshot.
+        this.onShown = _shown => {};
         // What is pressed right now, so a stop can release it.
         this._buttons = new Set();
         this._keys = new Set();
@@ -138,6 +141,11 @@ class ShellBridge {
     // What Arcee is doing now, shown on the pill instead of "Arcee is working".
     setStep(doing) {
         this._control.setStep(doing);
+    }
+
+    // Where the voice cue ends, for the pill to sit below it.
+    setCueBelow(bottom) {
+        this._control.setBelow(bottom);
     }
 
     destroy() {
@@ -258,11 +266,13 @@ class ShellBridge {
                 null, false, Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION,
                 null);
             this._control.setShown(false);
+            this.onShown(false);
             try {
                 await sleep(SCREENSHOT_HIDE_MS); // let the stage redraw without them
                 await new Shell.Screenshot().screenshot(false, stream);
             } finally {
                 this._control.setShown(true);
+                this.onShown(true);
             }
             stream.close(null);
             const shot = {
@@ -420,7 +430,9 @@ export default class ArceeExtension extends Extension {
         Main.wm.addKeybinding(
             'stop-agent', this.getSettings(), Meta.KeyBindingFlags.NONE, Shell.ActionMode.ALL,
             () => this._bridge.stop());
-        this._indicator = new ArceeIndicator(this.path, doing => this._bridge?.setStep(doing));
+        this._indicator = new ArceeIndicator(
+            this.path, doing => this._bridge?.setStep(doing), bottom => this._bridge?.setCueBelow(bottom));
+        this._bridge.onShown = shown => this._indicator?.setCueShown(shown);
         Main.panel.addToStatusArea('arcee', this._indicator);
     }
 

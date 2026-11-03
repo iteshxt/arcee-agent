@@ -35,6 +35,7 @@ export class ControlSession {
         this._glows = [];
         this._pill = null;
         this._step = '';
+        this._below = 0; // where the voice cue ends, when it is on screen
     }
 
     begin(owner, reason) {
@@ -70,6 +71,14 @@ export class ControlSession {
 
     setStep(doing) {
         this._step = doing;
+        if (this._pill)
+            this._restyle();
+    }
+
+    // The voice cue at the top centre ends at `bottom` (0: it is gone). The pill sits
+    // below it, and leaves saying the step to it.
+    setBelow(bottom) {
+        this._below = bottom;
         if (this._pill)
             this._restyle();
     }
@@ -193,7 +202,8 @@ export class ControlSession {
                 glow.remove_style_class_name('paused');
         }
         this._resume.visible = paused;
-        this._label.text = paused ? 'Arcee paused: you have control' : this._step || this._reason;
+        const step = this._below ? 'Arcee is using the screen' : this._step || this._reason;
+        this._label.text = paused ? 'Arcee paused: you have control' : step;
         if (paused)
             this._pill.add_style_class_name('paused');
         else
@@ -203,6 +213,6 @@ export class ControlSession {
         const [, width] = this._pill.get_preferred_width(-1);
         this._pill.set_position(
             Math.round(monitor.x + (monitor.width - width) / 2),
-            monitor.y + Main.panel.height + 8);
+            this._below ? this._below + 8 : monitor.y + Main.panel.height + 8);
     }
 }

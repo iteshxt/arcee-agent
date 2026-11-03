@@ -46,9 +46,11 @@ no audio, nothing that plays back), in the models folder. Speech wakes Arcee whe
 stretch of it is close enough to one of the three by subsequence dynamic time
 warping; "close enough" is set between how far apart the samples were and how close
 the sentence came. It runs alongside the spotter, in plain Python (no numpy), only
-while the VAD hears speech. "Arcee stop" stays with the spotter. The app offers
-training when the wake word is first turned on; arceed holds the listener meanwhile
-(`HoldWake`) and takes up the result without restarting.
+while the VAD hears speech, over enough of it for the longest sample (a pause
+between "hey" and "Arcee" included). "Arcee stop" stays with the spotter. Training
+is a page of first-run setup and can be done again from the Voice settings; arceed
+holds the listener meanwhile (`HoldWake`) and takes up the result without
+restarting.
 
 A local speech-to-text model was built and measured (Moonshine base: 274 MB, about
 0.4 s a request on the CPU) and dropped: Whisper on Groq is more accurate with names

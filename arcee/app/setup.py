@@ -14,10 +14,11 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
-from arcee import install  # noqa: E402
+from arcee import install, voice_local  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
+from arcee.app.wake_training import WakeTrainer  # noqa: E402
 from arcee.browser.setup import EXTENSION_DIR  # noqa: E402
 from arcee.keys import KEYS, keyring  # noqa: E402
 
@@ -30,10 +31,19 @@ Runner = Callable[..., object]  # (work, done[, failed]), as Background.run
 
 
 class SetupDialog(Adw.Dialog):
-    def __init__(self, run: Runner, on_done: Callable[[], None]) -> None:
-        super().__init__(title="Set up Arcee", content_width=560, content_height=620)
+    def __init__(
+        self,
+        run: Runner,
+        on_done: Callable[[], None],
+        settings: Any = None,
+        saved: Callable[[], None] = lambda: None,
+    ) -> None:
+        super().__init__(title="Set up Arcee", content_width=560, content_height=640)
         self._run = run
         self._on_done = on_done
+        self._settings = settings
+        self._saved = saved
+        self._trainer: WakeTrainer | None = None
         self._nav = Adw.NavigationView()
         self.set_child(self._nav)
         self._steps = [
@@ -50,9 +60,11 @@ class SetupDialog(Adw.Dialog):
                 install.daemon,
             ),
             self._chrome(),
+            self._voice(),
             self._finish(),
         ]
         self._nav.add(self._steps[0])
+        self.connect("closed", lambda _d: self._trainer and self._trainer.cancel())
 
     # --- pages --------------------------------------------------------------------
 
@@ -72,6 +84,8 @@ class SetupDialog(Adw.Dialog):
         return Adw.NavigationPage(child=view, title=title)
 
     def _next(self, index: int) -> None:
+        if self._trainer is not None:
+            self._trainer.cancel()  # moving on is skipping it
         if index + 1 < len(self._steps):
             self._nav.push(self._steps[index + 1])
         else:
@@ -266,6 +280,91 @@ class SetupDialog(Adw.Dialog):
         )
         return self._page("Chrome", status, 4)
 
+    def _voice(self) -> Any:
+        """ "Hey Arcee": turned on, then trained on the user's voice, right here."""
+        status = Adw.StatusPage(
+            icon_name="audio-input-microphone-symbolic",
+            title="“Hey Arcee”",
+            description="Say “Hey Arcee” and ask, hands free. A small model on this computer "
+            "listens for it; only what you say after it goes to Groq to become text. "
+            "Everyone says it a little differently, so Arcee learns how you do.",
+        )
+        stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        off = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, halign=Gtk.Align.CENTER)
+        state = Gtk.Label(
+            label="Off. Turning it on downloads 7 MB of voice models from sherpa-onnx on "
+            "GitHub. You can skip this and turn it on later in Arcee's settings.",
+            wrap=True,
+            justify=Gtk.Justification.CENTER,
+            max_width_chars=56,
+        )
+        state.add_css_class("dim-label")
+        turn_on = Gtk.Button(label="Turn on “Hey Arcee”", halign=Gtk.Align.CENTER)
+        turn_on.add_css_class("pill")
+        turn_on.add_css_class("suggested-action")
+        progress = Gtk.ProgressBar(visible=False, width_request=240, halign=Gtk.Align.CENTER)
+        for child in (state, turn_on, progress):
+            off.append(child)
+        self._trainer = WakeTrainer(self._run, icon=False)
+        stack.add_named(off, "off")
+        stack.add_named(self._trainer, "train")
+        status.set_child(stack)
+
+        def training() -> None:
+            # Room for the trainer: the page's icon small, its words short.
+            status.add_css_class("compact")
+            status.set_description(
+                "Everyone says it a little differently, so Arcee learns how you do."
+            )
+            stack.set_visible_child_name("train")
+
+        def listening() -> None:
+            if self._settings is not None and not self._settings.listen:
+                self._settings.listen = True
+                self._saved()  # arceed starts listening when it is next idle
+            training()
+
+        def downloaded(_none: None) -> None:
+            progress.set_visible(False)
+            listening()
+
+        def failed(exc: BaseException) -> None:
+            progress.set_visible(False)
+            turn_on.set_sensitive(True)
+            state.set_label(f"Could not download: {exc}")
+
+        def fetch() -> None:
+            turn_on.set_sensitive(False)
+            progress.set_visible(True)
+
+            def report(fraction: float) -> None:
+                GLib.idle_add(lambda: progress.set_fraction(fraction) and False)
+
+            self._run(voice_local.download_missing(report), downloaded, failed)
+
+        def clicked(_button: Any) -> None:
+            if not voice_local.missing():
+                listening()
+                return
+            size = sum(m.size_mb for m in voice_local.missing())
+            dialog = Adw.AlertDialog(
+                heading=f"Download {size} MB?",
+                body="The wake word and voice detection models, from sherpa-onnx's releases "
+                "on GitHub, kept on this computer.",
+            )
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("download", "Download")
+            dialog.set_response_appearance("download", Adw.ResponseAppearance.SUGGESTED)
+            dialog.connect("response", lambda _d, r: r == "download" and fetch())
+            dialog.present(self)
+
+        turn_on.connect("clicked", clicked)
+        if self._settings is not None and self._settings.listen and not voice_local.missing():
+            training()
+        else:
+            stack.set_visible_child_name("off")
+        return self._page("Voice", status, 5)
+
     def _finish(self) -> Any:
         status = Adw.StatusPage(
             icon_name="object-select-symbolic",
@@ -291,7 +390,7 @@ class SetupDialog(Adw.Dialog):
 
         logout.connect("clicked", log_out)
         status.set_child(logout)
-        return self._page("Ready", status, 5, last=True)
+        return self._page("Ready", status, 6, last=True)
 
 
 async def _threaded(work: Callable[[], Any]) -> Any:

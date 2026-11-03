@@ -64,12 +64,16 @@ function section(child) {
 
 export const ArceeIndicator = GObject.registerClass(
 class ArceeIndicator extends PanelMenu.Button {
-    // `onStep` hears what Arcee is doing now ('' when it is done), for the pill.
-    _init(path, onStep) {
+    // `onStep` hears what Arcee is doing now ('' when it is done), for the pill;
+    // `onCuePlaced` where the voice cue ends on screen (0 when gone), to keep the pill
+    // below it.
+    _init(path, onStep, onCuePlaced = () => {}) {
         super._init(0.5, 'Arcee', false);
         this._onStep = onStep;
-        // The ring at the top centre while Arcee listens (the wake word, or the mic).
-        this._cue = new ListeningCue(path);
+        // At the top centre for a spoken request: the ring while Arcee listens (the wake
+        // word, or the mic), then what was said, each step, and the reply.
+        this._cue = new ListeningCue(path, onCuePlaced);
+        this._spoken = false; // the request under way was spoken: the cue follows it
         this.add_child(new St.Icon({
             gicon: Gio.icon_new_for_string(`${path}/icons/arcee.svg`),
             style_class: 'system-status-icon',
@@ -104,6 +108,11 @@ class ArceeIndicator extends PanelMenu.Button {
                 });
             }
         });
+    }
+
+    // Hidden for the moment of a screenshot (see ShellBridge.Screenshot).
+    setCueShown(shown) {
+        this._cue.setShown(shown);
     }
 
     destroy() {
@@ -235,9 +244,13 @@ class ArceeIndicator extends PanelMenu.Button {
         this._wave.visible = on;
         this._levels.fill(0);
         this._entry.hint_text = on ? 'Listening… (press the mic to finish)' : 'Ask Arcee…';
-        // The cue stays after the voice stops, until Arcee has the words (Heard).
-        if (on)
+        // The cue stays after the voice stops: it follows the request to its reply.
+        if (on) {
+            this._spoken = true;
             this._cue.show();
+        } else {
+            this._cue.transcribing();
+        }
         if (on)
             this._mic.add_style_class_name('listening');
         else
@@ -254,17 +267,23 @@ class ArceeIndicator extends PanelMenu.Button {
     }
 
     _onHeard(json) {
-        // arceed runs what it heard; only a failure is shown here.
-        this._cue.hide();
+        // arceed runs what it heard; the panel shows only a failure, the cue both.
         const heard = JSON.parse(json);
-        if (heard.error)
+        if (heard.error) {
+            this._spoken = false;
+            this._cue.fail(heard.error);
             this._say('', heard.error);
+        } else {
+            this._cue.heard(heard.text ?? '');
+        }
     }
 
     _onStarted(request) {
         this._progress = [];
         this._step = '';
         this._say(request, 'Working…', true);
+        if (this._spoken)
+            this._cue.heard(request);
     }
 
     _onProgress(line) {
@@ -276,6 +295,8 @@ class ArceeIndicator extends PanelMenu.Button {
         this._step = doing;
         this._onStep(doing);
         this._showProgress();
+        if (this._spoken)
+            this._cue.doing(doing);
     }
 
     _showProgress() {
@@ -316,6 +337,8 @@ class ArceeIndicator extends PanelMenu.Button {
         }
         this._questionBox.add_child(buttons);
         this._question.visible = true;
+        if (this._spoken)
+            this._cue.doing(`Asks: ${question.text}`);
         // The app shows the question too; open the menu only when the app is not in front.
         const focused = global.display.focus_window;
         if (focused?.get_gtk_application_id?.() !== APP_ID)
@@ -329,7 +352,15 @@ class ArceeIndicator extends PanelMenu.Button {
         this._onStep('');
         const reply = done.reply || (done.status === 'stopped' ? 'Stopped.' : `Ended: ${done.status}.`);
         this._say(this._statusTitle.text, shorten(reply, 400));
-        if (!this.menu.isOpen)
+        // A spoken request's reply is on the cue, where GNOME would put its banner too;
+        // one too long for the cue goes to a notification as a typed one's does.
+        const onCue = this._spoken && this._cue.visible && this._cue.fits(reply);
+        if (onCue)
+            this._cue.finish(reply);
+        else
+            this._cue.hide();
+        this._spoken = false;
+        if (!this.menu.isOpen && !onCue)
             Main.notify('Arcee', shorten(reply, 200));
     }
 

@@ -312,7 +312,25 @@
    over light and dark windows alike. */
 .arcee-cue {
   border-radius: 999px;
-  padding: 8px;
-  background-color: rgba(12, 9, 6, 0.62);
+  padding: 6px;
+  spacing: 12px;
+  background-color: rgba(12, 9, 6, 0.78);
   box-shadow: 0 2px 14px rgba(255, 122, 26, 0.35);
+}
+
+.arcee-cue-text {
+  padding-right: 20px;
+  spacing: 2px;
+  max-width: 520px;
+}
+
+.arcee-cue-said {
+  color: #f6f1ec;
+  font-weight: bold;
+  font-size: 11pt;
+}
+
+.arcee-cue-doing {
+  color: #ffb36b;
+  font-size: 10pt;
 }
