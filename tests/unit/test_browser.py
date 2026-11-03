@@ -18,6 +18,7 @@ from arcee.core.toolsets import (
     CONTROL,
     FILES,
     LOCAL,
+    MAIL,
     NOTE,
     SYSTEM,
     WAIT,
@@ -255,13 +256,14 @@ class TestTools:
         ("Hi Arcee!", CONTROL),
         ("Do the thing we discussed", LOCAL + CONTROL + WAIT),
         ("Remember that my work folder is ~/code", FILES + CONTROL + NOTE),
-        ("Check my Gmail inbox for anything from the bank", CONTROL + WAIT + BROWSER),
-        ("Look at my inbox in Chrome", CONTROL + WAIT + BROWSER),
+        # Mail is the mail tools' (decision 0017); Chrome only when named.
+        ("Check my Gmail inbox for anything from the bank", CONTROL + MAIL),
+        ("Look at my inbox in Chrome", CONTROL + WAIT + BROWSER + MAIL),
         ("Open https://example.org and summarise it", CONTROL + WEB),
         ("Search the web for the Ubuntu 26.04 release date", CONTROL + WEB),
         (
             "Save the newest email from Gmail to a file in Documents",
-            FILES + CONTROL + WAIT + BROWSER,
+            FILES + CONTROL + MAIL,
         ),
         ("Open example.com in Chrome", CONTROL + WAIT + BROWSER + WEB),
         # Spoken: a greeting before the request does not make it small talk.

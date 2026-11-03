@@ -548,3 +548,29 @@ id = "calendar-search"
 scenario = "calendar"
 request = "When is my next dentist appointment?"
 expect = { any_of = ["calendar.list"], args_contain = { query = "dentist" } }
+
+# --- mail: Gmail through GOA, not the browser --------------------------------------
+
+[[case]]
+id = "mail-new"
+scenario = "mail"
+request = "Do I have any new emails?"
+expect = { any_of = ["mail.list"] }
+
+[[case]]
+id = "mail-search"
+scenario = "mail"
+request = "Find the email from my bank about the statement."
+expect = { any_of = ["mail.search"], args_contain = { query = "bank" } }
+
+[[case]]
+id = "mail-send"
+scenario = "mail"
+request = "Email rahul@example.com that I'll be 15 minutes late."
+expect = { any_of = ["mail.send", "mail.draft"], args_contain = { body = "late" } }
+
+[[case]]
+id = "mail-draft"
+scenario = "mail"
+request = "Draft an email to hr@example.com asking for Friday off, but don't send it."
+expect = { any_of = ["mail.draft"] }
