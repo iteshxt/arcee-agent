@@ -28,6 +28,7 @@ from dbus_fast.annotations import DBusBool, DBusDouble, DBusStr, DBusUInt32
 from dbus_fast.service import ServiceInterface, method, signal
 
 from arcee.config import load_env
+from arcee.context.conversation import Conversation
 from arcee.core.agent import Escalated, Event, Guarded, ModelTurn, Planned, StepStarted, ToolRan
 from arcee.core.protocol import ConfirmRequest
 from arcee.models.errors import ModelUnavailableError
@@ -201,6 +202,8 @@ class AgentService(ServiceInterface):
         self._hearing: asyncio.Future[None] | None = None  # a woken request, transcribing
         self._held: asyncio.TimerHandle | None = None  # HoldWake's own end
         self._dismissed = False  # the mic button's recording was cancelled
+        # The turns a new request continues, until the user closes the pill (EndConversation).
+        self.conversation = Conversation()
         self._task: asyncio.Task[None] | None = None
         self._request = ""
         self._step = ""
@@ -283,6 +286,12 @@ class AgentService(ServiceInterface):
             )
 
     @method()
+    def EndConversation(self) -> None:
+        """The user closed the pill (or started a New conversation): the next request
+        starts afresh."""
+        self.conversation.end()
+
+    @method()
     def StopListening(self) -> None:
         if self._recorder is not None:
             self._recorder.stop()
@@ -306,6 +315,7 @@ class AgentService(ServiceInterface):
                 "state": "running" if self.busy else "idle",
                 "request": self._request,
                 "step": self._step if self.busy else "",
+                "turns": len(self.conversation.turns) if self.conversation.active else 0,
             }
         )
 
@@ -465,7 +475,9 @@ class AgentService(ServiceInterface):
         self._set_step(THINKING)
         payload: dict[str, Any]
         try:
-            result = await self._runner.run(request, self, self._progress, spoken=spoken)
+            result = await self._runner.run(
+                request, self, self._progress, spoken=spoken, conversation=self.conversation
+            )
             payload = {
                 "status": result.status,
                 "reply": result.reply,

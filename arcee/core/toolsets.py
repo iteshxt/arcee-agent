@@ -156,8 +156,16 @@ _NAMESPACE_GROUP: Final = {
 }
 
 
-def filters_for(messages: Sequence[Message]) -> tuple[str, ...]:
-    """Tool filters for a task, decided from the request and the tools used so far."""
+def filters_for(messages: Sequence[Message], *, earlier: Sequence[str] = ()) -> tuple[str, ...]:
+    """Tool filters for a task, decided from the request and the tools used so far, and
+    from the conversation's `earlier` requests ("and tomorrow?" after the weather)."""
+    filters = _filters(messages)
+    for request in earlier[-2:]:
+        filters += tuple(f for f in _filters([Message("user", request)]) if f not in filters)
+    return filters
+
+
+def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
     request = _GREETING_FIRST.sub("", messages[0].text if messages else "", count=1)
     used = {
         _NAMESPACE_GROUP[name]

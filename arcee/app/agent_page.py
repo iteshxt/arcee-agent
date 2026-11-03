@@ -257,6 +257,7 @@ class AgentPage(Gtk.Box):
         while (child := self._log.get_first_child()) is not None:
             self._log.remove(child)
         self._open_questions.clear()
+        self._call("EndConversation")  # arceed forgets the turns too
         self._entry.grab_focus()
 
     def _on_typing(self, button: Gtk.ToggleButton) -> None:

@@ -42,9 +42,16 @@ class FakeRunner:
         self.spoken = False
 
     async def run(
-        self, request: str, user: User, on_event: Callable[[Event], None], *, spoken: bool = False
+        self,
+        request: str,
+        user: User,
+        on_event: Callable[[Event], None],
+        *,
+        spoken: bool = False,
+        conversation: Any = None,
     ) -> TaskResult:
         self.spoken = spoken
+        self.conversation = conversation
         if self.hang:
             await asyncio.sleep(60)
         allowed = await user.confirm(
@@ -390,3 +397,25 @@ async def test_cancel_drops_a_request_being_heard() -> None:
 
     assert heard._drop  # pyright: ignore[reportPrivateUsage]
     assert listening == [False]
+
+
+async def test_requests_share_the_conversation_until_it_is_ended(bus_address: str) -> None:
+    from arcee.context.conversation import Turn
+
+    service_bus = await connect(bus_address)
+    runner = FakeRunner()
+    service = AgentService(runner, transcriber=FakeTranscriber())  # pyright: ignore[reportArgumentType]
+    service_bus.export(OBJECT_PATH, service)
+    await service_bus.request_name(BUS_NAME)
+    bus, agent = await client(bus_address)
+    service.conversation.add(Turn("Open Chrome.", "Chrome is open.", "done"))
+
+    service.Run("open youtube")
+    await asyncio.sleep(0.05)
+
+    assert runner.conversation is service.conversation  # the run continues it
+    assert json.loads(await agent.call_status())["turns"] == 1
+    await agent.call_end_conversation()  # the user closed the pill
+    assert json.loads(await agent.call_status())["turns"] == 0
+    bus.disconnect()
+    service_bus.disconnect()
