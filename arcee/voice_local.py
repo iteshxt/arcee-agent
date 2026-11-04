@@ -91,16 +91,15 @@ HANGOVER_FRAMES: Final = 8
 # A trained wake word (wake_match) is checked every this many frames of speech (160 ms).
 MATCH_EVERY: Final = 2
 # The loudness gate before the VAD: a frame wakes it when it is GATE_RATIO times the
-# room's level (which falls at once to a quieter frame and, outside speech, rises
-# GATE_RISE of the way to a louder one each frame: a steady hiss becomes the level in
-# about 40 s, a voice never does), and at least
-# GATE_MIN; it sleeps after GATE_CALM_FRAMES (2 s) without speech or loudness.
+# room's level (its quietest frame of the last 10 s) and at least GATE_MIN; it sleeps
+# after GATE_CALM_FRAMES (2 s) without speech or loudness.
 GATE_RATIO: Final = 2.0
 GATE_MIN: Final = 0.004
-GATE_RISE: Final = 0.002
+GATE_WINDOW_FRAMES: Final = 125
 GATE_CALM_FRAMES: Final = 25
-# The first frame sets the room's level at most this loud: a hiss (the user's mic is
-# about 0.022) stays under the gate from the start, a voice starting it does not.
+# For its first 10 s the room's level is at most this: started while someone talks, it
+# would not take their voice for the room (a hiss, about 0.022 on the user's mic,
+# still stays under the gate).
 GATE_FIRST_MAX: Final = 0.015
 # Logged as a near miss: speech within this many times the wake word's threshold.
 NEAR_MISS: Final = 1.5
@@ -308,7 +307,8 @@ class WakeListener:
         spotting = False
         quiet = 0
         # The loudness gate: the VAD sleeps while the room is at its usual level.
-        floor = -1.0  # not heard yet
+        levels: deque[float] = deque(maxlen=GATE_WINDOW_FRAMES)
+        floor = 0.0
         awake = False
         calm = 0
         # For voice-watch: each stretch's loudest frame, speech in it, its audio, and
@@ -351,14 +351,13 @@ class WakeListener:
             # wakes only when a frame is clearly louder than the room's own level (a
             # steady hiss included), and sleeps again after GATE_CALM_FRAMES quiet.
             loudness = level(chunk)
-            # The room's level learns only from what is not speech: while someone talks
-            # it would climb to their voice and shut the gate on a quieter "hey Arcee".
-            if floor < 0:  # the first frame sets it, unless it is someone talking already
-                floor = min(loudness, GATE_FIRST_MAX)
-            elif loudness < floor:
-                floor = loudness
-            elif not (spotting or speech):
-                floor += (loudness - floor) * GATE_RISE
+            # The room's level is its quietest moment of the last GATE_WINDOW_FRAMES: a
+            # steady hiss or fan sets it; talk, typing or a knock on the laptop cannot
+            # (an average climbed with them, to 0.4, and shut the gate on "hey Arcee").
+            levels.append(loudness)
+            floor = min(levels)
+            if len(levels) < GATE_WINDOW_FRAMES:  # just started: maybe mid-sentence
+                floor = min(floor, GATE_FIRST_MAX)
             loud = loudness > max(floor * GATE_RATIO, GATE_MIN)
             recent.append(chunk)
             if self._on_burst is not None and (awake or loud):

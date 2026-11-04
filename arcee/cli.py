@@ -621,6 +621,11 @@ async def voice_test(seconds: float, file: str | None) -> int:
     return 0
 
 
+# A voice this loud is clipped by the mic: distorted, it no longer sounds like the
+# samples the wake word was trained on.
+CLIPPING: Final = 0.95
+
+
 async def voice_watch(words: bool) -> int:
     """The listener's judgement of each thing it hears, live: loudness, how near the
     wake word and "Arcee stop", the verdict, and (with words) what Whisper heard."""
@@ -655,6 +660,8 @@ async def voice_watch(words: bool) -> int:
 
     def burst(b: voice_local.Burst) -> None:
         loud = f"loud {b.loudness:.3f} (room {b.room:.3f})"
+        if b.loudness >= CLIPPING:
+            loud += " CLIPPING: turn the mic's input volume down"
         if b.kind == "noise":
             print(f"{stamp()}  sound, not speech  {loud}", flush=True)
             return
