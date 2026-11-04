@@ -451,12 +451,12 @@ class AgentService(ServiceInterface):
 
     def on_request(self, audio: bytes) -> None:
         self.Listening(False)
-        self._hearing = asyncio.ensure_future(self._hear(audio))
+        self._hearing = asyncio.ensure_future(self._hear(audio, woken=True))
 
     def on_stop(self) -> None:
         self.Cancel()
 
-    async def _hear(self, audio: bytes) -> None:
+    async def _hear(self, audio: bytes, *, woken: bool = False) -> None:
         """Transcribe, tell the panel and the app the text, and run it."""
         heard: dict[str, str]
         if not audio:
@@ -476,6 +476,10 @@ class AgentService(ServiceInterface):
                 type(self._transcriber).__name__,
             )
         text = heard.get("text", "").strip()
+        if woken and self.wake is not None:
+            # Words that were not a stop: the wake that led to them was meant, and its
+            # "hey Arcee" is learned (decision 0015). Nothing heard: it is not.
+            self.wake.learn(bool(text) and not is_stop(text))
         if text and is_stop(text):
             heard = {"error": "Stopped." if self._stop_task() else "Nothing to stop."}
             text = ""

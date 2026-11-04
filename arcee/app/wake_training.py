@@ -1,7 +1,7 @@
 # pyright: basic, reportMissingImports=false, reportMissingModuleSource=false
 """Training "Hey Arcee" on the user's voice (wake_match), as phone assistants do.
 
-Three times "Hey Arcee", twice "Arcee stop", then one ordinary sentence; each is heard
+Five times "Hey Arcee", twice "Arcee stop", then one ordinary sentence; each is heard
 until the user
 stops speaking, and the trainer moves on by itself. People say it differently (run
 together, or "hey… Arcee" with a pause), so it is said the user's own way and matched
@@ -27,7 +27,7 @@ from arcee.voice import VoiceError  # noqa: E402
 Runner = Callable[..., Any]  # (work, done[, failed]) -> its future, as Background.run
 SENTENCE: Final = "“Hey, what's the weather like today?”"
 ABOUT: Final = (
-    "You will say “Hey Arcee” three times, “Arcee stop” twice, then one ordinary "
+    "You will say “Hey Arcee” five times, “Arcee stop” twice, then one ordinary "
     "sentence. Say them the way you naturally do, run together or with a pause, from "
     "where you usually sit. It takes about half a minute."
 )

@@ -2,8 +2,8 @@
 
 The keyword spotter (voice_local) knows English, and "Arcee" is not English: with some
 voices and mics it never hears it (decision 0015, amended). Training fixes that, the way
-phone assistants do: the user says "hey Arcee" three times and one ordinary sentence.
-What is kept is the sound of the three (log-mel frames, 24 numbers per 20 ms), not the
+phone assistants do: the user says "hey Arcee" five times and one ordinary sentence.
+What is kept is the sound of the five (log-mel frames, 24 numbers per 20 ms), not the
 audio: it cannot be played back. Speech then wakes Arcee when it holds a stretch close
 enough to one of them, by dynamic time warping, so it allows for saying it faster or
 slower. The ordinary sentence sets how close is close enough.
@@ -14,6 +14,7 @@ only while someone speaks (the listener's VAD gate).
 
 import json
 import math
+import operator
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,8 +27,10 @@ WIN: Final = 400  # 25 ms
 HOP: Final = 320  # 20 ms: a frame of the listener's (80 ms) is four of these
 BINS: Final = 24
 WINDOW: Final = 80  # frames matched against, at least: the last 1.6 s of speech
-SAMPLES: Final = 3  # "hey Arcee"s asked for when training
+SAMPLES: Final = 5  # "hey Arcee"s asked for when training (5: more of how one says it)
 STOP_SAMPLES: Final = 2  # and "Arcee stop"s
+# Samples learned from wakes the user went on to use: at most this many, newest kept.
+MAX_LEARNED: Final = 3
 # A trained wake word is never looser than this, whatever the samples suggest.
 LOOSEST: Final = 0.3
 SHORTEST_S: Final = 0.3
@@ -126,33 +129,66 @@ def normalise(frames: Frames) -> Frames:
     return out
 
 
-def distance(template: Frames, query: Frames) -> float:
-    """How far `template` is from its best match anywhere in `query`: 0 is the same.
+def pooled(frames: Frames) -> Frames:
+    """Frames two by two (40 ms), each pair summed and made length 1 again: matching
+    at 40 ms does a quarter of the work of 20 ms (172 ms a check with ten samples
+    became 20 ms) and a one-second "hey Arcee" is still 25 points."""
+    out: Frames = []
+    for i in range(0, len(frames) - 1, 2):
+        pair = [a + b for a, b in zip(frames[i], frames[i + 1], strict=True)]
+        length = math.sqrt(sum(v * v for v in pair)) or 1.0
+        out.append([v / length for v in pair])
+    return out
 
-    Subsequence dynamic time warping: the whole template, against any stretch of the
-    query, by cosine distance per frame, averaged along the alignment.
-    """
-    if not template or not query:
-        return 1.0
+
+def _subsequence(template: Frames, query: Frames) -> tuple[float, int, int]:
+    """Subsequence dynamic time warping of pooled frames: the score, and query[start:end]."""
     big = 1e9
     width = len(query)
+    mul = operator.mul
     previous = [0.0] * (width + 1)  # the template may start anywhere in the query
     previous_steps = [0] * (width + 1)
-    for t in template:
+    previous_start = [0] * (width + 1)
+    for i, t in enumerate(template):
         current = [big] * (width + 1)
         steps = [0] * (width + 1)
+        starts = [0] * (width + 1)
         for j in range(1, width + 1):
-            q = query[j - 1]
-            cost = 1 - sum(a * b for a, b in zip(t, q, strict=True))
-            best, length = min(
-                (previous[j - 1], previous_steps[j - 1]),
-                (previous[j], previous_steps[j]),
-                (current[j - 1], steps[j - 1]),
-            )
+            cost = 1.0 - sum(map(mul, t, query[j - 1], strict=True))  # both are length 1
+            diagonal, along, down = previous[j - 1], previous[j], current[j - 1]
+            if diagonal <= along and diagonal <= down:
+                best, length, began = diagonal, previous_steps[j - 1], previous_start[j - 1]
+            elif along <= down:
+                best, length, began = along, previous_steps[j], previous_start[j]
+            else:
+                best, length, began = down, steps[j - 1], starts[j - 1]
             current[j] = best + cost
             steps[j] = length + 1
-        previous, previous_steps = current, steps
-    return min(previous[j] / previous_steps[j] for j in range(1, width + 1) if previous_steps[j])
+            starts[j] = j - 1 if i == 0 and length == 0 else began
+        previous, previous_steps, previous_start = current, steps, starts
+    score, end = min(
+        (previous[j] / previous_steps[j], j) for j in range(1, width + 1) if previous_steps[j]
+    )
+    return score, previous_start[end], end
+
+
+def best_match(template: Frames, query: Frames) -> tuple[float, int, int]:
+    """How far `template` is from its best match in `query` (0 is the same), and where
+    that match is: query[start:end] (in the frames given).
+
+    Subsequence dynamic time warping, at 40 ms (`pooled`): the whole template against
+    any stretch of the query, by cosine distance per frame, averaged along the path.
+    """
+    small, wide = pooled(template), pooled(query)
+    if not small or not wide:
+        return 1.0, 0, 0
+    score, start, end = _subsequence(small, wide)
+    return score, 2 * start, 2 * end
+
+
+def distance(template: Frames, query: Frames) -> float:
+    """How far `template` is from its best match anywhere in `query`: 0 is the same."""
+    return best_match(template, query)[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,9 +200,22 @@ class Trained:
     threshold: float
     stops: list[Frames] = field(default_factory=list[Frames])
     stop_threshold: float = 0.0
+    # "Hey Arcee"s heard since, from wakes the user went on to use (learned_from).
+    learned: list[Frames] = field(default_factory=list[Frames])
+
+    @property
+    def wakes(self) -> list[Frames]:
+        return [*self.templates, *self.learned]
 
     def closest(self, query: Frames) -> float:
-        return min(distance(t, query) for t in self.templates)
+        return min(distance(t, query) for t in self.wakes)
+
+    def span(self, recent: Frames) -> Frames:
+        """The stretch of `recent` that matched the wake word best: the "hey Arcee" in
+        it, as a template of its own."""
+        query = normalise(recent)
+        _, start, end = min(best_match(t, query) for t in self.wakes)
+        return normalise(recent[start:end])
 
     def distances(self, recent: Frames) -> tuple[float, float]:
         """How far the speech just heard is from the wake word and from "Arcee stop"
@@ -189,13 +238,13 @@ class Trained:
 
     @property
     def shortest(self) -> int:
-        return min(len(t) for t in [*self.templates, *self.stops])
+        return min(len(t) for t in [*self.wakes, *self.stops])
 
     @property
     def window(self) -> int:
         """Frames of speech to match against: room for the longest sample (said slowly,
         or "hey… Arcee" with a pause) and a little either side."""
-        return max(WINDOW, max(len(t) for t in [*self.templates, *self.stops]) + 25)
+        return max(WINDOW, max(len(t) for t in [*self.wakes, *self.stops]) + 25)
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +337,7 @@ def save(trained: Trained) -> None:
         "templates": rounded(trained.templates),
         "stop_threshold": trained.stop_threshold,
         "stops": rounded(trained.stops),
+        "learned": rounded(trained.learned),
     }
     path.write_text(json.dumps(data))
 
@@ -305,9 +355,22 @@ def load() -> Trained | None:
             float(data["threshold"]),
             frames(data.get("stops", [])),  # trained before "Arcee stop" was: none
             float(data.get("stop_threshold", 0.0)),
+            frames(data.get("learned", [])),
         )
     except OSError, ValueError, KeyError, TypeError:
         return None
+
+
+def learned_from(trained: Trained, heard: Frames) -> Trained:
+    """`trained` with `heard` (a "hey Arcee" that woke Arcee and was followed by a real
+    request) kept as a sample too: the newest MAX_LEARNED, the trained ones never
+    replaced. Kept as their sound, as the trained ones are."""
+    if len(heard) < SHORTEST_S * RATE // HOP:
+        return trained
+    learned = [*trained.learned, heard][-MAX_LEARNED:]
+    return Trained(
+        trained.templates, trained.threshold, trained.stops, trained.stop_threshold, learned
+    )
 
 
 def forget() -> None:
