@@ -91,14 +91,17 @@ HANGOVER_FRAMES: Final = 8
 # A trained wake word (wake_match) is checked every this many frames of speech (160 ms).
 MATCH_EVERY: Final = 2
 # The loudness gate before the VAD: a frame wakes it when it is GATE_RATIO times the
-# room's level (which falls at once to a quieter frame and rises GATE_RISE of the way
-# to a louder one each frame, so a steady hiss becomes the level), and at least
+# room's level (which falls at once to a quieter frame and, outside speech, rises
+# GATE_RISE of the way to a louder one each frame: a steady hiss becomes the level in
+# about 40 s, a voice never does), and at least
 # GATE_MIN; it sleeps after GATE_CALM_FRAMES (2 s) without speech or loudness.
-GATE_RATIO: Final = 2.5
+GATE_RATIO: Final = 2.0
 GATE_MIN: Final = 0.004
-GATE_RISE: Final = 0.01
-GATE_FLOOR_START: Final = 0.002
+GATE_RISE: Final = 0.002
 GATE_CALM_FRAMES: Final = 25
+# The first frame sets the room's level at most this loud: a hiss (the user's mic is
+# about 0.022) stays under the gate from the start, a voice starting it does not.
+GATE_FIRST_MAX: Final = 0.015
 # Logged as a near miss: speech within this many times the wake word's threshold.
 NEAR_MISS: Final = 1.5
 
@@ -210,6 +213,19 @@ def make_vad() -> Any:
     return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=MAX_REQUEST_S + 10)
 
 
+@dataclass(frozen=True, slots=True)
+class Burst:
+    """One stretch of sound the listener judged, for `arcee-cli voice-watch`."""
+
+    kind: str  # "wake", "stop", "speech" (not the wake word) or "noise" (loud, not speech)
+    seconds: float
+    loudness: float  # its loudest frame, 0..1
+    room: float  # the room's level the gate had learnt
+    wake: float  # nearest to the trained wake word (1.0: never compared)
+    stop: float  # and to "Arcee stop"
+    pcm: bytes = b""
+
+
 class WakeListener:
     """Listens for the wake word for as long as it runs.
 
@@ -227,7 +243,10 @@ class WakeListener:
         on_level: Callable[[float], None] = lambda loudness: None,
         command: tuple[str, ...] = RECORD_COMMAND,
         keywords: str = KEYWORDS,
+        on_burst: Callable[[Burst], None] | None = None,
     ) -> None:
+        # Each stretch of sound judged, with its audio (voice-watch); arceed has none.
+        self._on_burst = on_burst
         self._keywords = keywords
         self._on_wake = on_wake
         self._on_request = on_request
@@ -289,9 +308,13 @@ class WakeListener:
         spotting = False
         quiet = 0
         # The loudness gate: the VAD sleeps while the room is at its usual level.
-        floor = GATE_FLOOR_START
+        floor = -1.0  # not heard yet
         awake = False
         calm = 0
+        # For voice-watch: each stretch's loudest frame, speech in it, its audio, and
+        # how near it came to "Arcee stop".
+        peak, any_speech, sound, closest_stop = 0.0, False, bytearray(), 1.0
+        speech = False  # the VAD's last word, for the room's level
         while True:
             try:
                 chunk = await audio.readexactly(FRAME * 2)
@@ -328,14 +351,25 @@ class WakeListener:
             # wakes only when a frame is clearly louder than the room's own level (a
             # steady hiss included), and sleeps again after GATE_CALM_FRAMES quiet.
             loudness = level(chunk)
-            floor = loudness if loudness < floor else floor + (loudness - floor) * GATE_RISE
+            # The room's level learns only from what is not speech: while someone talks
+            # it would climb to their voice and shut the gate on a quieter "hey Arcee".
+            if floor < 0:  # the first frame sets it, unless it is someone talking already
+                floor = min(loudness, GATE_FIRST_MAX)
+            elif loudness < floor:
+                floor = loudness
+            elif not (spotting or speech):
+                floor += (loudness - floor) * GATE_RISE
             loud = loudness > max(floor * GATE_RATIO, GATE_MIN)
             recent.append(chunk)
+            if self._on_burst is not None and (awake or loud):
+                peak = max(peak, loudness)
+                if spotting:
+                    sound += chunk
             if not awake:
                 if not loud:
                     continue
                 # It slept only after 2 s with no speech: its state is silence, kept.
-                awake, calm = True, 0
+                awake, calm, any_speech, peak = True, 0, False, loudness
                 for earlier in list(recent)[:-1]:  # the start of "hey", before it was loud
                     vad.accept_waveform(samples(earlier))
             frame = samples(chunk)
@@ -344,9 +378,12 @@ class WakeListener:
             while not vad.empty():  # speech before any wake word is not kept
                 vad.pop()
             speech = vad.is_speech_detected()
+            any_speech = any_speech or speech
             calm = 0 if (speech or spotting or loud) else calm + 1
             if calm > GATE_CALM_FRAMES:
                 awake = False
+                if not any_speech:
+                    self._burst("noise", 0.0, peak, floor, 1.0, 1.0, b"")
             if speech:
                 quiet = 0
                 if not spotting:
@@ -355,6 +392,7 @@ class WakeListener:
                         stream = spotter.create_stream()
                     keep = trained.window if (trained := self.trained) else wake_match.WINDOW
                     heard, frames_spotted, closest = wake_match.Features(keep), 0, 1.0
+                    closest_stop, sound = 1.0, bytearray(b"".join(recent))
                     feed = [samples(c) for c in recent]  # heard before the VAD was sure
                 else:
                     feed = [frame]
@@ -364,6 +402,16 @@ class WakeListener:
                 if quiet > HANGOVER_FRAMES:
                     spotting = False
                     self._near_miss(closest)
+                    self._burst(
+                        "speech",
+                        len(sound) / 2 / RATE,
+                        peak,
+                        floor,
+                        closest,
+                        closest_stop,
+                        bytes(sound),
+                    )
+                    peak = 0.0
                     continue
             else:
                 continue
@@ -378,10 +426,15 @@ class WakeListener:
                 frames_spotted += 1
                 if frames_spotted % MATCH_EVERY == 0 and len(heard.frames) >= trained.shortest:
                     wake, stop = trained.distances(list(heard.frames))
-                    closest = min(closest, wake)
+                    closest, closest_stop = min(closest, wake), min(closest_stop, stop)
                     found = {"wake": WAKE, "stop": STOP}.get(trained.judge(wake, stop), "")
                     if found:
                         heard = wake_match.Features(heard.frames.maxlen or wake_match.WINDOW)
+            if found:
+                kind = "stop" if found == STOP else "wake"
+                seconds = len(sound) / 2 / RATE
+                self._burst(kind, seconds, peak, floor, closest, closest_stop, bytes(sound))
+                peak = 0.0
             if found == STOP:
                 self._on_stop()
             elif found == WAKE:
@@ -391,6 +444,19 @@ class WakeListener:
                 self._hearing, self._drop = True, False
                 closest = 1.0
                 vad.reset()
+
+    def _burst(
+        self,
+        kind: str,
+        seconds: float,
+        peak: float,
+        room: float,
+        wake: float,
+        stop: float,
+        pcm: bytes,
+    ) -> None:
+        if self._on_burst is not None:
+            self._on_burst(Burst(kind, seconds, peak, room, wake, stop, pcm))
 
     def _near_miss(self, closest: float) -> None:
         """Speech that came close to the wake word without reaching it: logged, so a

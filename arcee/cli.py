@@ -621,6 +621,93 @@ async def voice_test(seconds: float, file: str | None) -> int:
     return 0
 
 
+async def voice_watch(words: bool) -> int:
+    """The listener's judgement of each thing it hears, live: loudness, how near the
+    wake word and "Arcee stop", the verdict, and (with words) what Whisper heard."""
+    from datetime import datetime
+
+    from arcee import voice_local, wake_match
+    from arcee.voice import Transcriber, VoiceError
+
+    if missing := voice_local.missing():
+        print(f"voice models not downloaded: {', '.join(m.name for m in missing)}")
+        return 2
+    trained = wake_match.load()
+    transcriber = Transcriber() if words else None
+    pending: set[asyncio.Task[None]] = set()
+
+    def stamp() -> str:
+        return datetime.now().strftime("%H:%M:%S")
+
+    async def say_words(prefix: str, pcm: bytes) -> None:
+        if transcriber is None or not pcm:
+            return
+        try:
+            text = await transcriber.transcribe(pcm)
+        except VoiceError as exc:
+            text = f"(not transcribed: {exc})"
+        print(f"          {prefix} {text!r}", flush=True)
+
+    def later(prefix: str, pcm: bytes) -> None:
+        task = asyncio.ensure_future(say_words(prefix, pcm))
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    def burst(b: voice_local.Burst) -> None:
+        loud = f"loud {b.loudness:.3f} (room {b.room:.3f})"
+        if b.kind == "noise":
+            print(f"{stamp()}  sound, not speech  {loud}", flush=True)
+            return
+        verdict = {"wake": "WAKE", "stop": "STOP", "speech": "no"}[b.kind]
+        near = ""
+        if trained is not None:
+            near = f"  wake {b.wake:.3f} (≤ {trained.threshold:.3f})"
+            if trained.stops:
+                near += f"  stop {b.stop:.3f} (≤ {trained.stop_threshold:.3f})"
+        print(f"{stamp()}  speech {b.seconds:.1f} s  {loud}{near}  → {verdict}", flush=True)
+        later("heard:", b.pcm)
+
+    listener = voice_local.WakeListener(
+        on_wake=lambda: print(f"{stamp()}  … listening for the request", flush=True),
+        on_request=lambda pcm: (
+            print(f"{stamp()}  request {len(pcm) / 2 / 16000:.1f} s", flush=True),
+            later("request:", pcm),
+        )[0],
+        on_stop=lambda: None,
+        on_burst=burst,
+    )
+    print("Watching the microphone (Ctrl+C to stop). Say “Hey Arcee” as you normally would.")
+    if trained is None:
+        print("No trained wake word: only the general keyword spotter listens.")
+    else:
+        print(
+            f"Trained: wakes at a distance ≤ {trained.threshold:.3f}; "
+            + ("“Arcee stop” trained." if trained.stops else "“Arcee stop” not trained.")
+        )
+    if words:
+        print("What is heard goes to Groq's Whisper to show the words (--no-words: it does not).")
+    print("arceed's own listening is paused meanwhile, so nothing runs.\n")
+
+    async def hold() -> None:
+        while True:  # arceed lets go of a hold after 3 minutes: renew it
+            await wake_match.hold_wake(True)
+            await asyncio.sleep(60)
+
+    holding = asyncio.ensure_future(hold())
+    try:
+        await listener.run()
+    except KeyboardInterrupt, asyncio.CancelledError:
+        pass
+    except VoiceError as exc:
+        print(f"the listener stopped: {exc}")
+    finally:
+        holding.cancel()
+        await wake_match.hold_wake(False)
+        for task in pending:
+            task.cancel()
+    return 0
+
+
 async def voice_train(forget: bool) -> int:
     """Train the wake word on the user's voice: three "Hey Arcee"s, two "Arcee stop"s
     and a sentence."""
@@ -753,6 +840,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     voice_cmd.add_argument("--seconds", type=float, default=10.0)
     voice_cmd.add_argument("--file", help="analyse this recording (16 kHz mono WAV) instead")
 
+    watch_cmd = sub.add_parser(
+        "voice-watch", help="show live what the wake-word listener hears, until Ctrl+C"
+    )
+    watch_cmd.add_argument(
+        "--no-words", action="store_true", help="do not send what is heard to Groq's Whisper"
+    )
+
     train_cmd = sub.add_parser("voice-train", help='train "Hey Arcee" to your voice')
     train_cmd.add_argument("--forget", action="store_true", help="forget the trained wake word")
 
@@ -832,6 +926,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(browser_check())
         if args.command == "browser-reload":
             return asyncio.run(browser_reload())
+        if args.command == "voice-watch":
+            return asyncio.run(voice_watch(not args.no_words))
         if args.command == "voice-train":
             return asyncio.run(voice_train(args.forget))
         if args.command == "voice-test":
