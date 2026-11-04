@@ -75,3 +75,15 @@ older release supports Python 3.14.
 - sherpa-onnx is a C++ library behind Python bindings: a crash there takes arceed
   down, so the listener runs where a failure restarts cleanly (systemd restarts
   arceed) and the mic button keeps working without it.
+
+## Amended 2026-11-04: five samples, and learning from use
+
+At the user's word: training asks for "hey Arcee" five times (three were one sitting's
+voice, at one volume), and a wake the user goes on to use (the request after it has
+words, and is not "stop") teaches the wake word that "hey Arcee" too: the stretch the
+match found, kept as a sample beside the trained ones, the newest three; training
+again or forgetting clears them. A false wake followed by nothing is not learned.
+Matching is at 40 ms (frames pooled in pairs) with a tighter loop, checked every
+240 ms: three samples had cost 57% of a core while someone spoke (91 ms a check, the
+first measurement on the user's own samples); eight plus two "Arcee stop" now cost
+12%. Distances are not those of 20 ms: a wake word trained before needs training again.

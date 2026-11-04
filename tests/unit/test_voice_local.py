@@ -243,6 +243,9 @@ class Trained:
             0.0 if hit and self.said == "stop" else 1.0,
         )
 
+    def span(self, recent: list[list[float]]) -> list[list[float]]:
+        return recent
+
     def judge(self, wake: float, stop: float) -> str:
         return "stop" if stop == 0.0 else "wake" if wake == 0.0 else ""
 

@@ -88,8 +88,8 @@ NO_REQUEST_S: Final = 6.0
 # Running it on every frame cost 3.5% of a core in a quiet room; the VAD costs 0.7%.
 PREROLL_FRAMES: Final = 10
 HANGOVER_FRAMES: Final = 8
-# A trained wake word (wake_match) is checked every this many frames of speech (160 ms).
-MATCH_EVERY: Final = 2
+# A trained wake word (wake_match) is checked every this many frames of speech (240 ms).
+MATCH_EVERY: Final = 3
 # The loudness gate before the VAD: a frame wakes it when it is GATE_RATIO times the
 # room's level (its quietest frame of the last 10 s) and at least GATE_MIN; it sleeps
 # after GATE_CALM_FRAMES (2 s) without speech or loudness.
@@ -256,6 +256,18 @@ class WakeListener:
         self.trained: wake_match.Trained | None = None  # the user's own, when trained
         self._hearing = False
         self._drop = False
+        # The "hey Arcee" that woke it, kept until the request shows it was meant.
+        self._candidate: wake_match.Frames | None = None
+
+    def learn(self, meant: bool) -> None:
+        """The request after the last wake was real (`meant`): its "hey Arcee" becomes
+        a sample of the wake word too; else it is forgotten."""
+        candidate, self._candidate = self._candidate, None
+        if not meant or candidate is None or self.trained is None:
+            return
+        self.trained = wake_match.learned_from(self.trained, candidate)
+        wake_match.save(self.trained)
+        log.info("learned a sample from that wake (%d kept)", len(self.trained.learned))
 
     def drop(self) -> bool:
         """Throw away the request being heard (Esc, Stop); whether there was one."""
@@ -427,6 +439,8 @@ class WakeListener:
                     wake, stop = trained.distances(list(heard.frames))
                     closest, closest_stop = min(closest, wake), min(closest_stop, stop)
                     found = {"wake": WAKE, "stop": STOP}.get(trained.judge(wake, stop), "")
+                    if found == WAKE:
+                        self._candidate = trained.span(list(heard.frames))
                     if found:
                         heard = wake_match.Features(heard.frames.maxlen or wake_match.WINDOW)
             if found:

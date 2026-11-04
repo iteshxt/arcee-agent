@@ -465,3 +465,31 @@ async def test_a_question_is_answered_by_voice(bus_address: str) -> None:
     assert not service.busy  # an answer is not a new request
     bus.disconnect()
     service_bus.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("said", "learned"),
+    [("Open Chrome.", [True]), ("", [False]), ("Arcee, stop.", [False])],
+)
+async def test_a_wake_is_learned_only_when_a_real_request_follows(
+    said: str, learned: list[bool]
+) -> None:
+    class Wake:
+        def __init__(self) -> None:
+            self.learned: list[bool] = []
+
+        def learn(self, meant: bool) -> None:
+            self.learned.append(meant)
+
+    transcriber = FakeTranscriber()
+    transcriber.text = said
+    service = AgentService(FakeRunner(), transcriber=transcriber)  # pyright: ignore[reportArgumentType]
+    wake = Wake()
+    service.wake = wake  # pyright: ignore[reportAttributeAccessIssue]
+    service.Heard = lambda payload: payload  # type: ignore[method-assign]
+
+    await service._hear(b"pcm" if said else b"", woken=True)  # pyright: ignore[reportPrivateUsage]
+
+    assert wake.learned == learned
+    if service._task is not None:  # pyright: ignore[reportPrivateUsage]
+        service._task.cancel()  # pyright: ignore[reportPrivateUsage]

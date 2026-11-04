@@ -149,3 +149,35 @@ def test_a_wake_word_trained_before_arcee_stop_still_loads() -> None:
     assert loaded is not None
     assert loaded.stops == []
     assert loaded.match(word) == "wake"
+
+
+def test_the_match_says_where_the_word_is() -> None:
+    word = normalise(log_mel(sweep(300, 1200, 0.8)))
+    before, after = log_mel(silence(0.6)), log_mel(silence(0.6, seed=3))
+    said = log_mel(silence(0.6) + sweep(300, 1200, 0.8, seed=2) + silence(0.6, seed=3))
+
+    score, start, end = wake_match.best_match(word, normalise(said))
+
+    assert score < 0.25  # more silence around it than in training: a little further
+    assert abs(start - len(before)) <= 3
+    assert abs((len(said) - end) - len(after)) <= 3
+
+
+def test_wakes_that_were_meant_are_learned_newest_kept() -> None:
+    samples = [sweep(300, 1200, s, seed=i) for i, s in enumerate((0.8, 0.9, 0.85, 0.82, 0.88))]
+    trained = train(samples, sweep(2500, 600, 1.5, seed=7)).trained
+    assert len(trained.templates) == wake_match.SAMPLES == 5
+
+    for n in range(wake_match.MAX_LEARNED + 2):
+        heard = log_mel(silence(0.3) + sweep(300, 1200, 0.8 + n / 50, seed=40 + n))
+        trained = wake_match.learned_from(trained, trained.span(heard))
+
+    assert len(trained.learned) == wake_match.MAX_LEARNED
+    assert len(trained.templates) == 5  # the trained ones are never replaced
+    assert len(trained.wakes) == 5 + wake_match.MAX_LEARNED
+    wake_match.save(trained)
+    loaded = wake_match.load()
+    assert loaded is not None
+    assert len(loaded.learned) == wake_match.MAX_LEARNED
+    # A sound too short to be "hey Arcee" is not learned.
+    assert wake_match.learned_from(loaded, log_mel(sweep(300, 1200, 0.1))[:3]) is loaded
