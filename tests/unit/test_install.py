@@ -65,3 +65,25 @@ def test_a_checkout_puts_the_icon_in_the_users_icon_theme(
     assert (theme / "256x256" / "apps" / "me.iteshxt.Arcee.png").is_file()
     assert (theme / "16x16" / "apps" / "me.iteshxt.Arcee.png").is_file()
     assert (theme / "scalable" / "apps" / "me.iteshxt.Arcee.svg").is_file()
+
+
+def test_a_checkout_starts_arceed_at_login_when_listening(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    ran: list[list[str]] = []
+
+    def run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        ran.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(install.subprocess, "run", run)
+
+    install.daemon()
+
+    unit = (tmp_path / "config" / "systemd" / "user" / "arceed-listen.service").read_text()
+    assert "WantedBy=graphical-session.target" in unit
+    assert "-m arcee.settings listening" in unit  # only when "Hey Arcee" is on
+    assert "ExecStart=/usr/bin/systemctl --user start arceed.service" in unit
+    assert ["systemctl", "--user", "enable", "arceed-listen.service"] in ran

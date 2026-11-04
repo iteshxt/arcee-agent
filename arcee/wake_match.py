@@ -168,15 +168,21 @@ class Trained:
     def closest(self, query: Frames) -> float:
         return min(distance(t, query) for t in self.templates)
 
-    def match(self, recent: Frames) -> str:
-        """ "wake", "stop" or "" for the speech just heard."""
+    def distances(self, recent: Frames) -> tuple[float, float]:
+        """How far the speech just heard is from the wake word and from "Arcee stop"
+        (1.0 when "Arcee stop" was not trained)."""
         query = normalise(recent)
-        wake = self.closest(query)
-        if self.stops:
-            stop = min(distance(t, query) for t in self.stops)
-            if stop <= self.stop_threshold and stop < wake:
-                return "stop"
+        stop = min((distance(t, query) for t in self.stops), default=1.0)
+        return self.closest(query), stop
+
+    def judge(self, wake: float, stop: float) -> str:
+        if self.stops and stop <= self.stop_threshold and stop < wake:
+            return "stop"
         return "wake" if wake <= self.threshold else ""
+
+    def match(self, recent: Frames) -> str:
+        """The speech just heard: "wake", "stop" or ""."""
+        return self.judge(*self.distances(recent))
 
     def heard(self, recent: Frames) -> bool:
         return self.match(recent) == "wake"

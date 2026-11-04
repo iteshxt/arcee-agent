@@ -90,6 +90,17 @@ PREROLL_FRAMES: Final = 10
 HANGOVER_FRAMES: Final = 8
 # A trained wake word (wake_match) is checked every this many frames of speech (160 ms).
 MATCH_EVERY: Final = 2
+# The loudness gate before the VAD: a frame wakes it when it is GATE_RATIO times the
+# room's level (which falls at once to a quieter frame and rises GATE_RISE of the way
+# to a louder one each frame, so a steady hiss becomes the level), and at least
+# GATE_MIN; it sleeps after GATE_CALM_FRAMES (2 s) without speech or loudness.
+GATE_RATIO: Final = 2.5
+GATE_MIN: Final = 0.004
+GATE_RISE: Final = 0.01
+GATE_FLOOR_START: Final = 0.002
+GATE_CALM_FRAMES: Final = 25
+# Logged as a near miss: speech within this many times the wake word's threshold.
+NEAR_MISS: Final = 1.5
 
 
 def models_dir() -> Path:
@@ -238,11 +249,19 @@ class WakeListener:
         """Take up a newly trained (or forgotten) wake word."""
         self.trained = wake_match.load()
 
+    @property
+    def needs_spotter(self) -> bool:
+        """The English keyword spotter, for an untrained voice. With both "hey Arcee" and
+        "Arcee stop" trained it is not loaded (its model alone is 38 MB)."""
+        return self.trained is None or not self.trained.stops
+
     async def run(self) -> None:
         if missing_models := [m.name for m in (SPOTTER, VAD) if not installed(m)]:
             raise VoiceError(f"voice models not downloaded: {', '.join(missing_models)}")
-        spotter, vad = await asyncio.to_thread(lambda: (make_spotter(self._keywords), make_vad()))
         self.reload()
+        spotter, vad = await asyncio.to_thread(
+            lambda: (make_spotter(self._keywords) if self.needs_spotter else None, make_vad())
+        )
         try:
             process = await asyncio.create_subprocess_exec(
                 *self._command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
@@ -260,14 +279,19 @@ class WakeListener:
     async def _listen(self, audio: asyncio.StreamReader, spotter: Any, vad: Any) -> None:
         from arcee.voice import level
 
-        stream = spotter.create_stream()
+        stream = spotter.create_stream() if spotter is not None else None
         heard = wake_match.Features()  # the speech so far, for a trained wake word
         frames_spotted = 0
+        closest = 1.0  # this burst's nearest to the wake word, for the near-miss log
         hearing: bytearray | None = None  # the request after the wake word
         heard_for = 0.0
-        recent: deque[list[float]] = deque(maxlen=PREROLL_FRAMES)
+        recent: deque[bytes] = deque(maxlen=PREROLL_FRAMES)
         spotting = False
         quiet = 0
+        # The loudness gate: the VAD sleeps while the room is at its usual level.
+        floor = GATE_FLOOR_START
+        awake = False
+        calm = 0
         while True:
             try:
                 chunk = await audio.readexactly(FRAME * 2)
@@ -275,7 +299,6 @@ class WakeListener:
                 return  # the recorder ended (the mic went away)
             if self.paused:
                 continue
-            frame = samples(chunk)
             if hearing is not None and self._drop:
                 hearing, self._hearing, self._drop = None, False, False
                 vad.reset()
@@ -284,7 +307,7 @@ class WakeListener:
                 hearing += chunk
                 heard_for += FRAME / RATE
                 self._on_level(level(chunk))
-                vad.accept_waveform(frame)
+                vad.accept_waveform(samples(chunk))
                 if not vad.empty():  # a whole utterance has ended
                     pcm = _pcm(vad.front.samples)
                     vad.pop()
@@ -301,20 +324,38 @@ class WakeListener:
                     hearing, self._hearing = None, False
                     self._on_request(pcm)
                 continue
-            # Tier one's own gate: the VAD (0.7% of a core) hears every frame; the
-            # spotter (3.5%) only while someone speaks, from a little before.
-            recent.append(frame)
+            # Tier one's own gates. First the room's loudness: the VAD (1.4% of a core)
+            # wakes only when a frame is clearly louder than the room's own level (a
+            # steady hiss included), and sleeps again after GATE_CALM_FRAMES quiet.
+            loudness = level(chunk)
+            floor = loudness if loudness < floor else floor + (loudness - floor) * GATE_RISE
+            loud = loudness > max(floor * GATE_RATIO, GATE_MIN)
+            recent.append(chunk)
+            if not awake:
+                if not loud:
+                    continue
+                # It slept only after 2 s with no speech: its state is silence, kept.
+                awake, calm = True, 0
+                for earlier in list(recent)[:-1]:  # the start of "hey", before it was loud
+                    vad.accept_waveform(samples(earlier))
+            frame = samples(chunk)
+            # Then the VAD: matching runs only while someone speaks, from a little before.
             vad.accept_waveform(frame)
             while not vad.empty():  # speech before any wake word is not kept
                 vad.pop()
-            if vad.is_speech_detected():
+            speech = vad.is_speech_detected()
+            calm = 0 if (speech or spotting or loud) else calm + 1
+            if calm > GATE_CALM_FRAMES:
+                awake = False
+            if speech:
                 quiet = 0
                 if not spotting:
                     spotting = True
-                    stream = spotter.create_stream()
+                    if spotter is not None:
+                        stream = spotter.create_stream()
                     keep = trained.window if (trained := self.trained) else wake_match.WINDOW
-                    heard, frames_spotted = wake_match.Features(keep), 0
-                    feed = list(recent)  # the start of "hey", heard before the VAD was sure
+                    heard, frames_spotted, closest = wake_match.Features(keep), 0, 1.0
+                    feed = [samples(c) for c in recent]  # heard before the VAD was sure
                 else:
                     feed = [frame]
             elif spotting:
@@ -322,27 +363,43 @@ class WakeListener:
                 feed = [frame]
                 if quiet > HANGOVER_FRAMES:
                     spotting = False
+                    self._near_miss(closest)
                     continue
             else:
                 continue
-            for piece in feed:
-                stream.accept_waveform(RATE, piece)
-            found = _spot(spotter, stream)
+            found = ""
+            if spotter is not None and stream is not None:
+                for piece in feed:
+                    stream.accept_waveform(RATE, piece)
+                found = _spot(spotter, stream)
             if (trained := self.trained) is not None and not found:
                 for piece in feed:
                     heard.push(piece)
                 frames_spotted += 1
                 if frames_spotted % MATCH_EVERY == 0 and len(heard.frames) >= trained.shortest:
-                    found = {"wake": WAKE, "stop": STOP}.get(trained.match(list(heard.frames)), "")
+                    wake, stop = trained.distances(list(heard.frames))
+                    closest = min(closest, wake)
+                    found = {"wake": WAKE, "stop": STOP}.get(trained.judge(wake, stop), "")
                     if found:
                         heard = wake_match.Features(heard.frames.maxlen or wake_match.WINDOW)
             if found == STOP:
                 self._on_stop()
             elif found == WAKE:
+                log.info("wake word heard")
                 self._on_wake()
                 hearing, heard_for, spotting = bytearray(), 0.0, False
                 self._hearing, self._drop = True, False
+                closest = 1.0
                 vad.reset()
+
+    def _near_miss(self, closest: float) -> None:
+        """Speech that came close to the wake word without reaching it: logged, so a
+        voice that is missed can be seen (journalctl --user -u arceed)."""
+        trained = self.trained
+        if trained is not None and trained.threshold < closest <= trained.threshold * NEAR_MISS:
+            log.info(
+                "near miss: %.3f from the wake word (it wakes at %.3f)", closest, trained.threshold
+            )
 
 
 # Training (wake_match) waits this long for each phrase to start.

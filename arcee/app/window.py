@@ -99,7 +99,9 @@ class Background:
 
 
 def restart_daemon_when_idle(background: Background, told: Callable[[str], None]) -> None:
-    """Ask arceed to quit if it is idle; D-Bus starts it again with the new settings."""
+    """Ask arceed to quit if it is idle, and start it again with the new settings when
+    it listens for "hey Arcee" (D-Bus would start it only on the next request, and the
+    wake word would be deaf until then)."""
 
     async def restart() -> str:
         from dbus_fast import BusType, Message, MessageType
@@ -122,6 +124,24 @@ def restart_daemon_when_idle(background: Background, told: Callable[[str], None]
             if '"running"' in str(status.body[0]):
                 return "Saved. It takes effect after the current request."
             await bus.call(call("Quit"))
+            from arcee.settings import load
+
+            if load().listen:
+                for _ in range(20):  # until the old one has let its name go
+                    await asyncio.sleep(0.25)
+                    owner = await bus.call(
+                        Message(
+                            destination="org.freedesktop.DBus",
+                            path="/org/freedesktop/DBus",
+                            interface="org.freedesktop.DBus",
+                            member="NameHasOwner",
+                            signature="s",
+                            body=["me.iteshxt.Arcee.Agent"],
+                        )
+                    )
+                    if owner is not None and owner.body and not owner.body[0]:
+                        break
+                await bus.call(call("Status"))  # D-Bus starts it: it listens again
             return "Saved."
         finally:
             bus.disconnect()
