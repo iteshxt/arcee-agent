@@ -148,6 +148,11 @@ class ShellBridge {
         this._control.resume();
     }
 
+    // Whether Arcee pressed keys in the last half second (its Esc is not the user's).
+    typedJustNow() {
+        return GLib.get_monotonic_time() - (this._typedAt ?? 0) < 500_000;
+    }
+
     destroy() {
         this.ReleaseAll();
         this._control.end();
@@ -331,6 +336,7 @@ class ShellBridge {
             keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.RELEASED);
             this._keys.delete(keyval);
         }
+        this._typedAt = GLib.get_monotonic_time();
         invocation.return_value(null);
     }
 
@@ -342,6 +348,7 @@ class ShellBridge {
             this._keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.PRESSED);
             this._keyboard.notify_keyval(this._now(), keyval, Clutter.KeyState.RELEASED);
         }
+        this._typedAt = GLib.get_monotonic_time();
         invocation.return_value(null);
     }
 
@@ -433,6 +440,7 @@ export default class ArceeExtension extends Extension {
         this._indicator = new ArceeIndicator(this.path, {
             stopControl: () => this._bridge?.stop(),
             resumeControl: () => this._bridge?.resume(),
+            typedJustNow: () => this._bridge?.typedJustNow() ?? false,
         });
         this._bridge.onShown = shown => this._indicator?.setCueShown(shown);
         this._bridge.showControlOn(this._indicator);

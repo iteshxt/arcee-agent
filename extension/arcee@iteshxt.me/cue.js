@@ -17,12 +17,19 @@
 // Only its buttons take clicks, and only the user's (not Arcee's own virtual pointer):
 // Arcee's clicks near the top of the screen go through to the window under it. It
 // hides for Arcee's screenshots (`setShown`).
+//
+// Esc is a shortcut while it shows (grab_accelerator): GNOME hands keys and clicks
+// meant for an app window to the app before any extension's event filter sees them,
+// so a filter only heard Esc over the Shell's own UI. A finished pill also closes when
+// the user goes to another window (a click inside a window cannot be seen at all).
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Graphene from 'gi://Graphene';
+import Meta from 'gi://Meta';
 import Pango from 'gi://Pango';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -64,6 +71,8 @@ function fromUser(event) {
 
 const HINT = 'Say “Hey Arcee” to go on  ·  Esc to close';
 const PRESSES = new Set([Clutter.EventType.BUTTON_PRESS, Clutter.EventType.TOUCH_BEGIN]);
+// A focus change this soon after the reply is Arcee's own doing (an app it opened).
+const SETTLE_MS = 1500;
 
 export class ListeningCue {
     // `onStop` for its Stop button and Esc while something runs, `onResume` for Resume,
@@ -71,7 +80,15 @@ export class ListeningCue {
     // `onAnswer(id, answer)` when the user clicks an answer to Arcee's question.
     constructor(path, {
         onStop = () => {}, onResume = () => {}, onDismiss = () => {}, onAnswer = () => {},
+        typedJustNow = () => false,
     } = {}) {
+        // Whether Arcee itself just pressed keys: its own Esc must not stop it.
+        this._typedJustNow = typedJustNow;
+        this._escAction = 0;
+        this._escName = '';
+        this._escSignal = 0;
+        this._focusSignal = 0;
+        this._doneAt = 0;
         this._onStop = onStop;
         this._onAnswer = onAnswer;
         this._questionId = null;
@@ -240,6 +257,7 @@ export class ListeningCue {
 
     _showReply(words) {
         this._phase = 'done';
+        this._doneAt = GLib.get_monotonic_time();
         this._stop.visible = false;
         this._resume.visible = false;
         this._ring.ease({scale_x: 1, scale_y: 1, duration: 80, mode: Clutter.AnimationMode.LINEAR});
@@ -337,6 +355,7 @@ export class ListeningCue {
             return;
         }
         this._phase = 'done';
+        this._doneAt = GLib.get_monotonic_time();
         this.working(false);
         this._hint.visible = true;
         this._place();
@@ -354,6 +373,7 @@ export class ListeningCue {
             return;
         this.working(false);
         this._phase = 'done';
+        this._doneAt = GLib.get_monotonic_time();
         this._set(null, text);
         this._expire(ERROR_MS, () => this._settle());
     }
@@ -364,6 +384,7 @@ export class ListeningCue {
             return;
         this.working(false);
         this._phase = 'done';
+        this._doneAt = GLib.get_monotonic_time();
         this._set(null, 'Stopped');
         this._hint.visible = this._conversation;
         if (this._conversation)
@@ -385,6 +406,7 @@ export class ListeningCue {
             Clutter.Event.remove_filter(this._filter);
             this._filter = null;
         }
+        this._releaseKeys();
         if (!this.visible)
             return;
         this._clearLimit();
@@ -416,6 +438,7 @@ export class ListeningCue {
         if (this._filter)
             Clutter.Event.remove_filter(this._filter);
         this._filter = null;
+        this._releaseKeys();
         this._clearLimit();
         if (this._ticker)
             GLib.source_remove(this._ticker);
@@ -442,6 +465,53 @@ export class ListeningCue {
             });
         }
         this._filter ??= Clutter.Event.add_filter(global.stage, (event, actor) => this._onEvent(event, actor));
+        this._grabKeys();
+    }
+
+    // Esc as a shortcut, and the focus watch, for as long as the pill shows.
+    _grabKeys() {
+        if (!this._escAction) {
+            const action = global.display.grab_accelerator('Escape', Meta.KeyBindingFlags.NONE);
+            if (action !== Meta.KeyBindingAction.NONE) {
+                this._escAction = action;
+                this._escName = Meta.external_binding_name_for_action(action);
+                Main.wm.allowKeybinding(this._escName, Shell.ActionMode.ALL);
+                this._escSignal = global.display.connect('accelerator-activated', (_display, which, device) => {
+                    if (which !== this._escAction)
+                        return;
+                    // A real keyboard has a device node; Arcee's virtual one has none, and
+                    // when GNOME does not say, an Esc right after Arcee typed is its own.
+                    const ours = device ? device.get_device_node?.() == null && this._typedJustNow() : this._typedJustNow();
+                    if (!ours)
+                        this._escape();
+                });
+            }
+        }
+        this._focusSignal ||= global.display.connect('notify::focus-window', () => {
+            if (this._phase === 'done' && GLib.get_monotonic_time() - this._doneAt > SETTLE_MS * 1000)
+                this.dismiss(); // the user went to another window
+        });
+    }
+
+    _releaseKeys() {
+        if (this._escAction) {
+            global.display.disconnect(this._escSignal);
+            global.display.ungrab_accelerator(this._escAction);
+            Main.wm.allowKeybinding(this._escName, Shell.ActionMode.NONE);
+            this._escAction = this._escSignal = 0;
+        }
+        if (this._focusSignal) {
+            global.display.disconnect(this._focusSignal);
+            this._focusSignal = 0;
+        }
+    }
+
+    // Esc: stop what runs; once done, close the pill (and end the conversation).
+    _escape() {
+        if (this._phase === 'done')
+            this.dismiss();
+        else
+            this._onStop();
     }
 
     // Esc stops what runs (and goes no further); once done, Esc or a click anywhere but
@@ -451,11 +521,9 @@ export class ListeningCue {
             return Clutter.EVENT_PROPAGATE;
         const type = event.type();
         if (type === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
-            if (this._phase === 'done')
-                this.dismiss();
-            else
-                this._onStop();
-            return Clutter.EVENT_STOP;
+            if (!this._escAction)
+                this._escape(); // over the Shell's own UI, when the shortcut could not be had
+            return Clutter.EVENT_PROPAGATE; // the shortcut handles it everywhere else
         }
         if (PRESSES.has(type) && this._phase === 'done' && !(actor && this.contains(actor)))
             this.dismiss();
