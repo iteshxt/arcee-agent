@@ -394,3 +394,18 @@ def test_a_near_miss_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     assert [r.getMessage() for r in caplog.records] == [
         "near miss: 0.250 from the wake word (it wakes at 0.200)"
     ]
+
+
+async def test_knocks_and_typing_do_not_raise_the_room_level() -> None:
+    # The user adjusting the laptop raised the old room level to 0.4, and a normal
+    # "hey Arcee" no longer reached the VAD. The level is now the quietest moment.
+    before = frames_of(700, 130) + frames_of(20000, 60) + frames_of(700, 30)  # 5 s of knocks
+    counted: list[int] = []
+    for tail in (b"", frames_of(2100, 5)):  # then a voice three times the hiss
+        vad = Counting(speech_frames=None, talking=False)
+        reader = asyncio.StreamReader()
+        reader.feed_data(before + tail)
+        reader.feed_eof()
+        await listener([])._listen(reader, None, vad)
+        counted.append(vad.fed)
+    assert counted[1] - counted[0] >= 5  # the voice still woke the VAD
