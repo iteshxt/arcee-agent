@@ -100,6 +100,27 @@ def enable_shell_extension() -> bool:
     return done.returncode == 0
 
 
+LISTEN_UNIT: Final = "arceed-listen.service"
+
+
+def listen_unit(condition: str) -> str:
+    """The login unit: starts arceed when "Listen for Hey Arcee" is on, so the wake word
+    works from login with nothing clicked; with listening off nothing starts (arceed
+    still starts on the panel's first request)."""
+    return (
+        "[Unit]\n"
+        'Description=Start Arcee at login when "Hey Arcee" is on\n'
+        "PartOf=graphical-session.target\n"
+        "After=graphical-session.target pipewire.service\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecCondition={condition}\n"
+        "ExecStart=/usr/bin/systemctl --user start arceed.service\n\n"
+        "[Install]\n"
+        "WantedBy=graphical-session.target\n"
+    )
+
+
 def daemon() -> Report:
     """The systemd user unit, D-Bus activation and app launcher for arceed and the app."""
     report = Report()
@@ -116,6 +137,7 @@ def daemon() -> Report:
         report.lines.append(f"{arceed} is missing; run `uv sync` first")
         return report
     unit = _config() / "systemd" / "user" / "arceed.service"
+    at_login = _config() / "systemd" / "user" / LISTEN_UNIT
     activation = _data() / "dbus-1" / "services" / f"{AGENT_BUS_NAME}.service"
     launcher = _data() / "applications" / f"{APP_ID}.desktop"
     install_icon(report)
@@ -132,6 +154,7 @@ def daemon() -> Report:
             "TimeoutStopSec=2\n"
             "Restart=on-failure\n"
         ),
+        at_login: listen_unit(f"{sys.executable} -m arcee.settings listening"),
         activation: (
             "[D-BUS Service]\n"
             f"Name={AGENT_BUS_NAME}\n"
@@ -159,6 +182,11 @@ def daemon() -> Report:
             old.unlink()
             report.lines.append(f"removed the old {old}")
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False, capture_output=True)
+    enabled = subprocess.run(
+        ["systemctl", "--user", "enable", LISTEN_UNIT], check=False, capture_output=True
+    )
+    if enabled.returncode == 0:
+        report.lines.append(f"enabled {LISTEN_UNIT}: arceed starts at login when listening is on")
     # A running arceed under the old name would keep it; stop it so the new one starts.
     subprocess.run(["systemctl", "--user", "restart", "arceed"], check=False, capture_output=True)
     report.next.append(

@@ -6,12 +6,12 @@ import bz2
 import io
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
 
-from arcee import voice_local
+from arcee import voice_local, wake_match
 from arcee.voice import VoiceError
 from arcee.voice_local import FRAME, STOP, WAKE, VoiceModel, WakeListener, installed, samples
 
@@ -232,9 +232,19 @@ class Trained:
         self.shortest = 1
         self.window = 80
 
-    def match(self, recent: list[list[float]]) -> str:
+    threshold = 0.2
+    stops: ClassVar[list[Any]] = []
+
+    def distances(self, recent: list[list[float]]) -> tuple[float, float]:
         self.checks += 1
-        return self.said if self.checks == self.after else ""
+        hit = self.checks == self.after
+        return (
+            0.0 if hit and self.said == "wake" else 0.25,
+            0.0 if hit and self.said == "stop" else 1.0,
+        )
+
+    def judge(self, wake: float, stop: float) -> str:
+        return "stop" if stop == 0.0 else "wake" if wake == 0.0 else ""
 
 
 async def test_a_trained_wake_word_wakes_when_the_spotter_does_not() -> None:
@@ -326,3 +336,61 @@ async def test_a_request_being_heard_can_be_dropped() -> None:
 
     assert events == ["wake"]  # no request: nothing is transcribed or run
     assert not woken.drop()  # nothing being heard now
+
+
+class Counting(Vad):
+    """A VAD that counts the frames it is given."""
+
+    def __init__(self, speech_frames: int | None, talking: bool = True) -> None:
+        super().__init__(speech_frames, talking)
+        self.fed = 0
+
+    def accept_waveform(self, frame: list[float]) -> None:
+        self.fed += 1
+        super().accept_waveform(frame)
+
+
+def frames_of(level: int, n: int) -> bytes:
+    return array.array("h", [level, -level] * (FRAME // 2) * n).tobytes()
+
+
+async def test_the_vad_sleeps_through_a_steady_hiss_and_wakes_for_speech() -> None:
+    # 8 s of the user's mic hiss (about 0.02): the gate learns it in a few seconds and
+    # the VAD sleeps; then speech ten times louder wakes it, with what came just before.
+    events: list[Any] = []
+    hiss = Counting(speech_frames=None, talking=False)
+    reader = asyncio.StreamReader()
+    reader.feed_data(frames_of(700, 100))
+    reader.feed_eof()
+    await listener(events)._listen(reader, None, hiss)
+    assert hiss.fed < 75  # the last seconds of hiss were not heard by the VAD
+
+    both = Counting(speech_frames=None, talking=False)
+    reader = asyncio.StreamReader()
+    reader.feed_data(frames_of(700, 100) + frames_of(9000, 5))
+    reader.feed_eof()
+    await listener(events)._listen(reader, None, both)
+    assert both.fed - hiss.fed >= 5 + voice_local.PREROLL_FRAMES - 1  # speech, and before it
+
+
+async def test_no_spotter_once_both_phrases_are_trained() -> None:
+    trained_both = listener([])
+    trained_both.trained = wake_match.Trained([[[1.0]]], 0.2, [[[1.0]]], 0.2)
+    assert not trained_both.needs_spotter
+    wake_only = listener([])
+    wake_only.trained = wake_match.Trained([[[1.0]]], 0.2)
+    assert wake_only.needs_spotter
+    assert listener([]).needs_spotter  # not trained: the spotter hears it
+
+
+def test_a_near_miss_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    near = listener([])
+    near.trained = wake_match.Trained([[[1.0]]], 0.2)
+    with caplog.at_level(logging.INFO, logger="arcee.voice_local"):
+        near._near_miss(0.25)  # pyright: ignore[reportPrivateUsage]
+        near._near_miss(0.9)  # nowhere near: not logged  # pyright: ignore[reportPrivateUsage]
+    assert [r.getMessage() for r in caplog.records] == [
+        "near miss: 0.250 from the wake word (it wakes at 0.200)"
+    ]

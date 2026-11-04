@@ -46,3 +46,19 @@ def test_memory_is_on_unless_turned_off(tmp_path: Path) -> None:
     assert load(path).memory is False
     path.write_text("{}")
     assert load(path).memory is True
+
+
+def test_the_login_check_follows_the_listen_setting(tmp_path: Path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    def check(listen: bool) -> int:
+        config = tmp_path / str(listen)
+        save(Settings(listen=listen), config / "arcee" / "settings.json")
+        env = {**os.environ, "XDG_CONFIG_HOME": str(config)}
+        command = [sys.executable, "-m", "arcee.settings", "listening"]
+        return subprocess.run(command, env=env, check=False).returncode
+
+    assert check(True) == 0  # arceed starts at login
+    assert check(False) == 1  # nothing starts

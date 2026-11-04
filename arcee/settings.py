@@ -85,3 +85,11 @@ def save(settings: Settings, path: Path | None = None) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(asdict(settings), indent=1))
     temporary.replace(path)
+
+
+if __name__ == "__main__":
+    # `python -m arcee.settings listening`: exit 0 when "Listen for Hey Arcee" is on. The
+    # login unit (arceed-listen.service) starts arceed only then.
+    import sys
+
+    sys.exit(0 if sys.argv[1:] == ["listening"] and load().listen else 1)

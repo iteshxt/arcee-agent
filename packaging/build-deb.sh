@@ -99,6 +99,12 @@ ExecStart=/usr/bin/arceed
 TimeoutStopSec=2
 Restart=on-failure
 EOF
+# At login, arceed starts when "Listen for Hey Arcee" is on (wanted by every user's
+# graphical session; with listening off it starts nothing).
+mkdir -p "$STAGE/usr/lib/systemd/user/graphical-session.target.wants"
+uv run python -c 'from arcee.install import listen_unit; print(listen_unit("/usr/bin/env PYTHONPATH=/usr/lib/arcee:/usr/lib/arcee/vendor /usr/bin/python3 -m arcee.settings listening"), end="")' \
+    > "$STAGE/usr/lib/systemd/user/arceed-listen.service"
+ln -s ../arceed-listen.service "$STAGE/usr/lib/systemd/user/graphical-session.target.wants/arceed-listen.service"
 cat > "$STAGE/usr/share/dbus-1/services/me.iteshxt.Arcee.Agent.service" <<'EOF'
 [D-BUS Service]
 Name=me.iteshxt.Arcee.Agent
