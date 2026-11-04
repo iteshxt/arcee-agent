@@ -68,7 +68,9 @@ export const ArceeIndicator = GObject.registerClass(
 class ArceeIndicator extends PanelMenu.Button {
     // `onStep` hears what Arcee is doing now ('' when it is done); `stopControl` and
     // `resumeControl` act on the control session (ShellBridge).
-    _init(path, {onStep = () => {}, stopControl = () => {}, resumeControl = () => {}} = {}) {
+    _init(path, {
+        onStep = () => {}, stopControl = () => {}, resumeControl = () => {}, typedJustNow = () => false,
+    } = {}) {
         super._init(0.5, 'Arcee', false);
         this._onStep = onStep;
         this._stopControl = stopControl;
@@ -81,6 +83,7 @@ class ArceeIndicator extends PanelMenu.Button {
             // The user closed the pill: the next request starts a new conversation.
             onDismiss: () => this._agent.EndConversationAsync().catch(logError),
             onAnswer: (id, answer) => this._agent.AnswerAsync(id, answer).catch(logError),
+            typedJustNow,
         });
         this._spoken = false; // the request under way is followed on the pill
         this._request = '';
