@@ -203,3 +203,32 @@ async def test_executor_records_every_call_including_refusals(tmp_path: Path) ->
         ("fs.trash", Tier.CONFIRM, None, "refused"),
     ]
     assert records[1].args == {"paths": ["~/x"]}
+
+
+async def test_requests_are_deleted_with_all_they_left(tmp_path: Path) -> None:
+    from tests.unit.test_digest import finished_task
+
+    store = Store(tmp_path)
+    try:
+        kept = await finished_task(store, "What is the weather?", "Sunny.", "web.weather")
+        gone = await finished_task(store, "Read my email", "One email.", "mail.list", "mail.read")
+        await store.save_summary(gone, "The user asked about their email.")
+        await store.save_memory("The user's bank is HDFC", 0.8, task_id=gone)
+
+        assert await store.delete_tasks([gone]) == 1
+
+        assert [t.id for t in await store.recent(10)] == [kept]
+        assert await store.task(gone) is None
+        assert not await store.search_summaries("email", 5)  # its summary is gone
+        log = (tmp_path / "logs" / "actions.jsonl").read_text()
+        assert gone not in log
+        assert kept in log
+        facts = await store.all_memories()
+        assert [m.text for m in facts] == ["The user's bank is HDFC"]  # Memory keeps it
+        assert facts[0].task_id is None
+
+        assert await store.delete_tasks() == 1  # all the rest
+        assert await store.recent(10) == []
+        assert (tmp_path / "logs" / "actions.jsonl").read_text() == ""
+    finally:
+        store.close()

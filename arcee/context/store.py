@@ -15,7 +15,7 @@ import os
 import secrets
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -385,6 +385,50 @@ class Store:
                 return facts
 
         return await self._run(write)
+
+    async def delete_tasks(self, task_ids: Sequence[str] | None = None) -> int:
+        """Delete requests from History, `task_ids` or (None) all of them: each with its
+        steps, what its tools returned, its summary, and its lines in the action log.
+        What it taught stays in Memory (deleted there, fact by fact); only its link to
+        the request goes. Returns how many requests were deleted."""
+
+        def write() -> int:
+            with self._db:
+                if task_ids is None:
+                    ids = [row[0] for row in self._db.execute("SELECT id FROM tasks")]
+                else:
+                    ids = list(task_ids)
+                for table in ("observations", "steps", "summaries"):
+                    self._db.executemany(
+                        f"DELETE FROM {table} WHERE task_id = ?", [(i,) for i in ids]
+                    )
+                self._db.executemany(
+                    "UPDATE memories SET task_id = NULL WHERE task_id = ?", [(i,) for i in ids]
+                )
+                deleted = sum(
+                    self._db.execute("DELETE FROM tasks WHERE id = ?", (i,)).rowcount for i in ids
+                )
+            self._drop_log_lines(None if task_ids is None else set(ids))
+            return deleted
+
+        return await self._run(write)
+
+    def _drop_log_lines(self, task_ids: set[str] | None) -> None:
+        """The action log without those tasks' lines (None: empty), rewritten in place."""
+        if not self._log_path.exists():
+            return
+        kept: list[str] = []
+        if task_ids is not None:
+            for line in self._log_path.read_text(encoding="utf-8").splitlines(keepends=True):
+                try:
+                    task_id = json.loads(line).get("task_id")
+                except ValueError:
+                    task_id = None
+                if task_id not in task_ids:
+                    kept.append(line)
+        temporary = self._log_path.with_suffix(".tmp")
+        temporary.write_text("".join(kept), encoding="utf-8")
+        temporary.replace(self._log_path)
 
     async def all_memories(self) -> list[MemoryRow]:
         def read() -> list[MemoryRow]:
