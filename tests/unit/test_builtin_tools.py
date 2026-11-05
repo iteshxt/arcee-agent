@@ -256,6 +256,7 @@ class TestShell:
         assert result.data is not None
         assert result.data["stdout"] == f"none fine {ctx.home}\n"
 
+    @pytest.mark.real_session  # runs `echo` in a limited scope of the user's systemd
     @pytest.mark.skipif(
         shutil.which("systemd-run") is None or "DBUS_SESSION_BUS_ADDRESS" not in os.environ,
         reason="needs a systemd user session",
