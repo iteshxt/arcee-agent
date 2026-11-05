@@ -21,7 +21,9 @@ class BrowserError(Exception):
 
 class BrowserClient:
     def __init__(self, path: Path | None = None) -> None:
-        self._path = path or socket_path()
+        # Looked up at each connection, not here: a client made before the runtime folder
+        # was set (the unit tests' tools, built at import) reached the user's Chrome.
+        self._path = path
         self._ids = itertools.count(1)
         self._lock = asyncio.Lock()
         self._reader: asyncio.StreamReader | None = None
@@ -58,7 +60,7 @@ class BrowserClient:
         if self._reader is None or self._writer is None:
             try:
                 self._reader, self._writer = await asyncio.open_unix_connection(
-                    str(self._path), limit=16 * 1024 * 1024
+                    str(self._path or socket_path()), limit=16 * 1024 * 1024
                 )
             except (FileNotFoundError, ConnectionRefusedError) as exc:
                 raise BrowserError(NOT_CONNECTED) from exc
