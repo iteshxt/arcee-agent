@@ -457,11 +457,25 @@ async def test_the_wake_word_is_matched_on_cleaned_speech(monkeypatch: pytest.Mo
     woken = listener(events)
     woken.trained = Trained(after=2)  # pyright: ignore[reportAttributeAccessIssue]
     denoiser = Denoiser()
+    woken.cleaner = voice_local.Cleaner(denoiser)
 
-    await woken._listen(audio(12), Spotter({}), Vad(speech_frames=3), voice_local.Cleaner(denoiser))
+    await woken._listen(audio(12), Spotter({}), Vad(speech_frames=3))
 
     assert "wake" in events
     assert denoiser.resets >= 1  # each stretch of speech starts clean
     heard = [v for piece in pushed for v in piece]
     assert heard
     assert set(heard) == {samples(array.array("h", [1000]).tobytes())[0] / 2}  # cleaned
+
+
+def test_a_denoiser_downloaded_by_training_is_taken_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """arceed started before the denoiser was downloaded; training then fetched it."""
+    events: list[Any] = []
+    running = listener(events)
+    assert not running.cleaner.ready
+    monkeypatch.setattr(wake_match, "load", lambda: Trained(after=1))
+    monkeypatch.setattr(voice_local, "make_denoiser", Denoiser)
+
+    running.reload()
+
+    assert running.cleaner.ready

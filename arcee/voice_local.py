@@ -230,6 +230,10 @@ class Cleaner:
     def __init__(self, denoiser: Any) -> None:
         self._denoiser = denoiser
 
+    @property
+    def ready(self) -> bool:
+        return self._denoiser is not None
+
     def reset(self) -> None:
         if self._denoiser is not None:
             self._denoiser.reset()
@@ -320,6 +324,7 @@ class WakeListener:
         self._drop = False
         # The "hey Arcee" that woke it, kept until the request shows it was meant.
         self._candidate: wake_match.Frames | None = None
+        self.cleaner = Cleaner(None)  # the denoiser, once run() has loaded it
 
     def learn(self, meant: bool) -> None:
         """The request after the last wake was real (`meant`): its "hey Arcee" becomes
@@ -338,8 +343,11 @@ class WakeListener:
         return self._hearing
 
     def reload(self) -> None:
-        """Take up a newly trained (or forgotten) wake word."""
+        """Take up a newly trained (or forgotten) wake word, and the denoiser if training
+        has just downloaded it: without it, denoised samples meet noisy speech."""
         self.trained = wake_match.load()
+        if self.trained is not None and not self.cleaner.ready:
+            self.cleaner = Cleaner(make_denoiser())
 
     @property
     def needs_spotter(self) -> bool:
@@ -358,6 +366,7 @@ class WakeListener:
                 make_denoiser(),  # loaded either way: a wake word may be trained later
             )
         )
+        self.cleaner = Cleaner(denoiser)
         try:
             process = await asyncio.create_subprocess_exec(
                 *self._command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
@@ -366,7 +375,7 @@ class WakeListener:
             raise VoiceError("pw-record is missing (PipeWire's tools)") from exc
         assert process.stdout is not None
         try:
-            await self._listen(process.stdout, spotter, vad, Cleaner(denoiser))
+            await self._listen(process.stdout, spotter, vad)
         finally:
             with contextlib.suppress(ProcessLookupError):
                 process.terminate()
@@ -377,12 +386,12 @@ class WakeListener:
         audio: asyncio.StreamReader,
         spotter: Any,
         vad: Any,
-        cleaner: Cleaner = Cleaner(None),  # noqa: B008 (it holds nothing)
     ) -> None:
         from arcee.voice import level
 
         stream = spotter.create_stream() if spotter is not None else None
         heard = wake_match.Features()  # the speech so far, for a trained wake word
+        cleaner = self.cleaner
         frames_spotted = 0
         closest = 1.0  # this burst's nearest to the wake word, for the near-miss log
         hearing: bytearray | None = None  # the request after the wake word
@@ -475,6 +484,7 @@ class WakeListener:
                         stream = spotter.create_stream()
                     keep = trained.window if (trained := self.trained) else wake_match.WINDOW
                     heard, frames_spotted, closest = wake_match.Features(keep), 0, 1.0
+                    cleaner = self.cleaner  # for this stretch (reload may replace it)
                     cleaner.reset()
                     closest_stop, sound = 1.0, bytearray(b"".join(recent))
                     feed = [samples(c) for c in recent]  # heard before the VAD was sure
