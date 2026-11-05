@@ -332,9 +332,13 @@ class WakeListener:
         candidate, self._candidate = self._candidate, None
         if not meant or candidate is None or self.trained is None:
             return
-        self.trained = wake_match.learned_from(self.trained, candidate)
-        wake_match.save(self.trained)
-        log.info("learned a sample from that wake (%d kept)", len(self.trained.learned))
+        learned = wake_match.learned_from(self.trained, candidate)
+        if learned is self.trained:
+            log.info("not learned from that wake: not a sure match of the trained samples")
+            return
+        self.trained = learned
+        wake_match.save(learned)
+        log.info("learned a sample from that wake (%d kept)", len(learned.learned))
 
     def drop(self) -> bool:
         """Throw away the request being heard (Esc, Stop); whether there was one."""
@@ -526,6 +530,7 @@ class WakeListener:
                         self._candidate = trained.span(list(heard.frames))
                     if found:
                         heard = wake_match.Features(heard.frames.maxlen or wake_match.WINDOW)
+            woke_at = closest  # for the log, before it is cleared below
             if found:
                 kind = "stop" if found == STOP else "wake"
                 seconds = len(sound) / 2 / RATE
@@ -536,7 +541,10 @@ class WakeListener:
             if found == STOP:
                 self._on_stop()
             elif found == WAKE:
-                log.info("wake word heard")
+                if self.trained is not None and not self.needs_spotter:
+                    log.info("wake word heard: %.3f (wakes at %.3f)", woke_at, self._wakes_at())
+                else:
+                    log.info("wake word heard")
                 self._on_wake()
                 hearing, heard_for, spotting = bytearray(), 0.0, False
                 self._hearing, self._drop = True, False
@@ -555,6 +563,9 @@ class WakeListener:
     ) -> None:
         if self._on_burst is not None:
             self._on_burst(Burst(kind, seconds, peak, room, wake, stop, pcm))
+
+    def _wakes_at(self) -> float:
+        return self.trained.threshold if self.trained is not None else 0.0
 
     def _near_miss(self, closest: float) -> None:
         """Speech that came close to the wake word without reaching it: logged, so a

@@ -35,6 +35,12 @@ SAMPLES: Final = 5  # "hey Arcee"s asked for when training (5: more of how one s
 STOP_SAMPLES: Final = 2  # and "Arcee stop"s
 # Samples learned from wakes the user went on to use: at most this many, newest kept.
 MAX_LEARNED: Final = 3
+# And only from a wake this sure: its "hey Arcee" within this share of the threshold
+# of the trained samples themselves. Words after a wake did not prove it was meant:
+# while the user dictated, a stretch of their sentence woke Arcee, the words that
+# followed made it "meant", and it was kept as a sample; ordinary speech then woke it
+# six times in 50 s (2026-11-06).
+SURE: Final = 0.75
 # A trained wake word is never looser than this, whatever the samples suggest.
 LOOSEST: Final = 0.3
 SHORTEST_S: Final = 0.3
@@ -401,8 +407,11 @@ def load() -> Trained | None:
 def learned_from(trained: Trained, heard: Frames) -> Trained:
     """`trained` with `heard` (a "hey Arcee" that woke Arcee and was followed by a real
     request) kept as a sample too: the newest MAX_LEARNED, the trained ones never
-    replaced. Kept as their sound, as the trained ones are."""
+    replaced. Kept as their sound, as the trained ones are. Only a sure match of the
+    trained samples is kept (SURE): never one that only a learned sample came near."""
     if len(heard) < SHORTEST_S * RATE // HOP:
+        return trained
+    if min(distance(t, heard) for t in trained.templates) > SURE * trained.threshold:
         return trained
     learned = [*trained.learned, heard][-MAX_LEARNED:]
     return Trained(
