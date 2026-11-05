@@ -491,8 +491,11 @@ class ArceeWindow(Adw.ApplicationWindow):
         scroll = Gtk.ScrolledWindow(child=clamp, vexpand=True)
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
         refresh.connect("clicked", lambda _b: self._load_history())
+        clear = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="Delete all history")
+        clear.connect("clicked", lambda _b: self._confirm_delete_all())
         bar = Adw.HeaderBar(show_end_title_buttons=False, show_start_title_buttons=False)
         bar.pack_end(refresh)
+        bar.pack_end(clear)
         view = Adw.ToolbarView(content=scroll)
         view.add_top_bar(bar)
         self._history.add(Adw.NavigationPage(child=view, title="Recent requests"))
@@ -519,6 +522,14 @@ class ArceeWindow(Adw.ApplicationWindow):
                 activatable=True,
             )
             row.task_id = task.id  # type: ignore[attr-defined]
+            delete = Gtk.Button(
+                icon_name="user-trash-symbolic",
+                tooltip_text="Delete this request",
+                valign=Gtk.Align.CENTER,
+            )
+            delete.add_css_class("flat")
+            delete.connect("clicked", lambda _b, task_id=task.id: self._delete_history([task_id]))
+            row.add_suffix(delete)
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             self._history_list.append(row)
         if not tasks:
@@ -560,10 +571,49 @@ class ArceeWindow(Adw.ApplicationWindow):
             )
         page.add(group)
         view = Adw.ToolbarView(content=page)
-        view.add_top_bar(Adw.HeaderBar(show_end_title_buttons=False))
+        bar = Adw.HeaderBar(show_end_title_buttons=False)
+        delete = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="Delete this request")
+        delete.connect("clicked", lambda _b: self._delete_history([task.id], back=True))
+        bar.pack_end(delete)
+        view.add_top_bar(bar)
         self._history.push(Adw.NavigationPage(child=view, title=task.request[:60]))
         # A selectable label selects all its text when it first takes focus; undo that.
         GLib.idle_add(lambda: label.select_region(0, 0) and False)
+
+    def _confirm_delete_all(self) -> None:
+        dialog = Adw.AlertDialog(
+            heading="Delete all history?",
+            body="Every request, the steps Arcee took and what it saw are deleted. "
+            "What it learned about you stays in Memory, where you can delete it too.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete all")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect(
+            "response",
+            lambda _d, response: self._delete_history(None) if response == "delete" else None,
+        )
+        dialog.present(self)
+
+    def _delete_history(self, task_ids: list[str] | None, back: bool = False) -> None:
+        """Delete these requests (None: all of them) from History."""
+
+        async def delete() -> int:
+            store = Store(data_dir())
+            try:
+                return await store.delete_tasks(task_ids)
+            finally:
+                store.close()
+
+        def done(deleted: int) -> None:
+            if back:
+                self._history.pop()
+            self._load_history()
+            self._toast("Deleted the request." if deleted == 1 else f"Deleted {deleted} requests.")
+
+        self._background.run(delete(), done)
 
     # --- Permissions ----------------------------------------------------------------
 
