@@ -9,6 +9,7 @@ here, not left to it.
 """
 
 import logging
+import re
 from typing import Final
 
 from pydantic import BaseModel, Field
@@ -29,6 +30,35 @@ TRIVIAL_WORDS: Final = 3
 GROUNDED: Final = 0.6
 # Words every fact may use that the task need not contain.
 _FREE: Final = frozenset({"user", "users", "user's", "uses", "use", "prefers", "likes", "usual"})
+# Facts below this importance are not kept: the prompt's "useful details" and "passing
+# ones" were, in practice, the computer's state and the task's own results.
+LASTING: Final = 0.6
+# What a fact must not be about, whatever importance it was given. Kept by gpt-oss over
+# a week (2026-11-06): "The user has an open Chrome window", "The user marked the
+# outcome as done", "The user wants to mute audio", "The user has a default audio
+# sink", "The user uses amixer to set Master volume", "The user's first email is from
+# Google Photos", "The user has roughly 76 GB of free disk space".
+_PASSING: Final = re.compile(
+    r"\b(currently|right now|at the moment|today|open (chrome|window|tab)|an open|"
+    r"(is|are|was) (open|playing|running|showing)|opened|free (disk )?space|disk space|"
+    r"volume|audio (sink|source|device)|mixer|battery|brightness|"
+    r"(first|latest|last|newest|recent) (email|message|event|file)|"
+    r"marked|wants? to|wanted to|may want|might want|asked|requested|tried|"
+    r"is (viewing|looking|reading|watching)|home directory|home folder|"
+    r"uses (a |an |the )?(browser|terminal|command|shell|amixer|pactl|wpctl|gio|xdg-open)|"
+    r"uses \S+ to (set|open|run|search|check|change|turn))\b",
+    re.IGNORECASE,
+)
+_EMAIL: Final = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+
+
+def lasting(fact: str) -> bool:
+    """Whether `fact` could still be true and worth knowing weeks from now: not the
+    computer's state, not what this task did or wanted, not someone else's address."""
+    if _PASSING.search(fact):
+        return False
+    # An address is the user's own account, never someone else's they happened to see.
+    return not _EMAIL.search(fact) or "account" in fact.lower()
 
 
 def grounded(fact: str, task_text: str) -> bool:
@@ -47,15 +77,23 @@ You keep the memory of Arcee, an agent on the user's Ubuntu desktop. Given one f
 task, write:
 1. summary: what was asked and what happened, in at most 3 sentences (120 words), with \
 the names, places, sites, files and numbers someone would search for later.
-2. facts: durable facts about the user that THIS task's request, steps or reply state or \
-plainly show, and that will help with future requests: their name, people, places, \
-accounts and services they use, devices, folders, routines, preferences. At most 5, \
-each one short sentence beginning "The user". Only what this task says: nothing \
-guessed, nothing from these instructions. Not the task's own results ("found 3 \
-files"), not facts about the world. Never passwords, codes, keys, card or account \
-numbers. No facts is the usual answer: most tasks teach nothing lasting.
+2. facts: lasting facts about the user as a person, that will still be true and useful \
+weeks from now, and that THIS task's request, steps or reply state or plainly show: \
+their name, work or studies, where they live, the people in their life, their own \
+accounts, the apps and services they choose, standing preferences and routines. At \
+most 3, each one short sentence beginning "The user". Only what this task says: \
+nothing guessed, nothing from these instructions.
+Never a fact about:
+- the computer's state at the time: open windows or tabs, free disk space, volume, \
+audio devices, what is playing or on screen;
+- this task itself: what the user asked, wanted or marked, what was found, which \
+email or file came first;
+- how a task was done: commands, tools or programs used to do it;
+- other people's email addresses or numbers, or anything in someone else's message;
+- the world in general. Never passwords, codes, keys, card or account numbers.
+No facts is the usual answer: almost every task teaches nothing lasting.
 Each fact gets an importance from 0 to 1: 0.9 for who the user is and where they live, \
-0.7 for standing preferences and accounts, 0.4 for useful details, 0.2 for passing ones. \
+0.7 for standing preferences, people and accounts; anything less is not worth keeping. \
 If a fact changes one of the facts already known (listed with ids), give that id in \
 "replaces"; if it is already known as it is, leave it out.\
 """
@@ -121,10 +159,14 @@ async def digest_task(
     kept = [
         f
         for f in digest.facts
-        if facts and f.text.lower().startswith("the user") and grounded(f.text, task_text)
+        if facts
+        and f.text.lower().startswith("the user")
+        and f.importance >= LASTING
+        and lasting(f.text)
+        and grounded(f.text, task_text)
     ]
     if dropped := len(digest.facts) - len(kept):
-        log.info("digest of %s: dropped %d facts not found in the task", task_id, dropped)
+        log.info("digest of %s: dropped %d facts (passing, or not in the task)", task_id, dropped)
     digest = digest.model_copy(update={"facts": kept})
     for fact in digest.facts:
         replaces = fact.replaces if fact.replaces in known else None  # never a made-up id
