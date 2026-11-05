@@ -608,7 +608,7 @@ async def voice_test(seconds: float, file: str | None) -> int:
         print(f"  {tokens:24} " + "   ".join(counts))
     voice_local.make_spotter()  # the listener's own keywords file back as it was
     if (trained := wake_match.load()) is not None:
-        heard = wake_match.log_mel(samples)
+        heard = wake_match.log_mel(voice_local.Cleaner(voice_local.make_denoiser()).whole(samples))
         closest = min(
             trained.closest(wake_match.normalise(heard[i : i + wake_match.WINDOW]))
             for i in range(0, max(1, len(heard) - wake_match.WINDOW + 1), 8)
@@ -727,8 +727,8 @@ async def voice_train(forget: bool) -> int:
         print("Forgotten: the wake word is heard by the general model only.")
         return 0
     if missing := voice_local.missing():
-        print(f"voice models not downloaded: {', '.join(m.name for m in missing)}")
-        return 2
+        print(f"Downloading {', '.join(m.name for m in missing)}...")
+        await voice_local.download_missing()
     vad = voice_local.make_vad()
     print("Training “Hey Arcee” on your voice. Speak as you normally would, from where")
     print("you usually sit. (Arcee stops listening for it until this is done.)\n")
@@ -748,7 +748,7 @@ async def voice_train(forget: bool) -> int:
         print("  today?”... ", end="", flush=True)
         other = await voice_local.record_phrase(vad=vad)
         print("got it\n")
-        training = wake_match.train(samples, other, stops)
+        training = voice_local.train(samples, other, stops)
     except VoiceError as exc:
         print(f"\nNot trained: {exc}. Run it again to retry.")
         await wake_match.hold_wake(False)

@@ -6,6 +6,7 @@ import bz2
 import io
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import httpx
@@ -309,8 +310,8 @@ async def test_the_missing_models_download_with_progress_over_all_of_them(
 
     await voice_local.download_missing(seen.append)
 
-    assert fetched == ["wake", "vad"]
-    assert seen[0] == pytest.approx(3 / 7)  # half of the 6 MB, of 7 MB in all
+    assert fetched == ["wake", "vad", "denoise"]
+    assert seen[0] == pytest.approx(3 / 8)  # half of the 6 MB, of 8 MB in all
     assert seen[-1] == 1.0
 
 
@@ -412,3 +413,55 @@ async def test_knocks_and_typing_do_not_raise_the_room_level() -> None:
         await listener([])._listen(reader, None, vad)
         counted.append(vad.fed)
     assert counted[1] - counted[0] >= 5  # the voice still woke the VAD
+
+
+class Denoiser:
+    """sherpa-onnx's OnlineSpeechDenoiser, halving what it hears and holding back 10."""
+
+    def __init__(self) -> None:
+        self.resets = 0
+        self.held: list[float] = []
+
+    def reset(self) -> None:
+        self.resets += 1
+        self.held = []
+
+    def run(self, piece: list[float], rate: int) -> Any:
+        self.held += [v / 2 for v in piece]
+        out, self.held = self.held[:-10], self.held[-10:]
+        return SimpleNamespace(samples=out)
+
+    def flush(self) -> Any:
+        out, self.held = self.held, []
+        return SimpleNamespace(samples=out)
+
+
+def test_a_cleaner_cleans_a_whole_phrase_to_its_end() -> None:
+    phrase = [0.5] * (FRAME * 2 + 300)
+    cleaned = voice_local.Cleaner(Denoiser()).whole(phrase)
+    assert cleaned == [0.25] * len(phrase)
+    assert voice_local.Cleaner(None).whole(phrase) is phrase  # no model: as it is
+
+
+async def test_the_wake_word_is_matched_on_cleaned_speech(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[list[float]] = []
+    real = wake_match.Features
+
+    class Features(real):
+        def push(self, samples: list[float]) -> None:
+            pushed.append(samples)
+            super().push(samples)
+
+    monkeypatch.setattr(wake_match, "Features", Features)
+    events: list[Any] = []
+    woken = listener(events)
+    woken.trained = Trained(after=2)  # pyright: ignore[reportAttributeAccessIssue]
+    denoiser = Denoiser()
+
+    await woken._listen(audio(12), Spotter({}), Vad(speech_frames=3), voice_local.Cleaner(denoiser))
+
+    assert "wake" in events
+    assert denoiser.resets >= 1  # each stretch of speech starts clean
+    heard = [v for piece in pushed for v in piece]
+    assert heard
+    assert set(heard) == {samples(array.array("h", [1000]).tobytes())[0] / 2}  # cleaned

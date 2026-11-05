@@ -34,7 +34,7 @@ ABOUT: Final = (
 
 
 def is_trained() -> bool:
-    return wake_match.trained_path().is_file()
+    return wake_match.is_trained()
 
 
 class WakeTrainer(Gtk.Box):
@@ -136,6 +136,8 @@ class WakeTrainer(Gtk.Box):
     # --- training -------------------------------------------------------------------
 
     async def _train(self) -> wake_match.Training:
+        # Models added since the others were downloaded (the denoiser, 0.5 MB).
+        await voice_local.download_missing()
         vad = voice_local.make_vad()
         await wake_match.hold_wake(True)
         try:
@@ -161,16 +163,13 @@ class WakeTrainer(Gtk.Box):
                 f"An ordinary sentence, such as {SENTENCE} This shows Arcee what is not its name.",
             )
             other = await voice_local.record_phrase(self._loudness, vad=vad)
-            training = wake_match.train(samples, other, stops)
+            training = voice_local.train(samples, other, stops)
             wake_match.save(training.trained)
             return training
         finally:
             await wake_match.hold_wake(False)  # arceed takes up what was trained
 
     def start(self) -> None:
-        if voice_local.missing():
-            self._failed(VoiceError("the voice models are not downloaded yet"))
-            return
         self._button.set_visible(False)
         self._level.set_visible(True)
         self._icon.set_from_icon_name("audio-input-microphone-symbolic")

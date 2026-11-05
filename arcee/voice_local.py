@@ -5,9 +5,10 @@ Tier one runs here: `WakeListener` reads the microphone through `pw-record`, and
 a small keyword spotter sees the audio until it hears "hey Arcee"; Silero VAD then
 cuts out the request that follows. Tier two is Groq's Whisper, which transcribes that
 request, and only that: nothing before the wake word is stored or sent. "Arcee stop"
-stops what is running, with no transcription at all. The two small models (7 MB)
-are downloaded on request (`download`) into the data folder. A wake word the user
-trained to their own voice (wake_match) is heard alongside the spotter.
+stops what is running, with no transcription at all. The small models (8 MB) are
+downloaded on request (`download`) into the data folder. A wake word the user
+trained to their own voice (wake_match) is heard alongside the spotter, denoised
+first (`Cleaner`) so it is heard in a noisy room as in a quiet one.
 """
 
 import array
@@ -63,7 +64,14 @@ VAD: Final = VoiceModel(
     ("silero_vad.onnx",),
     1,
 )
-MODELS: Final = (SPOTTER, VAD)
+DENOISER: Final = VoiceModel(
+    "denoise",
+    "takes the room's noise out of what the wake word is matched on",
+    f"{RELEASES}/speech-enhancement-models/gtcrn_simple.onnx",
+    ("gtcrn_simple.onnx",),
+    1,
+)
+MODELS: Final = (SPOTTER, VAD, DENOISER)
 
 # The wake phrases in the spotter's word pieces (its bpe.model, encoded once). "Arcee"
 # is not an English word, so each phrase comes in spellings that sound alike, all
@@ -201,6 +209,60 @@ def make_spotter(phrases: str = KEYWORDS) -> Any:
     )
 
 
+def make_denoiser() -> Any:
+    """GTCRN (0.5 MB), or None before it is downloaded."""
+    if not installed(DENOISER):
+        return None
+    import sherpa_onnx
+
+    config = sherpa_onnx.OnlineSpeechDenoiserConfig()
+    config.model.gtcrn.model = str(model_path(DENOISER) / DENOISER.files[0])
+    config.model.num_threads = 1
+    return sherpa_onnx.OnlineSpeechDenoiser(config)
+
+
+class Cleaner:
+    """Speech with the room's noise taken out, for the trained wake word: the samples
+    from a quiet room then match a "hey Arcee" said by a fan or in a café, with no
+    training again (decision 0015). 12% of a core while it runs, which is only while
+    someone speaks; without the model (`denoiser` None) the sound passes as it is."""
+
+    def __init__(self, denoiser: Any) -> None:
+        self._denoiser = denoiser
+
+    def reset(self) -> None:
+        if self._denoiser is not None:
+            self._denoiser.reset()
+
+    def push(self, piece: list[float]) -> list[float]:
+        """Cleaned sound so far (it lags `piece` by a few milliseconds)."""
+        if self._denoiser is None:
+            return piece
+        return list(self._denoiser.run(piece, RATE).samples)
+
+    def whole(self, phrase: list[float]) -> list[float]:
+        """A whole phrase, cleaned to its end."""
+        if self._denoiser is None:
+            return phrase
+        self.reset()
+        out: list[float] = []
+        for start in range(0, len(phrase), FRAME):
+            out += self.push(phrase[start : start + FRAME])
+        out += list(self._denoiser.flush().samples)
+        self.reset()
+        return out
+
+
+def train(
+    samples: list[list[float]], other: list[float], stops: list[list[float]]
+) -> wake_match.Training:
+    """wake_match.train on the phrases as the listener will hear them: cleaned."""
+    cleaner = Cleaner(make_denoiser())
+    return wake_match.train(
+        [cleaner.whole(s) for s in samples], cleaner.whole(other), [cleaner.whole(s) for s in stops]
+    )
+
+
 def make_vad() -> Any:
     import sherpa_onnx
 
@@ -289,8 +351,12 @@ class WakeListener:
         if missing_models := [m.name for m in (SPOTTER, VAD) if not installed(m)]:
             raise VoiceError(f"voice models not downloaded: {', '.join(missing_models)}")
         self.reload()
-        spotter, vad = await asyncio.to_thread(
-            lambda: (make_spotter(self._keywords) if self.needs_spotter else None, make_vad())
+        spotter, vad, denoiser = await asyncio.to_thread(
+            lambda: (
+                make_spotter(self._keywords) if self.needs_spotter else None,
+                make_vad(),
+                make_denoiser(),  # loaded either way: a wake word may be trained later
+            )
         )
         try:
             process = await asyncio.create_subprocess_exec(
@@ -300,13 +366,19 @@ class WakeListener:
             raise VoiceError("pw-record is missing (PipeWire's tools)") from exc
         assert process.stdout is not None
         try:
-            await self._listen(process.stdout, spotter, vad)
+            await self._listen(process.stdout, spotter, vad, Cleaner(denoiser))
         finally:
             with contextlib.suppress(ProcessLookupError):
                 process.terminate()
             await process.wait()
 
-    async def _listen(self, audio: asyncio.StreamReader, spotter: Any, vad: Any) -> None:
+    async def _listen(
+        self,
+        audio: asyncio.StreamReader,
+        spotter: Any,
+        vad: Any,
+        cleaner: Cleaner = Cleaner(None),  # noqa: B008 (it holds nothing)
+    ) -> None:
         from arcee.voice import level
 
         stream = spotter.create_stream() if spotter is not None else None
@@ -403,6 +475,7 @@ class WakeListener:
                         stream = spotter.create_stream()
                     keep = trained.window if (trained := self.trained) else wake_match.WINDOW
                     heard, frames_spotted, closest = wake_match.Features(keep), 0, 1.0
+                    cleaner.reset()
                     closest_stop, sound = 1.0, bytearray(b"".join(recent))
                     feed = [samples(c) for c in recent]  # heard before the VAD was sure
                 else:
@@ -433,7 +506,7 @@ class WakeListener:
                 found = _spot(spotter, stream)
             if (trained := self.trained) is not None and not found:
                 for piece in feed:
-                    heard.push(piece)
+                    heard.push(cleaner.push(piece))
                 frames_spotted += 1
                 if frames_spotted % MATCH_EVERY == 0 and len(heard.frames) >= trained.shortest:
                     wake, stop = trained.distances(list(heard.frames))

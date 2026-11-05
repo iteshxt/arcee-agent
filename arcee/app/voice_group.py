@@ -74,7 +74,7 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._show_training()
 
     def _show_training(self) -> None:
-        trained = wake_match.trained_path().is_file()
+        trained = wake_match.is_trained()
         self._train.set_subtitle(
             "Trained: “Hey Arcee” is matched to how you say it."
             if trained
@@ -136,7 +136,7 @@ class VoiceGroup(Adw.PreferencesGroup):
             self._listen.set_sensitive(True)
             self._progress.set_visible(False)
             self._listen.set_active(True)  # now that the models are here
-            if not wake_match.trained_path().is_file():
+            if not wake_match.is_trained():
                 self._open_training()  # as phones do when the assistant is first turned on
 
         def failed(error: BaseException) -> None:
