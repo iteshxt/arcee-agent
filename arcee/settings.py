@@ -87,6 +87,15 @@ def save(settings: Settings, path: Path | None = None) -> None:
     temporary.replace(path)
 
 
+def save_listen(on: bool, path: Path | None = None) -> None:
+    """Only "Listen for Hey Arcee", the rest as saved: arceed and the panel switch it
+    while the app may hold the other settings."""
+    settings = load(path)
+    if settings.listen != on:
+        settings.listen = on
+        save(settings, path)
+
+
 if __name__ == "__main__":
     # `python -m arcee.settings listening`: exit 0 when "Listen for Hey Arcee" is on. The
     # login unit (arceed-listen.service) starts arceed only then.

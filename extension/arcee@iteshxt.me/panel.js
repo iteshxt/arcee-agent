@@ -28,6 +28,8 @@ const AGENT_INTERFACE = `
     <method name="StartListening"/>
     <method name="StopListening"/>
     <method name="EndConversation"/>
+    <method name="SetWakeWord"><arg type="b" direction="in"/></method>
+    <method name="WakeWordOn"><arg type="b" direction="out"/></method>
     <signal name="Started"><arg type="s"/></signal>
     <signal name="Progress"><arg type="s"/></signal>
     <signal name="Step"><arg type="s"/></signal>
@@ -37,6 +39,7 @@ const AGENT_INTERFACE = `
     <signal name="Level"><arg type="d"/></signal>
     <signal name="Heard"><arg type="s"/></signal>
     <signal name="Answered"><arg type="s"/></signal>
+    <signal name="WakeWordChanged"><arg type="b"/></signal>
   </interface>
 </node>`;
 const AgentProxy = Gio.DBusProxy.makeProxyWrapper(AGENT_INTERFACE);
@@ -108,6 +111,8 @@ class ArceeIndicator extends PanelMenu.Button {
             this._agent.connectSignal('Level', (_p, _s, [loudness]) => this._onLevel(loudness)),
             this._agent.connectSignal('Heard', (_p, _s, [json]) => this._onHeard(json)),
             this._agent.connectSignal('Answered', (_p, _s, [id]) => this._onAnswered(id)),
+            this._agent.connectSignal('WakeWordChanged',
+                (_p, _s, [on]) => this._wakeWord.setToggleState(on)),
         ];
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (!open)
@@ -223,6 +228,17 @@ class ArceeIndicator extends PanelMenu.Button {
         this._budget = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL,
             style_class: 'arcee-budget', x_expand: true});
         this.menu.addMenuItem(section(this._budget));
+
+        // "Hey Arcee" on or off. Off, the microphone is not open at all: for a meeting,
+        // a film, or a room where it wakes by mistake.
+        this._wakeWord = new PopupMenu.PopupSwitchMenuItem('Listen for “Hey Arcee”', false);
+        this._wakeWord.connect('toggled', (_item, on) => {
+            this._agent.SetWakeWordAsync(on).catch(error => {
+                this._wakeWord.setToggleState(!on);
+                this._say('', this._cleanError(error));
+            });
+        });
+        this.menu.addMenuItem(this._wakeWord);
 
         // Open the app, or quit.
         const footer = new St.BoxLayout({style_class: 'arcee-footer', x_expand: true});
@@ -448,6 +464,8 @@ class ArceeIndicator extends PanelMenu.Button {
     // --- recent and budget -------------------------------------------------------------
 
     _refresh() {
+        this._agent.WakeWordOnAsync()
+            .then(([on]) => this._wakeWord.setToggleState(on)).catch(() => {});
         this._agent.RecentAsync(RECENT_TASKS).then(([json]) => {
             const menu = this._recent.menu;
             menu.removeAll();

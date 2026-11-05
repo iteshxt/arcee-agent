@@ -34,6 +34,7 @@ from arcee.core.protocol import ConfirmRequest
 from arcee.models.errors import ModelUnavailableError
 from arcee.runner import TaskRunner
 from arcee.settings import load as load_settings
+from arcee.settings import save_listen
 from arcee.voice import Recorder, Transcriber, VoiceError
 from arcee.voice_local import WakeListener
 
@@ -246,6 +247,7 @@ class AgentService(ServiceInterface):
         self._listening: asyncio.Task[None] | None = None
         # The wake-word listener, when the user turned it on; paused for the mic button.
         self.wake: WakeListener | None = None
+        self._wake_task: asyncio.Task[None] | None = None  # keep_listening, while on
         self._hearing: asyncio.Future[None] | None = None  # a woken request, transcribing
         self._held: asyncio.TimerHandle | None = None  # HoldWake's own end
         self._dismissed = False  # the mic button's recording was cancelled
@@ -355,6 +357,35 @@ class AgentService(ServiceInterface):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+
+    def listen_for_wake(self, on: bool) -> None:
+        """Start the wake-word listener, or stop it: off, the microphone is closed."""
+        running = self._wake_task is not None and not self._wake_task.done()
+        if on and not running:
+            self._wake_task = asyncio.ensure_future(keep_listening(self))
+        elif not on and self._wake_task is not None:
+            self._wake_task.cancel()
+            self._wake_task = None
+
+    @method()
+    def SetWakeWord(self, on: DBusBool) -> None:
+        """Listen for "hey Arcee", or stop listening at all (the panel's switch, the
+        app's): at once, and from the next login too."""
+        save_listen(on)
+        self.listen_for_wake(on)
+        self.WakeWordChanged(on)
+
+    @property
+    def hears_wake(self) -> bool:
+        return self._wake_task is not None and not self._wake_task.done()
+
+    @method()
+    def WakeWordOn(self) -> DBusBool:
+        return self.hears_wake
+
+    @signal()
+    def WakeWordChanged(self, on: bool) -> DBusBool:
+        return on
 
     @method()
     def Status(self) -> DBusStr:
@@ -621,12 +652,11 @@ async def serve(runner: TaskRunner, bus: MessageBus, *, listen: bool = False) ->
     if reply not in (RequestNameReply.PRIMARY_OWNER, RequestNameReply.ALREADY_OWNER):
         raise SystemExit(f"{BUS_NAME} is already running")
     log.info("arceed ready on the session bus as %s", BUS_NAME)
-    listening = asyncio.ensure_future(keep_listening(service)) if listen else None
+    service.listen_for_wake(listen)
     try:
         await bus.wait_for_disconnect()
     finally:
-        if listening is not None:
-            listening.cancel()
+        service.listen_for_wake(False)
 
 
 async def _main() -> None:
