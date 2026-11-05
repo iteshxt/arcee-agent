@@ -18,6 +18,7 @@ class Read(Tool[ReadArgs]):
     description = "Read a file."
     usage = Usage(when="w")
     args_model = ReadArgs
+    read_only = True
 
     async def run(self, args: ReadArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult.ok("read")
@@ -138,7 +139,7 @@ async def test_never_is_refused_with_the_tools_reason() -> None:
     ("policy", "model_asked", "expected"),
     [
         (Policy(), False, Tier.AUTO),
-        (Policy(), True, Tier.CONFIRM),
+        (Policy(), True, Tier.AUTO),  # a read, after suspicious data: nothing to confirm
         (Policy(confirm_all=True), False, Tier.CONFIRM),
         (Policy(tier_overrides={"fs.read": Tier.CONFIRM}), False, Tier.CONFIRM),
     ],
@@ -147,6 +148,12 @@ def test_auto_can_only_be_raised(policy: Policy, model_asked: bool, expected: Ti
     assert (
         Gate(policy, Answers()).tier(call("fs.read", path="~"), model_asked=model_asked) is expected
     )
+
+
+def test_after_suspicious_data_what_acts_asks_first() -> None:
+    gate = Gate(Policy(), Answers())
+    assert gate.tier(call("shell.run", cmd="ls"), model_asked=True) is Tier.CONFIRM
+    assert gate.tier(call("shell.run", cmd="ls")) is Tier.AUTO
 
 
 def test_overrides_can_lower_confirm_but_never_lift_never() -> None:

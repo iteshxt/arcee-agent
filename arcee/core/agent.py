@@ -445,7 +445,11 @@ class Agent:
             result = await self._executor.execute(
                 valid, state.steps, ctx, model_asked=state.confirm_next
             )
-            state.confirm_next = bool(result.suspicious)
+            # Suspicious data asks before the next action that does something; a read
+            # in between neither asks nor disarms it.
+            state.confirm_next = bool(result.suspicious) or (
+                state.confirm_next and valid.tool.read_only
+            )
             self._emit(ToolRan(state.steps, result))
             if result.suspicious:
                 self._emit(
