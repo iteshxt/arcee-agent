@@ -5,10 +5,12 @@ the Chrome just opened); "what's the weather?", then "and tomorrow?". While the 
 keeps the conversation going (the pill is on screen, or a request came in the last
 IDLE_S), each new request is given the turns before it. It ends when the user closes
 the pill (Esc, a click elsewhere), starts a New conversation in the app, or after
-IDLE_S without a request. Nothing here is stored: memory (decision 0014) is for what
-should last.
+IDLE_S without a request. Each request records the conversation's `id` in History, so
+the app can list conversations and take one up again (`resume`). Memory (decision
+0014) is for what should last.
 """
 
+import secrets
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -39,7 +41,22 @@ def _short(text: str, limit: int) -> str:
 class Conversation:
     clock: Callable[[], float] = time.monotonic
     turns: list[Turn] = field(default_factory=list[Turn])
+    id: str = ""
     _last: float = 0.0
+
+    def begin(self) -> str:
+        """The id of the conversation the next request is in: this one, or (after an
+        end or a long pause) a new one."""
+        if not self.active or not self.id:
+            self.turns.clear()
+            self.id = f"c_{secrets.token_hex(6)}"
+        return self.id
+
+    def resume(self, conversation_id: str, turns: Sequence[Turn]) -> None:
+        """Take up an earlier conversation: its last turns, as if just said."""
+        self.id = conversation_id
+        self.turns = list(turns)[-MAX_TURNS:]
+        self._last = self.clock()
 
     def add(self, turn: Turn) -> None:
         if not self.active:
@@ -49,6 +66,7 @@ class Conversation:
 
     def end(self) -> None:
         self.turns.clear()
+        self.id = ""
         self._last = 0.0
 
     @property

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol
 
@@ -28,7 +29,7 @@ from dbus_fast.annotations import DBusBool, DBusDouble, DBusStr, DBusUInt32
 from dbus_fast.service import ServiceInterface, method, signal
 
 from arcee.config import load_env
-from arcee.context.conversation import Conversation
+from arcee.context.conversation import Conversation, Turn
 from arcee.core.agent import Escalated, Event, Guarded, ModelTurn, Planned, StepStarted, ToolRan
 from arcee.core.protocol import ConfirmRequest
 from arcee.models.errors import ModelUnavailableError
@@ -44,6 +45,43 @@ BUSY_ERROR: Final = "me.iteshxt.Arcee.Error.Busy"
 RECENT_LIMIT: Final = 20
 
 log = logging.getLogger("arceed")
+
+
+def short_model(name: str) -> str:
+    """ "openai/gpt-oss-20b" as "gpt-oss-20b"; a local tag as it is."""
+    return name.rsplit("/", 1)[-1]
+
+
+@dataclass(slots=True)
+class TaskStats:
+    """A request's model calls, for the line under its reply in the app."""
+
+    models: list[str] = field(default_factory=list[str])
+    calls: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    seconds: float = 0.0  # the models' own time, rate-limit waits left out
+
+    def add(self, turn: ModelTurn) -> None:
+        name = short_model(turn.model)
+        if name not in self.models:
+            self.models.append(name)
+        self.calls += 1
+        self.tokens_in += turn.tokens_in
+        self.tokens_out += turn.tokens_out
+        self.seconds += max(0.0, turn.seconds - turn.waited)
+
+    def summary(self, core: str) -> dict[str, Any]:
+        speed = self.tokens_out / self.seconds if self.seconds > 0.05 else 0.0
+        return {
+            "core": core,
+            "models": self.models,
+            "model_calls": self.calls,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
+            "model_seconds": round(self.seconds, 2),
+            "tokens_per_s": round(speed),
+        }
 
 
 def describe(event: Event) -> str | None:
@@ -267,6 +305,7 @@ class AgentService(ServiceInterface):
         self._spoken = False  # the running request was spoken: its questions are heard too
         self._answer_tries: dict[str, int] = {}  # the mic opened for each question
         self._for_answer = False  # the recording now is for a question's answer
+        self._stats = TaskStats()  # the running request's models, tokens and time
         # The turns a new request continues, until the user closes the pill (EndConversation).
         self.conversation = Conversation()
         self._task: asyncio.Task[None] | None = None
@@ -362,6 +401,19 @@ class AgentService(ServiceInterface):
             )
 
     @method()
+    async def ResumeConversation(self, conversation_id: DBusStr) -> None:
+        await self.resume(conversation_id)
+
+    async def resume(self, conversation_id: str) -> None:
+        """Take up an earlier conversation from History (the Agent page's chats): the
+        next request continues it, its last turns given as before."""
+        rows = await self._runner.store.conversation(conversation_id)
+        if not rows:
+            raise DBusError("me.iteshxt.Arcee.Error.NotFound", "no such conversation")
+        turns = [Turn(t.request, t.reply or "", t.status, tuple(did)) for t, did in rows]
+        self.conversation.resume(conversation_id, turns)
+
+    @method()
     def EndConversation(self) -> None:
         """The user closed the pill (or started a New conversation): the next request
         starts afresh."""
@@ -412,6 +464,18 @@ class AgentService(ServiceInterface):
     @signal()
     def WakeWordChanged(self, on: bool) -> DBusBool:
         return on
+
+    @method()
+    def Info(self) -> DBusStr:
+        """What the Agent page shows when idle: the models in use and the wake word."""
+        ladder = getattr(self._runner, "ladder", [])
+        return json.dumps(
+            {
+                "core": getattr(self._runner, "core", ""),
+                "models": [short_model(m.profile.model) for m in ladder],
+                "wake_word": self.hears_wake,
+            }
+        )
 
     @method()
     def Status(self) -> DBusStr:
@@ -624,6 +688,7 @@ class AgentService(ServiceInterface):
 
     async def _run(self, request: str, *, spoken: bool = False) -> None:
         self._spoken = spoken
+        self._stats = TaskStats()
         self.Started(request)
         self._set_step(THINKING)
         payload: dict[str, Any]
@@ -652,9 +717,12 @@ class AgentService(ServiceInterface):
             self._spoken = False
             with contextlib.suppress(Exception):
                 await self._runner.presence.release()
+        payload |= self._stats.summary(getattr(self._runner, "core", ""))
         self.Finished(json.dumps(payload))
 
     def _progress(self, event: Event) -> None:
+        if isinstance(event, ModelTurn):
+            self._stats.add(event)
         if (line := describe(event)) is not None:
             self.Progress(line)
         if (step := doing(event)) is not None:

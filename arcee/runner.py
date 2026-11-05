@@ -174,7 +174,9 @@ class TaskRunner:
             recall=self._recall if self.memory else None,
             sharing=self.sharing,
         )
-        task_id = await self.store.start_task(request)
+        task_id = await self.store.start_task(
+            request, conversation=conversation.begin() if conversation is not None else None
+        )
         started = time.monotonic()
         self.stopped = False
         try:
