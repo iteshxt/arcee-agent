@@ -176,7 +176,7 @@ class Tool[A: ToolArgs](ABC):
 
     def sentence(self, args: A) -> str:
         """The confirmation question shown to the user; tools that can need one override it."""
-        return f"Run {self.name}?"
+        return f"Allow Arcee to use {self.name}?"
 
     def preview(self, args: A) -> tuple[str, ...]:
         """The concrete targets listed under the confirmation question."""

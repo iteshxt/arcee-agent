@@ -107,7 +107,7 @@ class TestBase:
         )
 
     def test_default_sentence_names_the_tool(self) -> None:
-        assert FsList().sentence(ListArgs(path="~")) == "Run fs.list?"
+        assert FsList().sentence(ListArgs(path="~")) == "Allow Arcee to use fs.list?"
 
     async def test_run_returns_structured_data(self) -> None:
         result = await FsTrash().run(TrashArgs(paths=["~/a", "~/b"]), CTX)

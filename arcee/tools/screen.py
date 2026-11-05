@@ -247,6 +247,10 @@ class KbdType(_ScreenTool[TypeArgs]):
     )
     args_model = TypeArgs
 
+    def sentence(self, args: TypeArgs) -> str:
+        shown = args.text if len(args.text) <= 60 else args.text[:59] + "…"
+        return f"Type “{shown}”?"
+
     async def run(self, args: TypeArgs, ctx: ToolContext) -> ToolResult:
         field = await self.session.focused() if self.session.focused is not None else None
         whole = keeps_a_tail(field, args.text)

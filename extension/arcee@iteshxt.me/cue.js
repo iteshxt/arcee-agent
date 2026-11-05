@@ -279,11 +279,11 @@ export class ListeningCue {
         this._phase = 'asking';
         this._clearLimit();
         const confirm = question.kind === 'confirm';
-        const choices = confirm ? (question.allowable ? ['Yes', 'Always allow', 'No'] : ['Yes', 'No'])
+        const choices = confirm ? (question.allowable ? ['Allow', 'Always allow', 'Deny'] : ['Allow', 'Deny'])
             : (question.options ?? []).slice(0, 4);
         this._answers.destroy_all_children();
         for (const [n, choice] of choices.entries()) {
-            const value = confirm ? {'Yes': 'yes', 'Always allow': 'always', 'No': 'no'}[choice] : choice;
+            const value = confirm ? {'Allow': 'yes', 'Always allow': 'always', 'Deny': 'no'}[choice] : choice;
             const button = new St.Button({
                 style_class: `arcee-cue-button${n === 0 ? ' arcee-cue-primary' : ''}`, label: choice,
             });
@@ -299,8 +299,9 @@ export class ListeningCue {
         this._doing.visible = false;
         this._renderReply(text);
         this._answers.visible = choices.length > 0;
-        this._hint.text = choices.length ? 'Click, or say your answer' : 'Say your answer';
         this._choices = choices.length;
+        this._saying = confirm ? 'say “allow” or “deny”' : choices.length ? 'say your choice' : 'say your answer';
+        this._hint.text = choices.length ? `Click, or ${this._saying}` : this._saying;
         this._hint.visible = true;
         this._place();
         return true;
@@ -317,10 +318,9 @@ export class ListeningCue {
         if (!this.asking)
             return;
         if (on)
-            this._hint.text = this._choices ? 'Listening… say your answer, or click' : 'Listening… say your answer';
+            this._hint.text = `Listening… ${this._saying}${this._choices ? ', or click' : ''}`;
         else
-            this._hint.text = note || (this._choices ? 'Click, or say “Hey Arcee” and your answer'
-                : 'Say “Hey Arcee” and your answer');
+            this._hint.text = note || (this._choices ? `Click, or ${this._saying}` : this._saying);
         this._hint.visible = true;
         this._place();
     }
