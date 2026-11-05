@@ -119,3 +119,17 @@ then, so a stretch of speech now costs about 30% of one core (features, denoisin
 matching), and a quiet room is unchanged (0.3%). In a crowd, where someone is always
 speaking, that 30% is steady. Samples trained before are not loaded (their sound was
 not denoised: `wake_match.FEATURES`); the app asks for training again.
+
+## Amended 2026-11-06: learning only from sure wakes
+
+Learning from use poisoned the samples. While the user dictated a message, a stretch
+of their sentence came under the threshold (0.217, loosened by one sample unlike the
+rest; ordinary speech had come to 0.22-0.29 all evening). The words that followed
+counted as a meant request, so that stretch of ordinary speech was kept as a sample,
+and a second one seconds later; ordinary speech then woke Arcee six times in 50 s.
+Words after a wake do not show it was meant. A wake is now learned only when its
+"hey Arcee" is within three quarters of the threshold of the trained samples
+themselves (`wake_match.SURE`), never when only a learned sample came near, so a
+learned sample cannot pull the wake word toward ordinary speech. Each wake is logged
+with its distance, beside the request it led to in the history, so a false wake can
+be traced.
