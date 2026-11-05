@@ -161,6 +161,9 @@ WAKE_RETRY_S = 10.0
 # The wake word held while the user trains it: it comes back by itself after this, in
 # case whatever held it went away without saying so.
 HOLD_WAKE_S = 180.0
+# A spoken request's question opens the mic for its answer, and again if the answer was
+# not understood: this many times in all, then the buttons alone.
+ANSWER_TRIES: Final = 2
 # Said after the wake word (or Whisper's take on "Arcee stop": "Arcee stopped."), these
 # stop what is running instead of becoming a request.
 STOP_WORDS: Final = re.compile(
@@ -251,6 +254,9 @@ class AgentService(ServiceInterface):
         self._hearing: asyncio.Future[None] | None = None  # a woken request, transcribing
         self._held: asyncio.TimerHandle | None = None  # HoldWake's own end
         self._dismissed = False  # the mic button's recording was cancelled
+        self._spoken = False  # the running request was spoken: its questions are heard too
+        self._answer_tries: dict[str, int] = {}  # the mic opened for each question
+        self._for_answer = False  # the recording now is for a question's answer
         # The turns a new request continues, until the user closes the pill (EndConversation).
         self.conversation = Conversation()
         self._task: asyncio.Task[None] | None = None
@@ -319,6 +325,16 @@ class AgentService(ServiceInterface):
         if self.wake is not None:
             self.wake.paused = True
         self._listening = asyncio.ensure_future(self._listen(self._recorder))
+
+    def _hear_answer(self, question_id: str) -> None:
+        """Open the mic for the answer to a spoken request's question, as a conversation
+        would (the user started by voice; buttons alone made them reach for the mouse)."""
+        tries = self._answer_tries.get(question_id, 0)
+        if not self._spoken or tries >= ANSWER_TRIES or question_id not in self._asked:
+            return
+        self._answer_tries[question_id] = tries + 1
+        self._for_answer = True
+        self.StartListening()
 
     @method()
     def HoldWake(self, hold: DBusBool) -> None:
@@ -468,6 +484,7 @@ class AgentService(ServiceInterface):
             return
         finally:
             self._recorder = None
+            self._for_answer = False
             if self.wake is not None:
                 self.wake.paused = False
         self.Listening(False)
@@ -507,6 +524,7 @@ class AgentService(ServiceInterface):
                 type(self._transcriber).__name__,
             )
         text = heard.get("text", "").strip()
+        unanswered = bool(self._asked) and not text  # nothing heard while a question waits
         if woken and self.wake is not None:
             # Words that were not a stop: the wake that led to them was meant, and its
             # "hey Arcee" is learned (decision 0015). Nothing heard: it is not.
@@ -519,7 +537,12 @@ class AgentService(ServiceInterface):
             question_id, asked = next(reversed(self._asked.items()))
             answer = spoken_answer(text, asked["kind"], asked.get("options", []))
             if answer is None:
-                heard = {"error": "Say “yes” or “no”."}
+                heard = {
+                    "error": "Say “yes” or “no”."
+                    if asked["kind"] == "confirm"
+                    else "Say one of the choices."
+                }
+                unanswered = True
             else:
                 heard = {"text": text, "answer": answer}
                 self.Answer(question_id, answer)
@@ -528,6 +551,8 @@ class AgentService(ServiceInterface):
             heard = {"error": f"Still working on: {self._request}. Say “Arcee stop” first."}
             text = ""
         self.Heard(json.dumps(heard))
+        if unanswered and self._asked:  # listen once more for it
+            self._hear_answer(next(reversed(self._asked)))
         # What was heard runs here, once, whether the panel or the app is open.
         if text:
             self._request = text
@@ -555,11 +580,18 @@ class AgentService(ServiceInterface):
         await presence.release()
         self._set_step("Waiting for your answer")
         self.Question(json.dumps({"id": question_id, **payload}))
+        self._hear_answer(question_id)
         try:
             return await future
         finally:
             self._questions.pop(question_id, None)
             self._asked.pop(question_id, None)
+            self._answer_tries.pop(question_id, None)
+            if self._for_answer and self._recorder is not None:
+                # Answered with a click while the mic listened: what it hears is not a
+                # request ("yes" would have run as one).
+                self._dismissed = True
+                self._recorder.stop()
             self.Answered(question_id)  # every place showing it closes it
             if held:
                 await presence.acting()
@@ -571,6 +603,7 @@ class AgentService(ServiceInterface):
         return self._task is not None and not self._task.done()
 
     async def _run(self, request: str, *, spoken: bool = False) -> None:
+        self._spoken = spoken
         self.Started(request)
         self._set_step(THINKING)
         payload: dict[str, Any]
@@ -596,6 +629,7 @@ class AgentService(ServiceInterface):
             for future in self._questions.values():
                 future.cancel()
             self._questions.clear()
+            self._spoken = False
             with contextlib.suppress(Exception):
                 await self._runner.presence.release()
         self.Finished(json.dumps(payload))
