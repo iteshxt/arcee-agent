@@ -298,11 +298,30 @@ export class ListeningCue {
         this._doing.visible = false;
         this._renderReply(text);
         this._answers.visible = choices.length > 0;
-        this._hint.text = choices.length
-            ? 'Click, or say “Hey Arcee” and your answer' : 'Say “Hey Arcee” and your answer';
+        this._hint.text = choices.length ? 'Click, or say your answer' : 'Say your answer';
+        this._choices = choices.length;
         this._hint.visible = true;
         this._place();
         return true;
+    }
+
+    // A question waits here for its answer.
+    get asking() {
+        return this.visible && this._phase === 'asking';
+    }
+
+    // The mic is open for the answer (`on`), or closed: the question and its buttons
+    // stay; `note` says why it closed ("Say yes or no").
+    hearAnswer(on, note = '') {
+        if (!this.asking)
+            return;
+        if (on)
+            this._hint.text = this._choices ? 'Listening… say your answer, or click' : 'Listening… say your answer';
+        else
+            this._hint.text = note || (this._choices ? 'Click, or say “Hey Arcee” and your answer'
+                : 'Say “Hey Arcee” and your answer');
+        this._hint.visible = true;
+        this._place();
     }
 
     // The question was answered (here, by voice, or in the panel or the app).

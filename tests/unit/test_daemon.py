@@ -528,3 +528,48 @@ async def test_the_wake_word_switches_off_and_on_at_once(
     assert listening == ["on", "off"]  # the listener (and its recorder) ended
     assert not load().listen  # arceed-listen.service will not start it at login
     assert told == [True, False]
+
+
+class SaysYes(FakeTranscriber):
+    """The request, then "yes" to its question, as the user would say them."""
+
+    def __init__(self) -> None:
+        self.said = ["move old.txt to the trash", "Yes, go ahead."]
+
+    async def transcribe(self, pcm: bytes) -> str:
+        return self.said.pop(0)
+
+
+async def test_a_spoken_requests_question_is_answered_by_voice() -> None:
+    """Asked by voice, answered by voice: the mic opens for the answer by itself."""
+    service = AgentService(
+        FakeRunner(),  # pyright: ignore[reportArgumentType]
+        recorder=FakeRecorder,  # pyright: ignore[reportArgumentType]
+        transcriber=SaysYes(),  # pyright: ignore[reportArgumentType]
+    )
+    finished: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    heard: list[str] = []
+    service.Finished = finished.set_result  # pyright: ignore[reportAttributeAccessIssue]
+    service.Heard = heard.append  # pyright: ignore[reportAttributeAccessIssue]
+
+    service.on_wake()
+    service.on_request(b"pcm")  # "move old.txt to the trash", spoken
+
+    payload = json.loads(await asyncio.wait_for(finished, 5))
+    assert payload["reply"] == "Trashed old.txt."  # "yes" was heard, no click
+    assert json.loads(heard[-1]) == {"text": "Yes, go ahead.", "answer": "yes"}
+
+
+async def test_a_typed_requests_question_waits_for_a_click() -> None:
+    service = AgentService(
+        FakeRunner(),  # pyright: ignore[reportArgumentType]
+        recorder=FakeRecorder,  # pyright: ignore[reportArgumentType]
+        transcriber=SaysYes(),  # pyright: ignore[reportArgumentType]
+    )
+    questions: list[str] = []
+    service.Question = questions.append  # pyright: ignore[reportAttributeAccessIssue]
+    task = asyncio.ensure_future(service._run("move old.txt to the trash"))  # pyright: ignore[reportPrivateUsage]
+    await asyncio.sleep(0.05)
+    assert questions  # asked on screen
+    assert service._recorder is None  # pyright: ignore[reportPrivateUsage]  # no mic opened
+    task.cancel()

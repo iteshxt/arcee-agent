@@ -305,8 +305,10 @@ class ArceeIndicator extends PanelMenu.Button {
         this._wave.visible = on;
         this._levels.fill(0);
         this._entry.hint_text = on ? 'Listening… (press the mic to finish)' : 'Ask Arcee…';
-        // The cue stays after the voice stops: it follows the request to its reply.
-        if (on) {
+        // Listening for the answer to the question the pill shows: it keeps the question.
+        if (this._cue.asking) {
+            this._cue.hearAnswer(on);
+        } else if (on) {
             this._spoken = true;
             this._cue.show();
         } else {
@@ -330,7 +332,9 @@ class ArceeIndicator extends PanelMenu.Button {
     _onHeard(json) {
         // arceed runs what it heard; the panel shows only a failure, the cue both.
         const heard = JSON.parse(json);
-        if (heard.error) {
+        if (heard.error && this._cue.asking) {
+            this._cue.hearAnswer(false, heard.error);  // the question stays, with why
+        } else if (heard.error) {
             this._spoken = false;
             this._cue.fail(heard.error);
             this._say('', heard.error);
