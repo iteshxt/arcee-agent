@@ -351,7 +351,10 @@ class AgentPage(Gtk.Box):
             self._call("Answer", GLib.Variant("(ss)", (question["id"], value)))
 
         if question.get("kind") == "confirm":
-            for label, value, style in (("Allow", "yes", "suggested-action"), ("Deny", "no", "")):
+            choices = [("Allow", "yes", "suggested-action"), ("Deny", "no", "")]
+            if question.get("allowable"):  # routine, and undoable: may stop asking
+                choices.insert(1, ("Always allow", "always", ""))
+            for label, value, style in choices:
                 button = Gtk.Button(label=label)
                 if style:
                     button.add_css_class(style)

@@ -124,3 +124,16 @@ on this computer.
   it too. If it ever stopped, the browser fallback remains.
 - The open question in the roadmap ("should saving an event need confirmation?") is
   answered here: yes, with a one-tap preview.
+
+## Amended 2026-11-06: "Always allow" for routine actions
+
+The user asked that simple actions stop asking. A per-tool override would not do: the
+policy's overrides replace the tier a tool computes from its arguments, so allowing
+`browser.click` for good would also stop the question before a "Buy now" button. So
+"Always allow" is a list of its own (`policy.ALLOWABLE`): moving files to the Trash,
+archiving, labelling and marking emails, and adding a calendar event without guests
+(with guests, Google emails each one: that is sending). It lowers only the tool's own
+`confirm`, never one its arguments raised (`Tool.allowable`), and "Ask before every
+action" wins over it. The pill, the panel and the app offer "Always allow" on those
+questions (or say "always allow"); the Permissions page shows and changes the list.
+Sending mail, deleting events, scripts and closing apps always ask.

@@ -33,9 +33,10 @@ from arcee.app.memory_page import MemoryPage  # noqa: E402
 from arcee.app.setup import SetupDialog  # noqa: E402
 from arcee.app.voice_group import VoiceGroup  # noqa: E402
 from arcee.context.store import Store, data_dir  # noqa: E402
+from arcee.core.policy import ALLOWABLE  # noqa: E402
 from arcee.keys import KEYS, keyring, source  # noqa: E402
 from arcee.models.presets import GROQ_MODELS, read_budget  # noqa: E402
-from arcee.settings import Core, Sharing, load, save  # noqa: E402
+from arcee.settings import Core, Sharing, load, save, save_always_allow  # noqa: E402
 from arcee.voice import SpeechUsage  # noqa: E402
 
 APP_ID: Final = "me.iteshxt.Arcee"
@@ -47,18 +48,18 @@ SHARING_CHOICES: Final[tuple[tuple[Sharing, str], ...]] = (
 )  # under the developer's own domain, iteshxt.me
 BUDGET_REFRESH_S: Final = 5
 HISTORY_LIMIT: Final = 50
-# Automatic actions the user may make ask first, in their words. Deleting, sending,
-# paying and the like ask whatever is set here.
+# Automatic actions the user may make ask first, in their words, by where they act.
+# Deleting, sending, paying and the like ask whatever is set here.
 ASKABLE: Final = (
-    ("browser.click", "Clicking in Chrome"),
-    ("browser.fill", "Typing into web pages"),
-    ("ui.act", "Acting in app windows"),
-    ("screen.click", "Clicking on the screen"),
-    ("kbd.type", "Typing on the keyboard"),
-    ("app.open", "Opening apps"),
-    ("fs.write", "Writing files"),
-    ("fs.move", "Moving and renaming files"),
-    ("shell.run", "Running commands"),
+    ("app.open", "Opening apps", "Starting an app, or switching to it"),
+    ("ui.act", "Acting in app windows", "Pressing buttons and menus in apps"),
+    ("browser.click", "Clicking in Chrome", "Links and buttons on web pages"),
+    ("browser.fill", "Typing into web pages", "Search boxes and forms"),
+    ("screen.click", "Clicking on the screen", "Where an app has no other way in"),
+    ("kbd.type", "Typing on the keyboard", "Into the window in front"),
+    ("fs.write", "Writing files", "In your Arcee folder; anywhere else it asks"),
+    ("fs.move", "Moving and renaming files", "Inside your home folder"),
+    ("shell.run", "Running safe commands", "Commands that only read, such as ls and df"),
 )
 CORE_CHOICES: Final = (
     (
@@ -177,7 +178,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             self._permissions_page(), "permissions", "Permissions", "security-medium-symbolic"
         )
         stack.add_titled_with_icon(
-            self._diagnostics_page(), "diagnostics", "Diagnostics", "emblem-system-symbolic"
+            self._settings_page(), "settings", "Settings", "emblem-system-symbolic"
         )
 
         header = Adw.HeaderBar()
@@ -200,6 +201,7 @@ class ArceeWindow(Adw.ApplicationWindow):
         return self._settings
 
     def show_page(self, name: str) -> None:
+        name = {"diagnostics": "settings"}.get(name, name)  # Diagnostics is in Settings
         if self._stack.get_child_by_name(name) is not None:
             self._stack.set_visible_child_name(name)
 
@@ -264,9 +266,11 @@ class ArceeWindow(Adw.ApplicationWindow):
             self._saved()  # arceed starts again with the new setting when idle
 
     def _save_settings(self) -> None:
-        # "Listen for Hey Arcee" as arceed keeps it (the panel switches it too), not as
-        # this window last saw it.
-        self._settings.listen = load().listen
+        # "Listen for Hey Arcee" and "Always allow" as arceed keeps them (the panel and
+        # the pill change them too), not as this window last saw them.
+        saved = load()
+        self._settings.listen = saved.listen
+        self._settings.always_allow = saved.always_allow
         save(self._settings)
 
     def _saved(self) -> None:
@@ -292,10 +296,6 @@ class ArceeWindow(Adw.ApplicationWindow):
             row.add_prefix(check)
             thinking.add(row)
         page.add(thinking)
-        self._voice_group = VoiceGroup(
-            self._background.run, self._toast, self._settings, self._saved
-        )
-        page.add(self._voice_group)
 
         self._budget = Adw.PreferencesGroup(
             title="Today", description="Groq's free allowance per model; it refills over the day."
@@ -619,17 +619,53 @@ class ArceeWindow(Adw.ApplicationWindow):
 
     def _permissions_page(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
-        everything = Adw.PreferencesGroup(
-            description="Deleting, sending, paying, signing out and similar always ask first."
+        asking = Adw.PreferencesGroup(
+            title="How Arcee asks",
+            description="Arcee never needs your permission to read or look. Sending, "
+            "paying, deleting for good, signing out and running scripts always ask, "
+            "whatever is set here.",
         )
         all_row = Adw.SwitchRow(
             title="Ask before every action",
-            subtitle="Arcee asks you before it does anything, even reading.",
+            subtitle="Even opening apps and clicking: slower, but you see every step",
             active=self._settings.confirm_all,
         )
         all_row.connect("notify::active", self._on_confirm_all)
-        everything.add(all_row)
-        page.add(everything)
+        asking.add(all_row)
+        page.add(asking)
+
+        allowed = Adw.PreferencesGroup(
+            title="Allowed without asking",
+            description="Routine actions that otherwise ask each time, and are easily "
+            "undone. “Always allow”, when Arcee asks, turns them on here too.",
+        )
+        self._allow_rows: dict[str, Adw.SwitchRow] = {}
+        for tool, title in ALLOWABLE.items():
+            row = Adw.SwitchRow(title=title, active=tool in self._settings.always_allow)
+            row.connect("notify::active", self._on_always_allow, tool)
+            allowed.add(row)
+            self._allow_rows[tool] = row
+        page.add(allowed)
+
+        always = Adw.PreferencesGroup(
+            title="Ask before these too",
+            description="They run without asking unless you turn them on here.",
+        )
+        self._ask_all = Adw.SwitchRow(
+            title="All of these",
+            active=all(tool in self._settings.always_ask for tool, _, _ in ASKABLE),
+        )
+        self._ask_all.connect("notify::active", self._on_ask_all)
+        always.add(self._ask_all)
+        self._ask_rows: dict[str, Adw.SwitchRow] = {}
+        for tool, title, about in ASKABLE:
+            row = Adw.SwitchRow(
+                title=title, subtitle=about, active=tool in self._settings.always_ask
+            )
+            row.connect("notify::active", self._on_always_ask, tool)
+            always.add(row)
+            self._ask_rows[tool] = row
+        page.add(always)
 
         # Personal data to a cloud model (decision 0017): a privacy choice, not an action's.
         privacy = Adw.PreferencesGroup(
@@ -646,27 +682,28 @@ class ArceeWindow(Adw.ApplicationWindow):
         sharing.connect("notify::selected", self._on_sharing)
         privacy.add(sharing)
         page.add(privacy)
-
-        always = Adw.PreferencesGroup(
-            title="Always ask before", description="Actions that otherwise run without asking."
-        )
-        self._ask_all = Adw.SwitchRow(
-            title="All of these",
-            active=all(tool in self._settings.always_ask for tool, _ in ASKABLE),
-        )
-        self._ask_all.connect("notify::active", self._on_ask_all)
-        always.add(self._ask_all)
-        self._ask_rows: dict[str, Adw.SwitchRow] = {}
-        for tool, title in ASKABLE:
-            row = Adw.SwitchRow(
-                title=title, subtitle=tool, active=tool in self._settings.always_ask
-            )
-            row.connect("notify::active", self._on_always_ask, tool)
-            always.add(row)
-            self._ask_rows[tool] = row
-        page.add(always)
-
+        page.connect("map", lambda _p: self._show_always_allow())
         return page
+
+    def _show_always_allow(self) -> None:
+        """As arceed keeps it: "Always allow" in the pill may have added one."""
+        saved = set(load().always_allow)
+        self._syncing = True
+        for tool, row in self._allow_rows.items():
+            row.set_active(tool in saved)
+        self._syncing = False
+
+    def _on_always_allow(self, row: Adw.SwitchRow, _param: Any, tool: str) -> None:
+        if self._syncing:
+            return
+        allows = set(load().always_allow)
+        if row.get_active():
+            allows.add(tool)
+        else:
+            allows.discard(tool)
+        save_always_allow(sorted(allows))
+        self._settings.always_allow = sorted(allows)
+        restart_daemon_when_idle(self._background, self._toast)
 
     def _on_sharing(self, row: Adw.ComboRow, _param: Any) -> None:
         value = SHARING_CHOICES[row.get_selected()][0]
@@ -703,12 +740,49 @@ class ArceeWindow(Adw.ApplicationWindow):
         self._syncing = False
         self._saved()
 
-    # --- Diagnostics ----------------------------------------------------------------
+    # --- Settings -------------------------------------------------------------------
 
-    def _diagnostics_page(self) -> Gtk.Widget:
+    def _settings_page(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
+        self._voice_group = VoiceGroup(
+            self._background.run, self._toast, self._settings, self._saved
+        )
+        page.add(self._voice_group)
+
+        data = Adw.PreferencesGroup(
+            title="Your data",
+            description="Your history, memory and voice samples stay on this computer.",
+        )
+        folder = Adw.ActionRow(title="Arcee's folder", subtitle=str(data_dir()))
+        open_folder = Gtk.Button(label="Open", valign=Gtk.Align.CENTER)
+        open_folder.connect(
+            "clicked", lambda _b: Gio.AppInfo.launch_default_for_uri(data_dir().as_uri(), None)
+        )
+        folder.add_suffix(open_folder)
+        data.add(folder)
+        clear = Adw.ActionRow(
+            title="Delete all history",
+            subtitle="Every request and what Arcee did; Memory is kept",
+        )
+        delete = Gtk.Button(label="Delete…", valign=Gtk.Align.CENTER)
+        delete.add_css_class("destructive-action")
+        delete.connect("clicked", lambda _b: self._confirm_delete_all())
+        clear.add_suffix(delete)
+        data.add(clear)
+        page.add(data)
+
+        setup = Adw.PreferencesGroup(title="Setup")
+        again = Adw.ActionRow(
+            title="Run setup again", subtitle="Keys, voice, the browser and the top bar"
+        )
+        run = Gtk.Button(label="Run", valign=Gtk.Align.CENTER)
+        run.connect("clicked", lambda _b: self.show_setup())
+        again.add_suffix(run)
+        setup.add(again)
+        page.add(setup)
+
         self._checks = Adw.PreferencesGroup(
-            title="Arcee's parts", description="What each part does, and how to fix it."
+            title="Diagnostics", description="Arcee's parts: what each does, and how to fix it."
         )
         again = Gtk.Button(label="Check again", valign=Gtk.Align.CENTER)
         again.connect("clicked", lambda _b: self._run_checks())

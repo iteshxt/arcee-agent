@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from arcee.core.policy import Policy, Tier
+from arcee.core.policy import ALLOWABLE, Policy, Tier
 
 Core = Literal["groq", "local"]
 # Mail, calendar and contacts to a cloud model: ask each time, always, or never.
@@ -35,6 +35,8 @@ class Settings:
     confirm_all: bool = False
     # Tools that always ask first, e.g. "browser.click".
     always_ask: list[str] = field(default_factory=list[str])
+    # Of policy.ALLOWABLE, the actions the user allowed for good.
+    always_allow: list[str] = field(default_factory=list[str])
     # The first-run setup was finished (or skipped) once.
     setup_done: bool = False
     # Listen for "hey Arcee" (decision 0015): the wake word here, the request to Groq.
@@ -54,6 +56,7 @@ class Settings:
         return Policy(
             tier_overrides=dict.fromkeys(self.always_ask, Tier.CONFIRM),
             confirm_all=self.confirm_all,
+            always_allow={name for name in self.always_allow if name in ALLOWABLE},
         )
 
 
@@ -66,11 +69,13 @@ def load(path: Path | None = None) -> Settings:
         return Settings()
     core = raw.get("core")
     asks = raw.get("always_ask")
+    allows = raw.get("always_allow")
     sharing = raw.get("personal_to_cloud")
     return Settings(
         core=core if core in CORES else "groq",
         confirm_all=raw.get("confirm_all") is True,
         always_ask=[str(name) for name in cast(list[Any], asks)] if isinstance(asks, list) else [],
+        always_allow=[str(n) for n in cast(list[Any], allows)] if isinstance(allows, list) else [],
         setup_done=raw.get("setup_done") is True,
         extension_turned_on=raw.get("extension_turned_on") is True,
         memory=raw.get("memory") is not False,
@@ -85,6 +90,13 @@ def save(settings: Settings, path: Path | None = None) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(asdict(settings), indent=1))
     temporary.replace(path)
+
+
+def save_always_allow(names: list[str], path: Path | None = None) -> None:
+    """Only "Always allow", the rest as saved (arceed adds to it from the pill)."""
+    settings = load(path)
+    settings.always_allow = sorted(name for name in set(names) if name in ALLOWABLE)
+    save(settings, path)
 
 
 def save_listen(on: bool, path: Path | None = None) -> None:

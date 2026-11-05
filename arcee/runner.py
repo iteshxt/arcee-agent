@@ -229,6 +229,20 @@ class TaskRunner:
             plan=plans[-1] if plans else None,
         )
 
+    def allow_always(self, tool: str) -> None:
+        """The user's "Always allow" (policy ALLOWABLE): this running task's gate and
+        the next ones let `tool` run without asking, and the setting keeps it."""
+        from arcee.core.policy import ALLOWABLE
+        from arcee.settings import load, save
+
+        if tool not in ALLOWABLE:
+            return
+        self._policy.always_allow.add(tool)
+        settings = load()
+        if tool not in settings.always_allow:
+            settings.always_allow = sorted({*settings.always_allow, tool})
+            save(settings)
+
     async def _recall(self, query: str, task_id: str) -> str:
         return await recall(self.store, query, exclude_task=task_id)
 

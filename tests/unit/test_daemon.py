@@ -573,3 +573,26 @@ async def test_a_typed_requests_question_waits_for_a_click() -> None:
     assert questions  # asked on screen
     assert service._recorder is None  # pyright: ignore[reportPrivateUsage]  # no mic opened
     task.cancel()
+
+
+def test_always_is_an_answer_only_where_it_can_be_given() -> None:
+    from arcee.daemon import spoken_answer
+
+    assert spoken_answer("Always allow.", "confirm", [], allowable=True) == "always"
+    assert spoken_answer("Yes, and don't ask me again", "confirm", [], allowable=True) == "always"
+    assert spoken_answer("Always allow.", "confirm", []) is None  # yes or no, then
+    assert spoken_answer("Yes.", "confirm", [], allowable=True) == "yes"
+
+
+def test_always_allow_is_kept_for_the_next_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from arcee.core.policy import Policy
+    from arcee.runner import TaskRunner
+    from arcee.settings import load
+
+    runner = TaskRunner.__new__(TaskRunner)
+    runner._policy = Policy()  # pyright: ignore[reportPrivateUsage]
+    runner.allow_always("fs.trash")
+    runner.allow_always("mail.send")  # never allowed for good
+
+    assert runner._policy.always_allow == {"fs.trash"}  # pyright: ignore[reportPrivateUsage]
+    assert load().always_allow == ["fs.trash"]
