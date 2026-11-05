@@ -213,16 +213,21 @@ def test_wakes_that_were_meant_are_learned_newest_kept() -> None:
 
 
 def test_only_a_sure_wake_is_learned() -> None:
-    """Words after a wake do not prove it was meant: a stretch that only scraped under
-    the threshold (the user dictating, 2026-11-06) is not kept as a sample."""
+    """Words after a wake do not prove it was meant: a stretch further from the trained
+    samples than they are from each other (the user dictating, 2026-11-06) is not kept,
+    and one kept before the rule was this strict is dropped when the wake word loads."""
     samples = [sweep(300, 1200, s, seed=i) for i, s in enumerate((0.8, 0.9, 0.85, 0.82, 0.88))]
     trained = train(samples, sweep(2500, 600, 1.5, seed=7)).trained
-    sure = trained.span(log_mel(silence(0.3) + sweep(300, 1200, 0.84, seed=50)))
-    assert wake_match.learned_from(trained, sure) is not trained
+    same = trained.span(log_mel(silence(0.3) + sweep(300, 1200, 0.84, seed=50)))
+    assert wake_match.sure(trained, same)
+    assert wake_match.learned_from(trained, same) is not trained
 
-    word = normalise(log_mel(sweep(300, 1200, 0.85, seed=51)))
-    nearest = min(distance(t, word) for t in trained.templates)
-    # The same sound, judged against a threshold it only just meets.
-    scraped = Trained(trained.templates, round(nearest / wake_match.SURE * 0.95, 4))
-    assert wake_match.learned_from(scraped, word).learned == []  # within the threshold...
-    assert nearest > wake_match.SURE * scraped.threshold  # ...but not surely
+    near = normalise(log_mel(sweep(300, 1350, 0.85, seed=51)))  # close, but not as close
+    assert min(distance(t, near) for t in trained.templates) <= trained.threshold  # it wakes
+    assert not wake_match.sure(trained, near)
+    assert wake_match.learned_from(trained, near) is trained
+
+    wake_match.save(Trained(trained.templates, trained.threshold, learned=[same, near]))
+    loaded = wake_match.load()
+    assert loaded is not None
+    assert len(loaded.learned) == 1  # the unsure one, learned before, is gone

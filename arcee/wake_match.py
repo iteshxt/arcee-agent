@@ -35,12 +35,6 @@ SAMPLES: Final = 5  # "hey Arcee"s asked for when training (5: more of how one s
 STOP_SAMPLES: Final = 2  # and "Arcee stop"s
 # Samples learned from wakes the user went on to use: at most this many, newest kept.
 MAX_LEARNED: Final = 3
-# And only from a wake this sure: its "hey Arcee" within this share of the threshold
-# of the trained samples themselves. Words after a wake did not prove it was meant:
-# while the user dictated, a stretch of their sentence woke Arcee, the words that
-# followed made it "meant", and it was kept as a sample; ordinary speech then woke it
-# six times in 50 s (2026-11-06).
-SURE: Final = 0.75
 # A trained wake word is never looser than this, whatever the samples suggest.
 LOOSEST: Final = 0.3
 SHORTEST_S: Final = 0.3
@@ -382,9 +376,10 @@ def save(trained: Trained) -> None:
     path.write_text(json.dumps(data))
 
 
-def load() -> Trained | None:
+def load(check: bool = True) -> Trained | None:
     """The user's trained wake word, if they trained one (and since its samples were
-    last made the way they are now)."""
+    last made the way they are now). Learned samples that are not `sure` are dropped
+    (unless not `check`: only whether there is one)."""
     try:
         data = json.loads(trained_path().read_text())
         if data.get("features", 1) != FEATURES:
@@ -393,25 +388,41 @@ def load() -> Trained | None:
         def frames(templates: list[list[list[float]]]) -> list[Frames]:
             return [[list(map(float, f)) for f in t] for t in templates]
 
-        return Trained(
+        trained = Trained(
             frames(data["templates"]),
             float(data["threshold"]),
             frames(data.get("stops", [])),  # trained before "Arcee stop" was: none
             float(data.get("stop_threshold", 0.0)),
-            frames(data.get("learned", [])),
+        )
+        learned = frames(data.get("learned", []))
+        if check:  # learned before the rule was this strict: only the sure ones
+            learned = [heard for heard in learned if sure(trained, heard)]
+        return Trained(
+            trained.templates, trained.threshold, trained.stops, trained.stop_threshold, learned
         )
     except OSError, ValueError, KeyError, TypeError:
         return None
 
 
+def sure(trained: Trained, heard: Frames) -> bool:
+    """Whether `heard` is as close to the trained samples as they are to each other.
+
+    Words after a wake do not show it was meant. While the user dictated, stretches of
+    their sentences woke Arcee; the words that followed made each "meant", and it was
+    kept as a sample; ordinary speech then woke it six times in 50 s (2026-11-06). Even
+    within three quarters of the threshold, a stretch of "With the agent." was learned
+    (0.120; the samples were 0.054-0.071 from each other)."""
+    if len(trained.templates) < 2:
+        return False
+    return min(distance(t, heard) for t in trained.templates) <= _spread(trained.templates)
+
+
 def learned_from(trained: Trained, heard: Frames) -> Trained:
     """`trained` with `heard` (a "hey Arcee" that woke Arcee and was followed by a real
     request) kept as a sample too: the newest MAX_LEARNED, the trained ones never
-    replaced. Kept as their sound, as the trained ones are. Only a sure match of the
-    trained samples is kept (SURE): never one that only a learned sample came near."""
-    if len(heard) < SHORTEST_S * RATE // HOP:
-        return trained
-    if min(distance(t, heard) for t in trained.templates) > SURE * trained.threshold:
+    replaced. Kept as their sound, as the trained ones are. Only a `sure` match of the
+    trained samples is kept: never one that only a learned sample came near."""
+    if len(heard) < SHORTEST_S * RATE // HOP or not sure(trained, heard):
         return trained
     learned = [*trained.learned, heard][-MAX_LEARNED:]
     return Trained(
@@ -420,7 +431,7 @@ def learned_from(trained: Trained, heard: Frames) -> Trained:
 
 
 def is_trained() -> bool:
-    return load() is not None
+    return load(check=False) is not None
 
 
 def forget() -> None:

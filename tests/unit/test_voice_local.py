@@ -511,3 +511,18 @@ async def test_after_a_stop_what_follows_is_judged_afresh() -> None:
     assert bursts[0].stop == 0.0
     assert [b.kind for b in bursts[1:]] == ["speech"]  # the words after it
     assert bursts[1].stop > 0.0  # judged on their own, not with the stop's distance
+
+
+async def test_the_wake_word_is_not_looked_for_deep_in_talk() -> None:
+    """Mid-sentence, a stretch that sounds like "hey Arcee" is not it (the false wakes of
+    2026-11-06 were all in the middle of the user talking)."""
+    events: list[Any] = []
+    talker = listener(events)
+    word = Trained(after=20)
+    talker.trained = word  # pyright: ignore[reportAttributeAccessIssue]
+    # Matched every third frame: the 20th check would be 60 frames (4.8 s) into speech.
+
+    await talker._listen(audio(90), Spotter({}), Vad(speech_frames=None))
+
+    assert events == []
+    assert word.checks == voice_local.MATCH_FOR_FRAMES // voice_local.MATCH_EVERY
