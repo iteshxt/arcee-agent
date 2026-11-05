@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from arcee.context.digest import digest_task
+import pytest
+
+from arcee.context.digest import digest_task, lasting
 from arcee.context.store import Store
 from arcee.core.executor import ActionRecord
 from arcee.core.policy import Tier
@@ -109,7 +111,7 @@ async def test_a_made_up_id_cannot_overwrite_a_fact(tmp_path: Path) -> None:
                 "Favourite colour is blue.",
                 {
                     "text": "The user's favourite colour is blue",
-                    "importance": 0.4,
+                    "importance": 0.7,
                     "replaces": kept,
                 },
             )
@@ -193,5 +195,53 @@ async def test_a_fact_not_about_the_user_is_dropped(tmp_path: Path) -> None:
 
     await digest_task(model, store, task)
 
+    assert await store.all_memories() == []
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "fact",
+    [  # kept by gpt-oss over a week (2026-11-06)
+        "The user has an open Chrome window.",
+        "The user marked the outcome as done",
+        "The user wants to mute audio",
+        "The user may want to adjust partner sharing settings in Google Photos.",
+        "The user has a partner sharing email someone@example.com.",
+        "The user's first email is from Google Photos",
+        "The user has roughly 76 GB of free disk space",
+        "The user has home directory /home/iteshxt",
+        "The user has a default audio sink",
+        "The user uses amixer to set Master volume.",
+        "The user uses a browser to search YouTube.",
+    ],
+)
+def test_passing_facts_are_not_kept(fact: str) -> None:
+    assert not lasting(fact)
+
+
+@pytest.mark.parametrize(
+    "fact",
+    [
+        "The user's name is Itesh",
+        "The user is a computer science student",
+        "The user has a Gmail account itesh@example.com.",
+        "The user lives in Delhi",
+        "The user's sister is Priya",
+        "The user prefers Firefox for work",
+        "The user listens to music on Spotify",
+    ],
+)
+def test_lasting_facts_are_kept(fact: str) -> None:
+    assert lasting(fact)
+
+
+async def test_a_fact_below_lasting_importance_is_not_kept(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    task = await finished_task(store, "set the volume to 40 percent", "Volume is 40%.", "shell.run")
+    model = FakeAdapter(
+        [reply("Set the volume.", {"text": "The user likes the volume at 40", "importance": 0.4})],
+        CONTEXT,
+    )
+    await digest_task(model, store, task)
     assert await store.all_memories() == []
     store.close()

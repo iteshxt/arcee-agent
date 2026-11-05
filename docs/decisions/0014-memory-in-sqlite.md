@@ -55,3 +55,21 @@ called it: nothing was ever saved. Memory left to the Core's initiative does not
 - Each task costs one more model call (about 1,500 tokens) for its digest.
 - Nightly day and week summaries (spec section 8) are not built yet; with a summary per
   task and recency in the ranking they matter less until history grows large.
+
+## Amended 2026-11-06: only lasting facts
+
+A week of digests on gpt-oss (Groq) kept 14 facts, of which 3 were worth keeping (the
+user's Gmail account, and their name and studies, which they had told it). The rest
+were the computer's state at the time ("has an open Chrome window", "roughly 76 GB of
+free disk space", "a default audio sink"), the task itself ("marked the outcome as
+done", "wants to mute audio", "the first email is from Google Photos"), how a task was
+done ("uses amixer to set Master volume") and someone else's address seen in an email.
+The prompt now asks for at most 3 facts about the user as a person that will still be
+true weeks later, lists what never to keep, and calls anything under 0.7 not worth
+keeping. The code no longer trusts the model on this: a fact is kept only at
+importance 0.6 or more and when it names none of those kinds of thing
+(`digest.lasting`), and an email address only as the user's own account.
+
+Local models still write summaries only: they had saved results as facts at top
+importance, and sending local tasks to a cloud model to learn from them would undo
+the reason to choose a local one.
