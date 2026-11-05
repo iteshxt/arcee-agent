@@ -128,8 +128,16 @@ rest; ordinary speech had come to 0.22-0.29 all evening). The words that followe
 counted as a meant request, so that stretch of ordinary speech was kept as a sample,
 and a second one seconds later; ordinary speech then woke Arcee six times in 50 s.
 Words after a wake do not show it was meant. A wake is now learned only when its
-"hey Arcee" is within three quarters of the threshold of the trained samples
-themselves (`wake_match.SURE`), never when only a learned sample came near, so a
-learned sample cannot pull the wake word toward ordinary speech. Each wake is logged
-with its distance, beside the request it led to in the history, so a false wake can
-be traced.
+"hey Arcee" is as close to the trained samples as they are to each other
+(`wake_match.sure`), never when only a learned sample came near, so a learned sample
+cannot pull the wake word toward ordinary speech. (A first rule, within three quarters
+of the threshold, still let a stretch of "With the agent." in at 0.120, the samples
+being 0.054-0.071 apart.) Learned samples that fail the rule are dropped when the
+wake word loads. Each wake is logged with its distance, beside the request it led to
+in the history, so a false wake can be traced.
+
+Every false wake that day came in the middle of the user talking: dictating, or to
+someone in the room. "Hey Arcee" starts a stretch of speech, so the trained wake word
+is matched only in the first 3.5 s of speech after a pause the VAD hears (0.7 s), and
+again after the next; long talk costs no matching or denoising. A "hey Arcee" run on
+from a sentence without a pause is not heard; that is the price.

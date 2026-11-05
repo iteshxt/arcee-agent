@@ -98,6 +98,11 @@ PREROLL_FRAMES: Final = 10
 HANGOVER_FRAMES: Final = 8
 # A trained wake word (wake_match) is checked every this many frames of speech (240 ms).
 MATCH_EVERY: Final = 3
+# The trained wake word is matched only this long into speech (80 ms frames: 3.5 s),
+# and again after a pause the VAD hears as one (END_SILENCE_S). Every false wake of
+# 2026-11-06 was in the middle of the user talking (dictating, to someone); "hey
+# Arcee" starts a stretch of speech. Long talk then costs no matching or denoising.
+MATCH_FOR_FRAMES: Final = 44
 # The loudness gate before the VAD: a frame wakes it when it is GATE_RATIO times the
 # room's level (its quietest frame of the last 10 s) and at least GATE_MIN; it sleeps
 # after GATE_CALM_FRAMES (2 s) without speech or loudness.
@@ -412,6 +417,8 @@ class WakeListener:
         # how near it came to "Arcee stop".
         peak, any_speech, sound, closest_stop = 0.0, False, bytearray(), 1.0
         speech = False  # the VAD's last word, for the room's level
+        talking = 0  # frames of speech since the last pause
+        deep = False  # talking past MATCH_FOR_FRAMES: the wake word is not looked for
         while True:
             try:
                 chunk = await audio.readexactly(FRAME * 2)
@@ -475,6 +482,7 @@ class WakeListener:
                 vad.pop()
             speech = vad.is_speech_detected()
             any_speech = any_speech or speech
+            talking = talking + 1 if speech else 0
             calm = 0 if (speech or spotting or loud) else calm + 1
             if calm > GATE_CALM_FRAMES:
                 awake = False
@@ -488,6 +496,7 @@ class WakeListener:
                         stream = spotter.create_stream()
                     keep = trained.window if (trained := self.trained) else wake_match.WINDOW
                     heard, frames_spotted, closest = wake_match.Features(keep), 0, 1.0
+                    deep = False
                     cleaner = self.cleaner  # for this stretch (reload may replace it)
                     cleaner.reset()
                     closest_stop, sound = 1.0, bytearray(b"".join(recent))
@@ -518,7 +527,13 @@ class WakeListener:
                 for piece in feed:
                     stream.accept_waveform(RATE, piece)
                 found = _spot(spotter, stream)
-            if (trained := self.trained) is not None and not found:
+            if talking > MATCH_FOR_FRAMES:
+                deep = True  # mid-sentence: not the wake word, whatever it sounds like
+            elif (trained := self.trained) is not None and not found:
+                if deep:  # a pause after long talk: look again, from here
+                    deep = False
+                    heard = wake_match.Features(heard.frames.maxlen or wake_match.WINDOW)
+                    cleaner.reset()
                 for piece in feed:
                     heard.push(cleaner.push(piece))
                 frames_spotted += 1
