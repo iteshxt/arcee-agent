@@ -530,7 +530,9 @@ class WakeListener:
                 kind = "stop" if found == STOP else "wake"
                 seconds = len(sound) / 2 / RATE
                 self._burst(kind, seconds, peak, floor, closest, closest_stop, bytes(sound))
-                peak = 0.0
+                # What follows is judged afresh: voice-watch showed the speech after an
+                # "Arcee stop" with the stop's own distances, and its audio.
+                peak, closest, closest_stop, sound = 0.0, 1.0, 1.0, bytearray()
             if found == STOP:
                 self._on_stop()
             elif found == WAKE:
