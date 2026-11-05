@@ -47,7 +47,12 @@ class Gate:
         if tier is Tier.NEVER:
             return tier
         tier = self.policy.tier_overrides.get(call.tool.name, tier)
-        if tier is Tier.AUTO and (self.policy.confirm_all or model_asked):
+        # After suspicious data (`model_asked`), only what can change or send things asks
+        # first: listing emails after reading the inbox page had asked (2026-11-06), and a
+        # read cannot do what the data may ask for.
+        if tier is Tier.AUTO and (
+            self.policy.confirm_all or (model_asked and not call.tool.read_only)
+        ):
             tier = Tier.CONFIRM
         return tier
 
