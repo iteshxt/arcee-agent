@@ -493,3 +493,38 @@ async def test_a_wake_is_learned_only_when_a_real_request_follows(
     assert wake.learned == learned
     if service._task is not None:  # pyright: ignore[reportPrivateUsage]
         service._task.cancel()  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_the_wake_word_switches_off_and_on_at_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The panel's switch: off closes the microphone now, and stays off at next login."""
+    from arcee import daemon
+    from arcee.settings import load
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    listening: list[str] = []
+
+    async def keep_listening(service: AgentService) -> None:
+        listening.append("on")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            listening.append("off")
+
+    monkeypatch.setattr(daemon, "keep_listening", keep_listening)
+    service = AgentService(FakeRunner())  # pyright: ignore[reportArgumentType]
+    told: list[bool] = []
+    monkeypatch.setattr(service, "WakeWordChanged", told.append)
+
+    service.SetWakeWord(True)  # pyright: ignore[reportCallIssue]
+    await asyncio.sleep(0)
+    assert service.hears_wake
+    assert load().listen
+
+    service.SetWakeWord(False)  # pyright: ignore[reportCallIssue]
+    await asyncio.sleep(0)
+    assert not service.hears_wake
+    assert listening == ["on", "off"]  # the listener (and its recorder) ended
+    assert not load().listen  # arceed-listen.service will not start it at login
+    assert told == [True, False]

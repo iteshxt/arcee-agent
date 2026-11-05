@@ -18,7 +18,41 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from arcee import voice_local, wake_match  # noqa: E402
 from arcee.app.wake_training import WakeTrainingDialog  # noqa: E402
+from arcee.settings import load, save_listen  # noqa: E402
 from arcee.voice_local import MODELS, VoiceModel, installed  # noqa: E402
+
+
+async def set_wake_word(on: bool) -> None:
+    """Listen for "hey Arcee" or stop, at once: arceed switches its listener and keeps
+    the setting (D-Bus starts it to listen). When arceed cannot be reached, the setting
+    alone is kept, for when it next starts."""
+    from dbus_fast import BusType, Message, MessageFlag, MessageType
+    from dbus_fast.aio import MessageBus
+    from dbus_fast.errors import DBusError
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SESSION).connect()
+        try:
+            reply = await bus.call(
+                Message(
+                    destination="me.iteshxt.Arcee.Agent",
+                    path="/me/iteshxt/Arcee/Agent",
+                    interface="me.iteshxt.Arcee.Agent",
+                    member="SetWakeWord",
+                    signature="b",
+                    body=[on],
+                    # Off: if arceed is not running, nothing listens; do not start it.
+                    flags=MessageFlag.NONE if on else MessageFlag.NO_AUTOSTART,
+                )
+            )
+        finally:
+            bus.disconnect()
+        if reply is not None and reply.message_type is MessageType.METHOD_RETURN:
+            return
+    except OSError, DBusError:
+        pass
+    save_listen(on)
+
 
 Runner = Callable[..., Any]  # (work, done[, failed]), as Background.run
 
@@ -70,6 +104,7 @@ class VoiceGroup(Adw.PreferencesGroup):
 
     def refresh(self) -> None:
         """Show the settings as they are now (first-run setup may have changed them)."""
+        self._settings.listen = load().listen  # the panel may have switched it
         self._listen.set_active(self._settings.listen)
         self._show_training()
 
@@ -109,7 +144,7 @@ class VoiceGroup(Adw.PreferencesGroup):
             self._confirm(needed)
             return
         self._settings.listen = on
-        self._saved()  # arceed starts again with the listener on or off
+        self._run(set_wake_word(on), lambda _none: None)  # at once, no restart
         self._show_training()
 
     def _confirm(self, models: list[VoiceModel]) -> None:

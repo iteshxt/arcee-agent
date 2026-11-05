@@ -62,3 +62,14 @@ def test_the_login_check_follows_the_listen_setting(tmp_path: Path) -> None:
 
     assert check(True) == 0  # arceed starts at login
     assert check(False) == 1  # nothing starts
+
+
+def test_listening_is_switched_alone(tmp_path: Path) -> None:
+    from arcee.settings import save_listen
+
+    path = tmp_path / "settings.json"
+    save(Settings(memory=False, listen=True), path)
+    save_listen(False, path)
+    saved = load(path)
+    assert not saved.listen
+    assert saved.memory is False  # what the app holds is not touched

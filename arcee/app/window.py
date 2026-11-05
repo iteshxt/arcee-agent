@@ -228,7 +228,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             if not result:
                 return  # not loaded yet (no login since installing): next time
             self._settings.extension_turned_on = True
-            save(self._settings)
+            self._save_settings()
             if result == "turned on":
                 self._toast(
                     "Turned on Arcee's GNOME Shell extension: look for its icon in the top bar."
@@ -240,7 +240,7 @@ class ArceeWindow(Adw.ApplicationWindow):
     def show_setup(self) -> None:
         def done() -> None:
             self._settings.setup_done = True
-            save(self._settings)
+            self._save_settings()
             self._show_key_states()
             self._run_checks()
             self._voice_group.refresh()  # setup may have turned on and trained the wake word
@@ -263,8 +263,14 @@ class ArceeWindow(Adw.ApplicationWindow):
             self._settings.memory = on
             self._saved()  # arceed starts again with the new setting when idle
 
-    def _saved(self) -> None:
+    def _save_settings(self) -> None:
+        # "Listen for Hey Arcee" as arceed keeps it (the panel switches it too), not as
+        # this window last saw it.
+        self._settings.listen = load().listen
         save(self._settings)
+
+    def _saved(self) -> None:
+        self._save_settings()
         restart_daemon_when_idle(self._background, self._toast)
 
     # --- Models ---------------------------------------------------------------------

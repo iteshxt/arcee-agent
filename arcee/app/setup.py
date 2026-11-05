@@ -18,6 +18,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from arcee import install, voice_local  # noqa: E402
 from arcee.app import diagnostics  # noqa: E402
+from arcee.app.voice_group import set_wake_word  # noqa: E402
 from arcee.app.wake_training import WakeTrainer  # noqa: E402
 from arcee.browser.setup import EXTENSION_DIR  # noqa: E402
 from arcee.keys import KEYS, keyring  # noqa: E402
@@ -321,7 +322,7 @@ class SetupDialog(Adw.Dialog):
         def listening() -> None:
             if self._settings is not None and not self._settings.listen:
                 self._settings.listen = True
-                self._saved()  # arceed starts listening when it is next idle
+                self._run(set_wake_word(True), lambda _none: None)  # arceed listens now
             training()
 
         def downloaded(_none: None) -> None:
