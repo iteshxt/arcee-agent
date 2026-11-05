@@ -550,7 +550,7 @@ class AgentService(ServiceInterface):
             )
             if answer is None:
                 heard = {
-                    "error": "Say “yes” or “no”."
+                    "error": "Say “allow” or “deny”."
                     if asked["kind"] == "confirm"
                     else "Say one of the choices."
                 }

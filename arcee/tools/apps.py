@@ -179,6 +179,12 @@ class AppOpen(Tool[OpenAppArgs]):
         self._command = command
         self._windows = windows
 
+    def sentence(self, args: OpenAppArgs) -> str:
+        return f"Open {args.name}?"
+
+    def preview(self, args: OpenAppArgs) -> tuple[str, ...]:
+        return tuple(args.args)
+
     async def run(self, args: OpenAppArgs, ctx: ToolContext) -> ToolResult:
         apps = await asyncio.to_thread(installed_apps, self._dirs or application_dirs())
         app = best_match(apps, args.name)
