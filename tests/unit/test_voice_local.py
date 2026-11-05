@@ -479,3 +479,35 @@ def test_a_denoiser_downloaded_by_training_is_taken_up(monkeypatch: pytest.Monke
     running.reload()
 
     assert running.cleaner.ready
+
+
+async def test_after_a_stop_what_follows_is_judged_afresh() -> None:
+    bursts: list[voice_local.Burst] = []
+    events: list[Any] = []
+    watched = WakeListener(
+        on_wake=lambda: events.append("wake"),
+        on_request=events.append,
+        on_stop=lambda: events.append("stop"),
+        on_burst=bursts.append,
+    )
+    watched.trained = Trained(after=2, said="stop")  # pyright: ignore[reportAttributeAccessIssue]
+
+    class Talks(Vad):
+        """Speech for the first 12 frames ("Arcee stop" and a few words), then quiet."""
+
+        heard = 0
+
+        def accept_waveform(self, frame: list[float]) -> None:
+            self.heard += 1
+            super().accept_waveform(frame)
+
+        def is_speech_detected(self) -> bool:
+            return self.heard <= 12
+
+    await watched._listen(audio(40), Spotter({}), Talks(speech_frames=None))
+
+    assert events == ["stop"]
+    assert bursts[0].kind == "stop"
+    assert bursts[0].stop == 0.0
+    assert [b.kind for b in bursts[1:]] == ["speech"]  # the words after it
+    assert bursts[1].stop > 0.0  # judged on their own, not with the stop's distance
