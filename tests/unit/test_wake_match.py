@@ -138,17 +138,46 @@ def test_arcee_stop_is_trained_apart_from_the_wake_word() -> None:
     assert loaded.stop_threshold == trained.stop_threshold
 
 
-def test_a_wake_word_trained_before_arcee_stop_still_loads() -> None:
+def test_a_wake_word_saved_without_arcee_stop_still_loads() -> None:
     import json
 
     word = log_mel(sweep(300, 1200, 0.8))
     wake_match.trained_path().parent.mkdir(parents=True, exist_ok=True)
-    old = {"threshold": 0.2, "templates": [normalise(word)]}  # no "stops" yet
-    wake_match.trained_path().write_text(json.dumps(old))
+    saved = {"features": wake_match.FEATURES, "threshold": 0.2, "templates": [normalise(word)]}
+    wake_match.trained_path().write_text(json.dumps(saved))
     loaded = wake_match.load()
     assert loaded is not None
     assert loaded.stops == []
     assert loaded.match(word) == "wake"
+    assert wake_match.is_trained()
+
+
+def test_samples_kept_before_denoising_are_trained_again() -> None:
+    import json
+
+    word = normalise(log_mel(sweep(300, 1200, 0.8)))
+    wake_match.trained_path().parent.mkdir(parents=True, exist_ok=True)
+    wake_match.trained_path().write_text(json.dumps({"threshold": 0.2, "templates": [word]}))
+    assert wake_match.load() is None  # matched against denoised speech, they would miss
+    assert not wake_match.is_trained()
+
+
+def test_what_is_far_under_the_word_does_not_change_it() -> None:
+    word = sweep(300, 1200, 0.8)
+    hushed = [v + 0.0005 * random.Random(9).uniform(-1, 1) for v in word]
+    gap = [0.0001 * random.Random(n).uniform(-1, 1) for n in range(8000)]
+    quieter = [0.00001 * random.Random(n).uniform(-1, 1) for n in range(8000)]
+    # Two rooms' leftover noise, a hundred times apart, both far under the word.
+    one = normalise(log_mel(gap + hushed))
+    other = normalise(log_mel(quieter + hushed))
+    assert distance(normalise(log_mel(word)), one) < 0.1  # the word is still found in it
+    assert (
+        max(
+            1 - sum(a * b for a, b in zip(x, y, strict=True))
+            for x, y in zip(one, other, strict=True)
+        )
+        < 1e-6
+    )  # the gaps are held at the floor: the same in both rooms
 
 
 def test_the_match_says_where_the_word_is() -> None:

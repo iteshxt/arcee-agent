@@ -87,3 +87,35 @@ Matching is at 40 ms (frames pooled in pairs) with a tighter loop, checked every
 240 ms: three samples had cost 57% of a core while someone spoke (91 ms a check, the
 first measurement on the user's own samples); eight plus two "Arcee stop" now cost
 12%. Distances are not those of 20 ms: a wake word trained before needs training again.
+
+## Amended 2026-11-05: one training for every room
+
+At the user's word: the wake word must be heard in a quiet room, by a fan and in a
+crowd without training again for each. Measured on the user's recorded "hey Arcee"s,
+mixed with hiss, fan-like noise and babble (four voices at once) at 15, 10 and 5 dB of
+voice over noise, against another speaker's sentences in the same noise:
+
+| what is matched | own, quiet | own, hiss/fan 5 dB | own, babble 15 dB | other speaker, nearest |
+|---|---|---|---|---|
+| log-mel, as before | 0.16 | 0.42-0.44 | 0.40 | 0.25-0.37 |
+| floored only | 0.05 | 0.25-0.28 | 0.12 | 0.16-0.27 |
+| denoised and floored | 0.04 | 0.05-0.07 | 0.04 | 0.14-0.20 |
+
+(Training sets the threshold between the samples and the ordinary sentence.) As before, any noise moved the user's own "hey Arcee"
+further from their samples than another speaker's sentences were: noise woke nothing,
+and the user could not wake it either. Now what is matched is first denoised by GTCRN
+(sherpa-onnx's online speech denoiser, a 0.5 MB model downloaded with the others),
+and every band is then held at a floor 17 dB under the loudest (`wake_match.FLOOR`),
+so whatever noise is left looks the same in every room. The samples are denoised the
+same way when trained. Babble at 10 dB and below (a crowd as loud as the user) still
+fails; speaking up, or nearer the mic, brings it back to 15 dB.
+
+Free warping was replaced too: the match may run between half and twice the speed of
+the samples (steps 1-1, 2-1 and 1-2), not fold the whole word onto a moment of
+someone's speech.
+
+Cost: denoising runs only while the VAD hears speech, as matching does: 12% of a core
+then, so a stretch of speech now costs about 30% of one core (features, denoising,
+matching), and a quiet room is unchanged (0.3%). In a crowd, where someone is always
+speaking, that 30% is steady. Samples trained before are not loaded (their sound was
+not denoised: `wake_match.FEATURES`); the app asks for training again.

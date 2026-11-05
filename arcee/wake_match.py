@@ -8,7 +8,11 @@ audio: it cannot be played back. Speech then wakes Arcee when it holds a stretch
 enough to one of them, by dynamic time warping, so it allows for saying it faster or
 slower. The ordinary sentence sets how close is close enough.
 
-Plain Python, no numpy: about 3% of a core for the features and 4% for the matching,
+The same samples serve a quiet room, a fan and a crowd: what is matched is denoised
+first (voice_local.Cleaner), and each band is held above a floor under the loudest
+(`normalise`), so what is left of the room cannot make the word sound different.
+
+Plain Python, no numpy: about 3% of a core for the features and 10% for the matching,
 only while someone speaks (the listener's VAD gate).
 """
 
@@ -35,6 +39,15 @@ MAX_LEARNED: Final = 3
 LOOSEST: Final = 0.3
 SHORTEST_S: Final = 0.3
 LONGEST_S: Final = 2.5
+# Bands more than this below the loudest (natural log of power: 17 dB) are held at it.
+# Whatever noise the denoiser leaves sits down there, different in every room; held to
+# one level it looks the same in all of them. Measured on the user's samples with hiss,
+# fan noise and babble mixed in (decision 0015): 4 kept their own distance under 0.07
+# down to 5 dB of signal over noise, 7 let it rise to 0.23 in babble, and none at all
+# left it at 0.6.
+FLOOR: Final = 4.0
+# How the kept samples were made; samples kept another way are trained again.
+FEATURES: Final = 2  # 2: denoised and floored
 
 Frames = list[list[float]]
 
@@ -117,9 +130,12 @@ def log_mel(samples: list[float]) -> Frames:
 
 
 def normalise(frames: Frames) -> Frames:
-    """Each band less its mean over `frames` (the mic's colour), each frame to length 1."""
+    """Each band held above FLOOR under the loudest, less its mean over `frames` (the
+    mic's colour), each frame to length 1."""
     if not frames:
         return []
+    low = max(max(f) for f in frames) - FLOOR
+    frames = [[v if v > low else low for v in f] for f in frames]
     means = [sum(f[k] for f in frames) / len(frames) for k in range(BINS)]
     out: Frames = []
     for f in frames:
@@ -142,34 +158,51 @@ def pooled(frames: Frames) -> Frames:
 
 
 def _subsequence(template: Frames, query: Frames) -> tuple[float, int, int]:
-    """Subsequence dynamic time warping of pooled frames: the score, and query[start:end]."""
+    """Subsequence dynamic time warping of pooled frames, its speed held between half
+    and twice the template's: the score, and query[start:end].
+
+    Steps (1,1), (2,1) and (1,2) only. Free warping let a whole "hey Arcee" fold onto a
+    moment of anyone's speech (a single frame could stand for half the word); held to
+    0.5x-2x, it has to be said at about the speed it was trained at.
+    """
+    n, m = len(template), len(query)
+    if n < 2 or m < 2:
+        return 1.0, 0, 0
     big = 1e9
-    width = len(query)
     mul = operator.mul
-    previous = [0.0] * (width + 1)  # the template may start anywhere in the query
-    previous_steps = [0] * (width + 1)
-    previous_start = [0] * (width + 1)
-    for i, t in enumerate(template):
-        current = [big] * (width + 1)
-        steps = [0] * (width + 1)
-        starts = [0] * (width + 1)
-        for j in range(1, width + 1):
-            cost = 1.0 - sum(map(mul, t, query[j - 1], strict=True))  # both are length 1
-            diagonal, along, down = previous[j - 1], previous[j], current[j - 1]
-            if diagonal <= along and diagonal <= down:
-                best, length, began = diagonal, previous_steps[j - 1], previous_start[j - 1]
-            elif along <= down:
-                best, length, began = along, previous_steps[j], previous_start[j]
-            else:
-                best, length, began = down, steps[j - 1], starts[j - 1]
-            current[j] = best + cost
-            steps[j] = length + 1
-            starts[j] = j - 1 if i == 0 and length == 0 else began
-        previous, previous_steps, previous_start = current, steps, starts
-    score, end = min(
-        (previous[j] / previous_steps[j], j) for j in range(1, width + 1) if previous_steps[j]
-    )
-    return score, previous_start[end], end
+
+    def costs(t: list[float]) -> list[float]:
+        return [1.0 - sum(map(mul, t, q, strict=True)) for q in query]  # both length 1
+
+    cost_row = costs(template[0])
+    # Row 0: the template may start anywhere in the query.
+    row, steps, starts = list(cost_row), [1] * m, list(range(m))
+    older: tuple[list[float], list[int], list[int]] | None = None
+    for i in range(1, n):
+        cost_next = costs(template[i])
+        new, new_steps, new_starts = [big] * m, [0] * m, [0] * m
+        for j in range(1, m):
+            c = cost_next[j]
+            best_d, best_l, best_s = row[j - 1] + c, steps[j - 1] + 1, starts[j - 1]
+            score = best_d / best_l
+            if j >= 2 and row[j - 2] < big:  # the query runs ahead: twice as slow
+                d, length = row[j - 2] + cost_next[j - 1] + c, steps[j - 2] + 2
+                if d / length < score:
+                    best_d, best_l, best_s, score = d, length, starts[j - 2], d / length
+            if older is not None and older[0][j - 1] < big:  # the template runs ahead
+                d = older[0][j - 1] + cost_row[j] + c
+                length = older[1][j - 1] + 2
+                if d / length < score:
+                    best_d, best_l, best_s = d, length, older[2][j - 1]
+            if best_d < big:
+                new[j], new_steps[j], new_starts[j] = best_d, best_l, best_s
+        older = (row, steps, starts)
+        row, steps, starts, cost_row = new, new_steps, new_starts, cost_next
+    ends = [(row[j] / steps[j], j) for j in range(m) if steps[j]]
+    if not ends:
+        return 1.0, 0, 0
+    score, last = min(ends)
+    return score, starts[last], last + 1
 
 
 def best_match(template: Frames, query: Frames) -> tuple[float, int, int]:
@@ -333,6 +366,7 @@ def save(trained: Trained) -> None:
         return [[[round(v, 4) for v in f] for f in t] for t in templates]
 
     data = {
+        "features": FEATURES,
         "threshold": trained.threshold,
         "templates": rounded(trained.templates),
         "stop_threshold": trained.stop_threshold,
@@ -343,9 +377,12 @@ def save(trained: Trained) -> None:
 
 
 def load() -> Trained | None:
-    """The user's trained wake word, if they trained one."""
+    """The user's trained wake word, if they trained one (and since its samples were
+    last made the way they are now)."""
     try:
         data = json.loads(trained_path().read_text())
+        if data.get("features", 1) != FEATURES:
+            return None  # Settings → Voice asks for it to be trained again
 
         def frames(templates: list[list[list[float]]]) -> list[Frames]:
             return [[list(map(float, f)) for f in t] for t in templates]
@@ -371,6 +408,10 @@ def learned_from(trained: Trained, heard: Frames) -> Trained:
     return Trained(
         trained.templates, trained.threshold, trained.stops, trained.stop_threshold, learned
     )
+
+
+def is_trained() -> bool:
+    return load() is not None
 
 
 def forget() -> None:
