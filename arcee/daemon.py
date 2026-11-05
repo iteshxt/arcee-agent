@@ -184,14 +184,24 @@ YES: Final = re.compile(
     re.IGNORECASE,
 )
 NO: Final = re.compile(r"^(no|nope|nah|don'?t|do not|deny|cancel|never|not now)\b", re.IGNORECASE)
+# "Always allow" said: yes, and never ask again for this kind of action.
+ALWAYS: Final = re.compile(
+    r"^(always( allow( it)?)?|allow (it )?always|(yes )?(and )?don'?t ask (me )?again)\b",
+    re.IGNORECASE,
+)
 ORDINALS: Final = ("first", "second", "third", "fourth", "fifth")
 
 
-def spoken_answer(text: str, kind: str, options: Sequence[str]) -> str | None:
+def spoken_answer(
+    text: str, kind: str, options: Sequence[str], allowable: bool = False
+) -> str | None:
     """What the user said, as an answer to a question of `kind` with `options`; None
-    when it answers nothing ("yes or no?")."""
-    said = re.sub(r"[^\w\s']", " ", text).strip().lower()
+    when it answers nothing ("yes or no?"). "always" for a confirmation the user may
+    allow for good (`allowable`)."""
+    said = " ".join(re.sub(r"[^\w\s']", " ", text).split()).lower()
     yes, no = bool(YES.match(said)), bool(NO.match(said))
+    if kind == "confirm" and allowable and ALWAYS.match(said):
+        return "always"
     if kind == "confirm":
         return "yes" if yes else "no" if no else None
     words = " ".join(said.split())
@@ -535,7 +545,9 @@ class AgentService(ServiceInterface):
         elif text and self._asked:
             # A question is waiting: what was said answers it.
             question_id, asked = next(reversed(self._asked.items()))
-            answer = spoken_answer(text, asked["kind"], asked.get("options", []))
+            answer = spoken_answer(
+                text, asked["kind"], asked.get("options", []), bool(asked.get("allowable"))
+            )
             if answer is None:
                 heard = {
                     "error": "Say “yes” or “no”."
@@ -565,9 +577,17 @@ class AgentService(ServiceInterface):
 
     async def confirm(self, request: ConfirmRequest) -> bool:
         answer = await self._question(
-            {"kind": "confirm", "text": request.sentence, "preview": list(request.args_preview)}
+            {
+                "kind": "confirm",
+                "text": request.sentence,
+                "preview": list(request.args_preview),
+                "allowable": request.allowable,
+            }
         )
-        return answer.strip().lower() in {"y", "yes", "allow"}
+        answer = answer.strip().lower()
+        if answer == "always" and request.allowable:
+            self._runner.allow_always(request.tool)  # from now on, and remembered
+        return answer in {"y", "yes", "allow", "always"}
 
     async def _question(self, payload: dict[str, Any]) -> str:
         question_id = f"q{next(self._ids)}"

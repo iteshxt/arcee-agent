@@ -165,6 +165,11 @@ class Tool[A: ToolArgs](ABC):
         """This call's tier. Tools whose risk depends on the arguments override it."""
         return self.tier
 
+    def allowable(self, args: A) -> bool:
+        """Whether this call may run without asking once the user allowed the tool for
+        good (policy ALLOWABLE): False where the arguments make it more than routine."""
+        return True
+
     def refusal(self, args: A, policy: Policy) -> str:
         """Why a `never` call is refused, in words the model can act on."""
         return f"{self.name} is not allowed"

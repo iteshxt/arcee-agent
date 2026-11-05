@@ -12,7 +12,7 @@ import itertools
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from arcee.core.policy import Policy, Tier
+from arcee.core.policy import ALLOWABLE, Policy, Tier
 from arcee.core.protocol import ConfirmRequest
 from arcee.tools.registry import ToolCall
 
@@ -47,6 +47,8 @@ class Gate:
         if tier is Tier.NEVER:
             return tier
         tier = self.policy.tier_overrides.get(call.tool.name, tier)
+        if tier is Tier.CONFIRM and self.allowed(call):
+            return Tier.AUTO
         # After suspicious data (`model_asked`), only what can change or send things asks
         # first: listing emails after reading the inbox page had asked (2026-11-06), and a
         # read cannot do what the data may ask for.
@@ -55,6 +57,18 @@ class Gate:
         ):
             tier = Tier.CONFIRM
         return tier
+
+    def allowable(self, call: ToolCall) -> bool:
+        """Whether the user could allow this call for good ("Always allow")."""
+        return (
+            call.tool.name in ALLOWABLE
+            and not self.policy.confirm_all
+            and call.tool.tier_for(call.args, self.policy) is Tier.CONFIRM
+            and call.tool.allowable(call.args)
+        )
+
+    def allowed(self, call: ToolCall) -> bool:
+        return call.tool.name in self.policy.always_allow and self.allowable(call)
 
     async def check(self, call: ToolCall, task_id: str, *, model_asked: bool = False) -> Verdict:
         """Allow, ask the user, or refuse. A confirmation that times out counts as denied."""
@@ -71,6 +85,7 @@ class Gate:
             risk=call.tool.risk,
             args_preview=call.tool.preview(call.args),
             timeout_s=max(1, round(self._timeout_s)),
+            allowable=self.allowable(call),
         )
         try:
             approved = await asyncio.wait_for(self._confirmer.confirm(request), self._timeout_s)

@@ -359,6 +359,10 @@ class CalendarAdd(Tool[AddArgs]):
     name = "calendar.add"
     tier = Tier.CONFIRM
     risk = "medium"
+
+    def allowable(self, args: AddArgs) -> bool:
+        return not args.guests  # Google emails each guest: that is sending
+
     description = "Add an event to the user's Google Calendar (asks the user first)."
     usage = Usage(
         when='"Add a dentist appointment tomorrow at 10:30", "put lunch with Priya on Friday", '

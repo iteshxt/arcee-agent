@@ -279,10 +279,11 @@ export class ListeningCue {
         this._phase = 'asking';
         this._clearLimit();
         const confirm = question.kind === 'confirm';
-        const choices = confirm ? ['Yes', 'No'] : (question.options ?? []).slice(0, 4);
+        const choices = confirm ? (question.allowable ? ['Yes', 'Always allow', 'No'] : ['Yes', 'No'])
+            : (question.options ?? []).slice(0, 4);
         this._answers.destroy_all_children();
         for (const [n, choice] of choices.entries()) {
-            const value = confirm ? ['yes', 'no'][n] : choice;
+            const value = confirm ? {'Yes': 'yes', 'Always allow': 'always', 'No': 'no'}[choice] : choice;
             const button = new St.Button({
                 style_class: `arcee-cue-button${n === 0 ? ' arcee-cue-primary' : ''}`, label: choice,
             });

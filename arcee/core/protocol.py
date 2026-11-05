@@ -280,6 +280,8 @@ class ConfirmRequest(_Versioned, _HarnessModel):
     risk: Risk
     args_preview: tuple[str, ...] = ()
     timeout_s: int = Field(default=120, ge=1)
+    # The user may answer "always" (policy ALLOWABLE): this tool runs without asking after.
+    allowable: bool = False
 
 
 # --- 7.7 Replan context -----------------------------------------------------------

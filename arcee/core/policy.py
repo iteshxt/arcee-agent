@@ -81,6 +81,17 @@ class ShellVerdict:
     reason: str
 
 
+# Actions that ask first which the user may allow for good ("Always allow"): simple, and
+# undone as easily as done. Sending, paying, deleting events, scripts and closing apps
+# are not here: they always ask. Never lifts what a tool's arguments raised (a click on
+# "Buy now", a calendar event with guests, whom Google emails).
+ALLOWABLE: Final = {
+    "fs.trash": "Moving files to the Trash",
+    "mail.update": "Archiving, labelling and marking emails",
+    "calendar.add": "Adding events to your calendar, without guests",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Policy:
     """What the gate enforces. Defaults match the spec; `policy.toml` loading comes later."""
@@ -91,6 +102,9 @@ class Policy:
     )
     # "Ask me for everything": every `auto` becomes `confirm`.
     confirm_all: bool = False
+    # Of ALLOWABLE, those the user allowed for good. A set, shared by the running gate:
+    # "Always allow" during a task holds for the rest of it.
+    always_allow: set[str] = field(default_factory=set[str])
     # Path rules: Arcee works inside `home` and writes without asking in `workspace`.
     home: Path = field(default_factory=Path.home)
     workspace_name: str = "Arcee"

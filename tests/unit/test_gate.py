@@ -168,3 +168,25 @@ def test_policy_can_ban_a_tool() -> None:
     gate = Gate(Policy(tier_overrides={"fs.read": Tier.NEVER}), Answers())
 
     assert gate.tier(call("fs.read", path="~")) is Tier.NEVER
+
+
+def test_always_allow_lets_a_routine_action_run() -> None:
+    trash = call("fs.trash", paths=["~/old.txt"])
+    assert Gate(Policy(), Answers()).tier(trash) is Tier.CONFIRM
+    assert Gate(Policy(always_allow={"fs.trash"}), Answers()).tier(trash) is Tier.AUTO
+    # "Ask before every action" wins over it.
+    everything = Policy(always_allow={"fs.trash"}, confirm_all=True)
+    assert Gate(everything, Answers()).tier(trash) is Tier.CONFIRM
+
+
+def test_only_routine_actions_can_be_allowed_for_good() -> None:
+    """A command the shell rules make ask is not lifted by naming shell.run."""
+    gate = Gate(Policy(always_allow={"shell.run"}), Answers())
+    assert gate.tier(call("shell.run", cmd="ls > out.txt")) is Tier.CONFIRM
+
+
+async def test_a_question_says_whether_it_can_be_allowed_for_good() -> None:
+    answers = Answers(True, True)
+    await Gate(Policy(), answers).check(call("fs.trash", paths=["~/old.txt"]), "t_1")
+    await Gate(Policy(), answers).check(call("shell.run", cmd="ls > out.txt"), "t_1")
+    assert [r.allowable for r in answers.requests] == [True, False]

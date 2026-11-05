@@ -402,7 +402,10 @@ class ArceeIndicator extends PanelMenu.Button {
             this._agent.AnswerAsync(question.id, value).catch(logError);
         };
         if (question.kind === 'confirm') {
-            for (const [label, value, style] of [['Allow', 'yes', 'arcee-primary'], ['Deny', 'no', '']]) {
+            const choices = [['Allow', 'yes', 'arcee-primary'], ['Deny', 'no', '']];
+            if (question.allowable)  // routine, and undoable: the user may stop being asked
+                choices.splice(1, 0, ['Always allow', 'always', '']);
+            for (const [label, value, style] of choices) {
                 const button = new St.Button({style_class: `arcee-button ${style}`, label});
                 button.connect('clicked', () => answer(value));
                 buttons.add_child(button);

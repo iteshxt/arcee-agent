@@ -296,3 +296,11 @@ def test_calendar_words_bring_the_calendar_tools() -> None:
     ):
         assert set(CALENDAR) <= set(filters_for([Message("user", request)])), request
     assert not set(CALENDAR) & set(filters_for([Message("user", "Rename the photo")]))
+
+
+def test_an_event_with_guests_always_asks() -> None:
+    tool = CalendarAdd(calendar(Google()))
+    assert tool.allowable(AddArgs(title="Gym", start="2026-11-06T07:00"))
+    assert not tool.allowable(
+        AddArgs(title="Lunch", start="2026-11-06T13:00", guests=["priya@example.com"])
+    )
