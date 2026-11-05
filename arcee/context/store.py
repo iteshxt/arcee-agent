@@ -24,7 +24,7 @@ from arcee.context.redact import redact, redact_value
 from arcee.core.executor import ActionRecord
 from arcee.core.protocol import PlannerOutput
 
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,
@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     steps       INTEGER NOT NULL DEFAULT 0,
     model_calls INTEGER NOT NULL DEFAULT 0,
     started     REAL NOT NULL,
-    finished    REAL
+    finished    REAL,
+    conversation TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
     task_id     TEXT NOT NULL REFERENCES tasks(id),
@@ -139,6 +140,17 @@ class TaskRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatRow:
+    """A conversation in the Agent page's list."""
+
+    id: str
+    title: str  # its first request
+    started: float
+    last: float
+    requests: int
+
+
+@dataclass(frozen=True, slots=True)
 class StepRow:
     n: int
     tool: str
@@ -210,19 +222,29 @@ class Store:
                 self._db.executescript(_MEMORY_SCHEMA)
                 # Index what was saved before the indexes existed.
                 self._db.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
+            if version < 3:  # which conversation each request was in (the Agent page's chats)
+                columns = {row[1] for row in self._db.execute("PRAGMA table_info(tasks)")}
+                if "conversation" not in columns:
+                    self._db.execute("ALTER TABLE tasks ADD COLUMN conversation TEXT")
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS tasks_conversation ON tasks(conversation, started)"
+            )
             self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:
         self._db.close()
 
-    async def start_task(self, request: str, *, task_id: str | None = None) -> str:
+    async def start_task(
+        self, request: str, *, task_id: str | None = None, conversation: str | None = None
+    ) -> str:
         task_id = task_id or new_task_id()
 
         def write() -> None:
             with self._db:
                 self._db.execute(
-                    "INSERT INTO tasks (id, request, status, started) VALUES (?, ?, 'running', ?)",
-                    (task_id, redact(request), time.time()),
+                    "INSERT INTO tasks (id, request, status, started, conversation) "
+                    "VALUES (?, ?, 'running', ?, ?)",
+                    (task_id, redact(request), time.time(), conversation),
                 )
 
         await self._run(write)
@@ -546,6 +568,50 @@ class Store:
                 (limit,),
             ).fetchall()
             return [TaskRow(*row) for row in rows]
+
+        return await self._run(read)
+
+    async def conversations(self, limit: int = 20) -> list[ChatRow]:
+        """The latest conversations, newest first: their first request and their size."""
+
+        def read() -> list[ChatRow]:
+            rows = self._db.execute(
+                "SELECT conversation, MIN(started), MAX(started), COUNT(*), "
+                "(SELECT request FROM tasks AS first WHERE first.conversation = t.conversation "
+                " ORDER BY started LIMIT 1) "
+                "FROM tasks AS t WHERE conversation IS NOT NULL "
+                "GROUP BY conversation ORDER BY MAX(started) DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [ChatRow(row[0], row[4], row[1], row[2], row[3]) for row in rows]
+
+        return await self._run(read)
+
+    async def conversation(self, conversation: str) -> list[tuple[TaskRow, list[str]]]:
+        """A conversation's requests, oldest first, each with what it did (its steps
+        that worked, as "tool: summary")."""
+
+        def read() -> list[tuple[TaskRow, list[str]]]:
+            tasks = [
+                TaskRow(*row)
+                for row in self._db.execute(
+                    "SELECT id, request, status, reply, steps, model_calls, started, finished "
+                    "FROM tasks WHERE conversation = ? ORDER BY started",
+                    (conversation,),
+                )
+            ]
+            out: list[tuple[TaskRow, list[str]]] = []
+            for task in tasks:
+                did = [
+                    f"{tool}: {summary}"
+                    for tool, summary in self._db.execute(
+                        "SELECT tool, summary FROM steps WHERE task_id = ? AND status = 'ok' "
+                        "ORDER BY n",
+                        (task.id,),
+                    )
+                ]
+                out.append((task, did))
+            return out
 
         return await self._run(read)
 

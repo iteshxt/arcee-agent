@@ -152,7 +152,7 @@ async def test_cancel_stops_the_request(bus_address: str) -> None:
     await agent.call_cancel()
     result = await asyncio.wait_for(finished, 5)
 
-    assert result == {"status": "stopped", "reply": ""}
+    assert {k: result[k] for k in ("status", "reply")} == {"status": "stopped", "reply": ""}
     bus.disconnect()
     service_bus.disconnect()
 
@@ -183,7 +183,7 @@ async def test_the_shell_stop_shortcut_stops_the_request(bus_address: str) -> No
     shell.Stopped()
     result = await asyncio.wait_for(finished, 5)
 
-    assert result == {"status": "stopped", "reply": ""}
+    assert {k: result[k] for k in ("status", "reply")} == {"status": "stopped", "reply": ""}
     for b in (bus, shell_bus, service_bus):
         b.disconnect()
 
@@ -596,3 +596,49 @@ def test_always_allow_is_kept_for_the_next_tasks(monkeypatch: pytest.MonkeyPatch
 
     assert runner._policy.always_allow == {"fs.trash"}  # pyright: ignore[reportPrivateUsage]
     assert load().always_allow == ["fs.trash"]
+
+
+def test_a_requests_models_tokens_and_speed_are_totalled() -> None:
+    from arcee.core.agent import ModelTurn
+    from arcee.daemon import TaskStats
+
+    stats = TaskStats()
+    stats.add(ModelTurn(1, 0, "openai/gpt-oss-20b", "", None, "", 2.5, 0.5, 900, 300))
+    stats.add(ModelTurn(2, 1, "openai/gpt-oss-120b", "", None, "done", 1.0, 0.0, 1200, 200))
+    summary = stats.summary("groq")
+    assert summary["models"] == ["gpt-oss-20b", "gpt-oss-120b"]
+    assert (summary["tokens_in"], summary["tokens_out"]) == (2100, 500)
+    assert summary["model_seconds"] == 3.0  # the rate-limit wait is not the model's time
+    assert summary["tokens_per_s"] == 167
+
+
+async def test_an_earlier_conversation_is_taken_up_again(tmp_path: Any) -> None:
+    from arcee.context.conversation import Conversation
+    from arcee.context.store import Store
+
+    store = Store(tmp_path)
+    talk = Conversation()
+    first = talk.begin()
+    for request, reply in (
+        ("What's the weather today?", "Sunny, 24°C."),
+        ("Open Chrome.", "Done."),
+    ):
+        task = await store.start_task(request, conversation=first)
+        await store.finish_task(task, status="done", reply=reply, steps=0, model_calls=1)
+    other = await store.start_task("Thanks", conversation="c_other")
+    await store.finish_task(other, status="done", reply="", steps=0, model_calls=1)
+
+    chats = await store.conversations()
+    assert [c.id for c in chats] == ["c_other", first]
+    assert chats[1].title == "What's the weather today?"
+    assert chats[1].requests == 2
+
+    runner = FakeRunner()
+    runner.store = store  # pyright: ignore[reportAttributeAccessIssue]
+    service = AgentService(runner)  # pyright: ignore[reportArgumentType]
+    await service.resume(first)
+
+    assert service.conversation.id == first
+    assert service.conversation.requests() == ["What's the weather today?", "Open Chrome."]
+    assert service.conversation.begin() == first  # the next request continues it
+    store.close()

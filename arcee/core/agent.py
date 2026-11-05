@@ -112,6 +112,8 @@ class ModelTurn:
     seconds: float
     # Of `seconds`, the time spent waiting on rate limits before the model was asked.
     waited: float = 0.0
+    tokens_in: int = 0  # what the model read
+    tokens_out: int = 0  # and wrote, its thinking included
 
 
 @dataclass(frozen=True, slots=True)
@@ -563,6 +565,8 @@ class Agent:
                 completion.text,
                 time.monotonic() - started,
                 model.last_wait_s,
+                completion.usage.input_tokens,
+                completion.usage.output_tokens,
             )
         )
         return completion
