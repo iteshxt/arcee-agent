@@ -125,9 +125,9 @@ def restart_daemon_when_idle(background: Background, told: Callable[[str], None]
             if '"running"' in str(status.body[0]):
                 return "Saved. It takes effect after the current request."
             await bus.call(call("Quit"))
-            from arcee.settings import load
+            from arcee.settings import starts_at_login
 
-            if load().listen:
+            if starts_at_login():  # listening, or reminders to fire
                 for _ in range(20):  # until the old one has let its name go
                     await asyncio.sleep(0.25)
                     owner = await bus.call(

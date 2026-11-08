@@ -108,9 +108,33 @@ def save_listen(on: bool, path: Path | None = None) -> None:
         save(settings, path)
 
 
+def reminders_pending(history: Path | None = None) -> bool:
+    """Whether a timer or reminder is still to fire (decision 0018): read straight from
+    History, without starting anything."""
+    import sqlite3
+
+    from arcee.context.store import data_dir
+
+    path = history or data_dir() / "history.db"
+    if not path.is_file():
+        return False
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+            row = db.execute("SELECT 1 FROM reminders WHERE status = 'pending' LIMIT 1")
+            return row.fetchone() is not None
+    except sqlite3.Error:  # no reminders table yet
+        return False
+
+
+def starts_at_login() -> bool:
+    """arceed is needed from login: to hear "Hey Arcee", or to fire a reminder."""
+    return load().listen or reminders_pending()
+
+
 if __name__ == "__main__":
-    # `python -m arcee.settings listening`: exit 0 when "Listen for Hey Arcee" is on. The
-    # login unit (arceed-listen.service) starts arceed only then.
+    # `python -m arcee.settings listening`: exit 0 when arceed is needed from login. The
+    # login unit (arceed-listen.service) starts arceed only then. The argument keeps its
+    # first name (units already installed use it), though reminders count too now.
     import sys
 
-    sys.exit(0 if sys.argv[1:] == ["listening"] and load().listen else 1)
+    sys.exit(0 if sys.argv[1:] == ["listening"] and starts_at_login() else 1)

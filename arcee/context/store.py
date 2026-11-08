@@ -24,7 +24,7 @@ from arcee.context.redact import redact, redact_value
 from arcee.core.executor import ActionRecord
 from arcee.core.protocol import PlannerOutput
 
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,
@@ -140,6 +140,17 @@ class TaskRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ReminderRow:
+    id: str
+    text: str
+    due: float  # epoch seconds
+    created: float
+    kind: str  # "timer" or "reminder"
+    status: str  # "pending", "fired" or "cancelled"
+    fired: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class ChatRow:
     """A conversation in the Agent page's list."""
 
@@ -181,6 +192,22 @@ class SummaryRow:
     created: float
 
 
+# Timers and reminders (decision 0018): arceed's scheduler fires each when it is due.
+_REMINDER_SCHEMA: Final = """
+CREATE TABLE IF NOT EXISTS reminders (
+    id      TEXT PRIMARY KEY,
+    text    TEXT NOT NULL,
+    due     REAL NOT NULL,
+    created REAL NOT NULL,
+    kind    TEXT NOT NULL DEFAULT 'reminder',
+    status  TEXT NOT NULL DEFAULT 'pending',
+    fired   REAL,
+    task_id TEXT
+);
+CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, due);
+"""
+_REMINDER_COLUMNS: Final = "id, text, due, created, kind, status, fired"
+
 _MEMORY_COLUMNS: Final = (
     "id, task_id, text, importance, created, COALESCE(updated, created), source"
 )
@@ -206,6 +233,7 @@ class Store:
         self._db.executescript(_SCHEMA)
         self._migrate()
         self._lock = asyncio.Lock()
+        self._reminder_hooks: list[Callable[[], None]] = []
 
     def _migrate(self) -> None:
         """Bring an older history.db up to SCHEMA_VERSION, keeping everything in it."""
@@ -229,6 +257,7 @@ class Store:
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS tasks_conversation ON tasks(conversation, started)"
             )
+            self._db.executescript(_REMINDER_SCHEMA)  # 4: timers and reminders
             self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -570,6 +599,79 @@ class Store:
             return [TaskRow(*row) for row in rows]
 
         return await self._run(read)
+
+    # --- timers and reminders (decision 0018) ---------------------------------------------
+
+    def on_reminders(self, changed: Callable[[], None]) -> None:
+        """Call `changed` after each reminder added, cancelled or snoozed here (arceed's
+        scheduler, so it looks again at once)."""
+        self._reminder_hooks.append(changed)
+
+    def _reminders_changed(self) -> None:
+        for hook in self._reminder_hooks:
+            hook()
+
+    async def add_reminder(
+        self, text: str, due: float, *, kind: str = "reminder", task_id: str | None = None
+    ) -> str:
+        reminder_id = f"r_{secrets.token_hex(4)}"
+
+        def write() -> None:
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO reminders (id, text, due, created, kind, task_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (reminder_id, redact(text.strip()), due, time.time(), kind, task_id),
+                )
+
+        await self._run(write)
+        self._reminders_changed()
+        return reminder_id
+
+    async def pending_reminders(self) -> list[ReminderRow]:
+        """Reminders still to fire, soonest first."""
+
+        def read() -> list[ReminderRow]:
+            rows = self._db.execute(
+                f"SELECT {_REMINDER_COLUMNS} FROM reminders WHERE status = 'pending' ORDER BY due"
+            ).fetchall()
+            return [ReminderRow(*row) for row in rows]
+
+        return await self._run(read)
+
+    async def reminder(self, reminder_id: str) -> ReminderRow | None:
+        def read() -> ReminderRow | None:
+            row = self._db.execute(
+                f"SELECT {_REMINDER_COLUMNS} FROM reminders WHERE id = ?", (reminder_id,)
+            ).fetchone()
+            return ReminderRow(*row) if row else None
+
+        return await self._run(read)
+
+    async def set_reminder(
+        self, reminder_id: str, *, status: str, due: float | None = None
+    ) -> bool:
+        """Mark a reminder fired or cancelled, or (with `due`) pending again (a snooze)."""
+
+        def write() -> bool:
+            with self._db:
+                if due is not None:
+                    changed = self._db.execute(
+                        "UPDATE reminders SET status = ?, due = ?, fired = NULL WHERE id = ?",
+                        (status, due, reminder_id),
+                    ).rowcount
+                else:
+                    fired = time.time() if status == "fired" else None
+                    changed = self._db.execute(
+                        "UPDATE reminders SET status = ?, fired = COALESCE(?, fired) WHERE id = ?",
+                        (status, fired, reminder_id),
+                    ).rowcount
+                return bool(changed)
+
+        changed = await self._run(write)
+        if changed and status != "fired":
+            self._reminders_changed()
+        return changed
 
     async def conversations(self, limit: int = 20) -> list[ChatRow]:
         """The latest conversations, newest first: their first request and their size."""

@@ -35,6 +35,7 @@ WEB: Final = ("web.*",)
 MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*",)
+REMINDERS: Final = ("reminder.*",)
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -129,6 +130,11 @@ _MAIL_REQUEST: Final = _words(
     r"\b(e-?mails?|mails?|gmail|inbox|unread|drafts?|reply|forward|newsletters?|"
     r"attachments?|sent me|wrote to me|message from)\b"
 )
+# Timers and reminders (decision 0018): "set a timer", "remind me at 5", "wake me at 7".
+_REMINDER_REQUEST: Final = _words(
+    r"\b(timers?|remind(er|ers)?|alarms?|wake me|ping me|nudge me|countdown|"
+    r"in \d+ ?(s|sec|secs|seconds?|m|min|mins|minutes?|h|hrs?|hours?)\b)"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
@@ -208,6 +214,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (MEDIA, _MEDIA_REQUEST, "media"),
             (CALENDAR, _CALENDAR_REQUEST, "calendar"),
             (MAIL, _MAIL_REQUEST, "mail"),
+            (REMINDERS, _REMINDER_REQUEST, "reminder"),
         )
         if pattern.search(request) or namespace in namespaces
     ]
