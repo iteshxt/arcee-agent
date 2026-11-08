@@ -23,6 +23,7 @@ from arcee.tools.files import (
     FsWrite,
 )
 from arcee.tools.mail import mail_tools
+from arcee.tools.markets import market_tools
 from arcee.tools.media import MediaControl, MediaNowPlaying
 from arcee.tools.memory import Memory, memory_tools
 from arcee.tools.registry import Registry
@@ -69,6 +70,7 @@ def builtin_registry(
             *capture_tools(),
             *document_tools(),
             *clock_tools(),
+            *market_tools(),
             *calendar_tools(),
             *mail_tools(),
             WebFetch(),
