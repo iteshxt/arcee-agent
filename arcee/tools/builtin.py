@@ -23,6 +23,7 @@ from arcee.tools.files import (
     FsUsage,
     FsWrite,
 )
+from arcee.tools.later import later_tools
 from arcee.tools.mail import mail_tools
 from arcee.tools.markets import market_tools
 from arcee.tools.media import MediaControl, MediaNowPlaying
@@ -82,6 +83,7 @@ def builtin_registry(
             *window_tools(),
             ShellRun(limits=shell_limits),
             ShellScript(limits=shell_limits),
+            *later_tools(reminders),
             *(tool() for tool in UTILITY_CONTROL_TOOLS),
             *(tool() for tool in CONTROL_TOOLS),
             *(memory_tools(memory) if memory is not None else ()),

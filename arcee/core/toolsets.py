@@ -22,10 +22,12 @@ NOTE: Final = ("control.note",)
 # Looking up and forgetting what Arcee remembers (recall already brings what matters).
 MEMORY: Final = ("memory.*", "control.note")
 WAIT: Final = ("control.wait", "control.wait_for")
+# Work that goes on after this step (decision 0020): background jobs, Arcee's own timer.
+LATER: Final = ("shell.*", "job.*", "control.wait_for", "control.set_timer")
 SYSTEM: Final = ("system.*", "network.*")
 FILES: Final = ("fs.*",)
 APPS: Final = ("app.*", "terminal.*")
-SHELL: Final = ("shell.*",)
+SHELL: Final = ("shell.*", "job.*")
 LOCAL: Final = FILES + APPS + SYSTEM + SHELL
 ALWAYS: Final = LOCAL + CONTROL
 BROWSER: Final = ("browser.*",)
@@ -185,6 +187,16 @@ _DOCS_REQUEST: Final = _words(
     r"photos? to|compress (the |this |these )?(photos?|images?)|print(er|ing)?|"
     r"receipts?|scan(ned)?)\b"
 )
+# Something to come back to: a job left running, a page or file to watch, a check later.
+_LATER_REQUEST: Final = _words(
+    r"\b(in the background|background (job|task|command)s?|"
+    r"(tell|notify|ping|let) me (know )?when|when (it'?s|they'?re|it is|they are|that'?s) "
+    r"(done|finished|ready|over|complete)|check (it |that |this |them |the \w+ )?(again|back)|"
+    r"come back to|keep (an eye|checking|watching)|watch (this|the|that|for|it)|"
+    r"price (drops?|falls?|goes down)|back in stock|in stock|"
+    r"download (these|this|those|the|them|all|it|\d+)|build (the|my|this) (project|app)|"
+    r"run (the|all the) tests|still running)\b"
+)
 # Undoing what an earlier request did.
 _UNDO: Final = _words(
     r"\b(undo|put (them|it|the files?) back|revert|reverse that|restore (it|them))\b"
@@ -286,6 +298,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (WINDOWS, _WINDOWS_REQUEST, "window"),
             (CAPTURE, _CAPTURE_REQUEST, "clipboard"),
             (DOCS, _DOCS_REQUEST, "doc"),
+            (LATER, _LATER_REQUEST, "job"),
         )
         if pattern.search(request) or namespace in namespaces
     ]

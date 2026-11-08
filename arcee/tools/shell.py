@@ -77,7 +77,7 @@ class ShellRun(Tool[RunArgs]):
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=cwd,
-            env=_clean_env(os.environ, ctx),
+            env=clean_env(os.environ, ctx),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -102,7 +102,7 @@ class ShellRun(Tool[RunArgs]):
         return ToolResult.ok(summary, data=data)
 
 
-def _clean_env(env: Mapping[str, str], ctx: ToolContext) -> dict[str, str]:
+def clean_env(env: Mapping[str, str], ctx: ToolContext) -> dict[str, str]:
     clean = {name: value for name, value in env.items() if not _SECRET_ENV.search(name)}
     clean["HOME"] = str(ctx.home)
     return clean
@@ -175,7 +175,7 @@ class ShellScript(Tool[ScriptArgs]):
                 argv = [*_bwrap(ctx.home, Path(scratch), network=args.network), *argv]
             if self._limits:
                 argv = ["systemd-run", "--user", "--scope", "--quiet", *LIMITS, *argv]
-            env = _clean_env(os.environ, ctx) | {"HOME": scratch}
+            env = clean_env(os.environ, ctx) | {"HOME": scratch}
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=scratch,

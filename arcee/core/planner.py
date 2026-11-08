@@ -66,7 +66,9 @@ question or one action is ONE step. Each phase of a longer request is its own st
 finding items, reading them, and acting somewhere else (another site, app or folder) \
 are separate steps, because each step sees only the notes the earlier ones left. A \
 step is tool work (look something up, act on something); never a step only for \
-thinking, comparing or choosing, which happens inside the step that needs it.
+thinking, comparing or choosing, which happens inside the step that needs it. Starting \
+something, waiting for it and reading its result (a background job, a download, an app \
+opening) is ONE step: a later step would not know what was started.
 - Each step: id (1, 2, ...), do (one instruction), tools (the tool names it needs, or \
 "fs.*" for a group), success (what shows the step is done), judgement (false only for \
 mechanical steps such as opening a page or typing given text: a smaller model runs them).

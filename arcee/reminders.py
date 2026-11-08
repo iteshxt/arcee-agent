@@ -57,6 +57,7 @@ class Store(Protocol):
         kind: str = "reminder",
         task_id: str | None = None,
         repeat: str = "",
+        detail: str = "",
     ) -> str: ...
     async def set_reminder(
         self, reminder_id: str, *, status: str, due: float | None = None

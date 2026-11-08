@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -32,6 +32,7 @@ from arcee.config import load_env
 from arcee.context.conversation import Conversation, Turn
 from arcee.core.agent import Escalated, Event, Guarded, ModelTurn, Planned, StepStarted, ToolRan
 from arcee.core.protocol import ConfirmRequest
+from arcee.jobs import Job
 from arcee.models.errors import ModelUnavailableError
 from arcee.runner import TaskRunner
 from arcee.settings import load as load_settings
@@ -236,6 +237,29 @@ FAILED_ALOUD: Final = "Sorry, that did not work. The reason is on screen."
 ROUTINE_LATE_S: Final = 2 * 3600.0
 ROUTINE_WAIT_S: Final = 30 * 60.0
 ROUTINE_POLL_S: Final = 5.0
+JOB_LOOK_S: Final = 1.0  # a finished job waits this often for its task to end
+
+
+async def notify(title: str, body: str) -> None:
+    """A plain desktop notification from Arcee (a job done, a watch given up)."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "notify-send",
+            "-a",
+            "Arcee",
+            "-i",
+            "dialog-information",
+            title,
+            body,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await process.wait()
+    except OSError:
+        log.warning("could not notify: %s: %s", title, body)
+
+
 PREVIEW_ALOUD: Final = "Hi, I'm Arcee. I've set a reminder for 5 PM to call mom."
 
 
@@ -375,6 +399,26 @@ class AgentService(ServiceInterface):
         self.conversation.end()
         self.start_request(request)
         return True
+
+    async def job_finished(self, job: Job) -> None:
+        """A background job ended (decision 0020). The task that started it may still
+        look (control.wait_for, job.check): once that task is over, a job it never saw
+        end is told: by its follow-up request (`then`), or a notification."""
+        while self._runner.current_task == job.task_id:  # noqa: ASYNC110 (the runner's)
+            await asyncio.sleep(JOB_LOOK_S)
+        if job.seen:
+            return
+        if not job.then:
+            await notify(f"Done: {job.cmd[:60]}", f"It {job.state()}.")
+            return
+        from arcee.followups import Detail, request_for
+
+        seen = f"The background command `{job.cmd}` ({job.id}) {job.state()}. " + (
+            f"job.check(job={job.id!r}) shows its output."
+        )
+        detail = Detail(request=job.request, set_at=job.started)
+        if not await self.run_routine(request_for(job.then, detail, seen), 0.0):
+            await notify(f"Done: {job.cmd[:60]}", f"It {job.state()}.")
 
     @method()
     def Cancel(self) -> None:
@@ -923,9 +967,32 @@ async def start_reminders(bus: MessageBus, service: AgentService) -> asyncio.Tas
     except Exception:  # the snooze button only; reminders still fire
         log.exception("not watching the reminder notifications")
 
+    running: set[asyncio.Task[Any]] = set()
+
+    def later(work: Awaitable[Any]) -> None:
+        # A routine or follow-up waits for Arcee to be free (up to half an hour): the
+        # scheduler goes on firing timers meanwhile.
+        task = asyncio.ensure_future(work)
+        running.add(task)
+        task.add_done_callback(running.discard)
+
     async def fire(reminder: ReminderRow, late: float) -> None:
         if reminder.kind == "routine":
-            await service.run_routine(reminder.text, late)
+            later(service.run_routine(reminder.text, late))
+        elif reminder.kind == "followup":
+            from arcee import followups
+
+            later(
+                followups.fire(
+                    reminder.id,
+                    reminder.text,
+                    reminder.detail,
+                    late,
+                    store=store,
+                    run_request=service.run_routine,
+                    notify=notify,
+                )
+            )
         else:
             await notifier.show(reminder, late)
 
@@ -946,6 +1013,9 @@ async def serve(runner: TaskRunner, bus: MessageBus, *, listen: bool = False) ->
     log.info("arceed ready on the session bus as %s", BUS_NAME)
     service.listen_for_wake(listen)
     reminders = await start_reminders(bus, service)
+    from arcee.jobs import JOBS
+
+    JOBS.on_finished = service.job_finished  # background jobs (decision 0020)
     days = asyncio.ensure_future(runner.keep_days())  # day and week summaries
     try:
         await bus.wait_for_disconnect()
