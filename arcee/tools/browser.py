@@ -226,6 +226,54 @@ class BrowserTabs(_BrowserTool[TabsArgs]):
             return ToolResult.fail(str(exc))
 
 
+class BookmarkArgs(ToolArgs):
+    action: Literal["add", "find"] = "add"
+    url: str = Field(default="", description="For add: an address; empty for the page open now")
+    title: str = Field(default="", description="For add: a name; empty for the page's title")
+    folder: str = Field(default="", description="For add: a bookmarks folder (made if new)")
+    query: str = Field(default="", description="For find: words in the bookmark's name or address")
+
+
+class BrowserBookmark(_BrowserTool[BookmarkArgs]):
+    name = "browser.bookmark"
+    description = "Bookmark the page open in Chrome (or an address), or find saved bookmarks."
+    usage = Usage(
+        when='"Bookmark this page", "save this to my bookmarks in Recipes", "find my bookmark '
+        'for the bank".',
+        example='browser.bookmark(action="add")',
+    )
+    args_model = BookmarkArgs
+
+    def changes_things(self, args: BookmarkArgs) -> bool:
+        return args.action == "add"
+
+    async def run(self, args: BookmarkArgs, ctx: ToolContext) -> ToolResult:
+        try:
+            if args.action == "find":
+                if not args.query:
+                    return ToolResult.fail("say what to look for in the bookmarks")
+                found = await self._call("find_bookmarks", query=args.query)
+                return ToolResult.ok(f"{len(found)} bookmarks match", data={"bookmarks": found})
+            made = await self._call(
+                "bookmark",
+                url=args.url or None,
+                title=args.title or None,
+                folder=args.folder or None,
+                tab=self.session.tab,
+            )
+        except BrowserError as exc:
+            if "bookmarks" in str(exc):
+                return ToolResult.fail(
+                    "Arcee's Chrome extension needs reloading for bookmarks "
+                    "(chrome://extensions → Arcee → reload)"
+                )
+            return ToolResult.fail(str(exc))
+        if made.get("already"):
+            return ToolResult.ok(f"Already bookmarked: {made.get('title')}", data=made)
+        where = f" in {args.folder}" if args.folder else " on the bookmarks bar"
+        return ToolResult.ok(f"Bookmarked {made.get('title')}{where}", data=made)
+
+
 class NavigateArgs(ToolArgs):
     url: str = Field(description="Address to open in the current tab")
 
@@ -521,4 +569,5 @@ def browser_tools(session: BrowserSession | None = None) -> list[Tool[Any]]:
         BrowserFill(shared),
         BrowserScroll(shared),
         BrowserBack(shared),
+        BrowserBookmark(shared),
     ]

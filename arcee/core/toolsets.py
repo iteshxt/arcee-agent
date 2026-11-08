@@ -100,6 +100,7 @@ _GROUPS: Final = (
 # "in Chrome", a site or the page itself bring the browser.
 _BROWSER_REQUEST: Final = _words(
     r"\b(browser|chrome|tabs?|youtube|my account|log ?in|sign ?in|click|this page|the page|"
+    r"bookmarks?|reading list|"
     r"open page|site i)\b"
 )
 _WEB_REQUEST: Final = _words(
