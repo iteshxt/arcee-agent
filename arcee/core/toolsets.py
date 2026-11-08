@@ -39,6 +39,7 @@ REMINDERS: Final = ("reminder.*", "routine.*", "time.*")
 VOICE: Final = ("voice.*",)
 # The desktop's settings: sound, screen, appearance, radios, power, default apps, updates.
 SETTINGS: Final = ("settings.*", "bluetooth.*", "session.*", "updates.*")
+WINDOWS: Final = ("window.*", "notifications.*")
 # The clipboard, screenshots kept for the user, recordings.
 CAPTURE: Final = ("clipboard.*", "screen.save", "record.*")
 # Documents made, photos edited, printing.
@@ -201,6 +202,14 @@ _JUST_OPEN: Final = _words(
 )
 # What a bare "open the browser" names: it needs no browser tools, only the app.
 _BROWSER_APP: Final = _words(r"\b(chrome|chromium|browser|google chrome)\b")
+# Arranging windows across halves, screens and workspaces; the notifications missed.
+_WINDOWS_REQUEST: Final = _words(
+    r"\b(side by side|on the (left|right)|(left|right) (half|side)|split screen|tile|snap|"
+    r"arrange|(second|other|external|another|main) (screen|monitor|display)|monitors?|"
+    r"workspaces?|quarter of the screen|"
+    r"notifications? (i |did i |have i )?(missed|miss|waiting|unread)|missed notifications|"
+    r"what notifications|(did|has) (anyone|someone) (message|text|call|ping)(ed)? me)\b"
+)
 # Done to the browser's window ("make the Chrome window maximized"), nothing in a page:
 # the window tools, not the browser's (a small model clicked in the page instead).
 _WINDOW_ONLY: Final = _words(
@@ -264,6 +273,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (REMINDERS, _REMINDER_REQUEST, "reminder"),
             (VOICE, _VOICE_REQUEST, "voice"),
             (SETTINGS, _SETTINGS_REQUEST, "settings"),
+            (WINDOWS, _WINDOWS_REQUEST, "window"),
             (CAPTURE, _CAPTURE_REQUEST, "clipboard"),
             (DOCS, _DOCS_REQUEST, "doc"),
         )
