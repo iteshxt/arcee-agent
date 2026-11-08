@@ -41,6 +41,8 @@ VOICE: Final = ("voice.*",)
 SETTINGS: Final = ("settings.*", "bluetooth.*", "session.*", "updates.*")
 # The clipboard, screenshots kept for the user, recordings.
 CAPTURE: Final = ("clipboard.*", "screen.save", "record.*")
+# Documents made, photos edited, printing.
+DOCS: Final = ("doc.*", "image.*", "print.*", "fs.read")
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -163,6 +165,12 @@ _CAPTURE_REQUEST: Final = _words(
     r"record(ing)? (my |the )?(screen|audio|voice|mic|microphone|meeting|call|lecture)|"
     r"voice memo|stop recording|screencast|screen recording|still recording)\b"
 )
+_DOCS_REQUEST: Final = _words(
+    r"\b(word (document|doc|file)|\.?docx|odt|libreoffice|writer|as a pdf|to pdf|make a pdf|"
+    r"create a (document|doc|letter|report|resume|cv)|resize|convert|heic|jpe?g|png|webp|"
+    r"photos? to|compress (the |this |these )?(photos?|images?)|print(er|ing)?|"
+    r"receipts?|scan(ned)?)\b"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
@@ -249,6 +257,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (VOICE, _VOICE_REQUEST, "voice"),
             (SETTINGS, _SETTINGS_REQUEST, "settings"),
             (CAPTURE, _CAPTURE_REQUEST, "clipboard"),
+            (DOCS, _DOCS_REQUEST, "doc"),
         )
         if pattern.search(request) or namespace in namespaces
     ]

@@ -19,6 +19,7 @@ from typing import Any, ClassVar, Final, Literal
 from pydantic import Field
 
 from arcee.core.policy import Policy, Tier
+from arcee.documents import DocumentError, extract_text, kind_of
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 
 MAX_ENTRIES: Final = 200
@@ -262,7 +263,10 @@ class ReadArgs(ToolArgs):
 class FsRead(Tool[ReadArgs]):
     name = "fs.read"
     read_only = True
-    description = "Read a text file and return its content."
+    description = (
+        "Read a file's text: plain text, PDFs, Word/Writer/PowerPoint/Excel files, and "
+        "photos or scans of text (OCR)."
+    )
     usage = Usage(
         when="You need what a specific file says.",
         avoid="You do not know the exact path yet; list or search first.",
@@ -278,6 +282,8 @@ class FsRead(Tool[ReadArgs]):
         path = resolve(args.path, ctx)
         if not path.is_file():
             return ToolResult.fail(f"{display(path, ctx)} is not a file")
+        if kind_of(path) is not None:
+            return await self._document(path, args, ctx)
         raw, size = await asyncio.to_thread(_head, path, args.max_bytes)
         if b"\0" in raw[:1024]:
             return ToolResult.fail(f"{display(path, ctx)} is a binary file")
@@ -288,6 +294,22 @@ class FsRead(Tool[ReadArgs]):
         if size > len(raw):
             data["truncated"] = f"first {len(raw)} of {size} bytes"
         return ToolResult.ok(f"Read {display(path, ctx)} ({_size(size)})", data=data)
+
+    async def _document(self, path: Path, args: ReadArgs, ctx: ToolContext) -> ToolResult:
+        """A PDF, an Office file or a photo of text: its text, extracted."""
+        try:
+            text, how = await extract_text(path)
+        except DocumentError as exc:
+            return ToolResult.fail(f"could not read {display(path, ctx)}: {exc}")
+        text = text.strip()
+        if not text:
+            return ToolResult.ok(f"{display(path, ctx)} has no text", data={"content": ""})
+        data: dict[str, Any] = {"path": display(path, ctx), "content": text[: args.max_bytes]}
+        if how == "ocr":
+            data["read_by"] = "OCR: check numbers and names against the image"
+        if len(text) > args.max_bytes:
+            data["truncated"] = f"first {args.max_bytes} of {len(text)} characters"
+        return ToolResult.ok(f"Read {display(path, ctx)} ({len(text)} characters)", data=data)
 
 
 def _head(path: Path, limit: int) -> tuple[bytes, int]:
@@ -480,6 +502,16 @@ def _inside_home(path: Path, ctx: ToolContext) -> bool:
     return normal == ctx.home or ctx.home in normal.parents
 
 
+def _on_drive(path: Path, ctx: ToolContext) -> bool:
+    """Inside a USB drive or SD card mounted for this user (/media/USER/LABEL/...)."""
+    normal = Path(os.path.normpath(path))
+    for root in (Path("/media") / ctx.home.name, Path("/run/media") / ctx.home.name):
+        if root in normal.parents and normal.relative_to(root).parts:
+            mount = root / normal.relative_to(root).parts[0]
+            return os.path.ismount(mount)
+    return False
+
+
 class WriteArgs(ToolArgs):
     path: str = Field(description="File to write, e.g. ~/Arcee/notes.md")
     content: str = Field(max_length=MAX_WRITE_CHARS)
@@ -559,8 +591,12 @@ class _Transfer(Tool[MoveArgs]):
         src, dst = resolve(args.src, ctx), resolve(args.dst, ctx)
         if not src.exists():
             return f"{display(src, ctx)} does not exist"
-        if not (_inside_home(src, ctx) and _inside_home(dst, ctx)) or src == ctx.home:
-            return "both paths must be inside your home folder"
+
+        def allowed(p: Path) -> bool:
+            return _inside_home(p, ctx) or _on_drive(p, ctx)
+
+        if not (allowed(src) and allowed(dst)) or src == ctx.home:
+            return "both paths must be inside your home folder or on a plugged-in drive"
         if dst.is_dir():
             dst = dst / src.name
         if dst.exists():
@@ -596,7 +632,10 @@ class FsMove(_Transfer):
 class FsCopy(_Transfer):
     name = "fs.copy"
     verb = "Copy"
-    description = "Copy a file or folder inside the home folder. Never overwrites."
+    description = (
+        "Copy a file or folder inside the home folder, or to and from a USB drive or SD "
+        "card (fs.drives). Never overwrites."
+    )
     usage = Usage(
         when="The user asked for a copy or a backup of a file or folder.",
         avoid="Moving or renaming: use fs.move.",

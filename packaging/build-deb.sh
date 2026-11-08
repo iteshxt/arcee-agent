@@ -161,7 +161,8 @@ Homepage: https://iteshxt.me
 Installed-Size: $SIZE
 Depends: python3 (>= 3.14), python3 (<< 3.15), python3-gi, python3-pyatspi,
  gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-secret-1, gir1.2-atspi-2.0, gir1.2-pango-1.0,
- gnome-shell (>= 50), tesseract-ocr, pipewire-bin, libglib2.0-bin, libespeak-ng1
+ gnome-shell (>= 50), tesseract-ocr, pipewire-bin, libglib2.0-bin, libespeak-ng1,
+ python3-cairo, gir1.2-pangocairo-1.0, poppler-utils, wl-clipboard, bluez, network-manager
 Recommends: google-chrome-stable | chromium
 Section: utils
 Priority: optional
