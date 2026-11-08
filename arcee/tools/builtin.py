@@ -9,6 +9,7 @@ from arcee.tools.capture import capture_tools
 from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
 from arcee.tools.desktop import desktop_tools
 from arcee.tools.desktop_settings import settings_tools
+from arcee.tools.documents import document_tools
 from arcee.tools.files import (
     FsCopy,
     FsList,
@@ -65,6 +66,7 @@ def builtin_registry(
             MediaNowPlaying(),
             *settings_tools(),
             *capture_tools(),
+            *document_tools(),
             *calendar_tools(),
             *mail_tools(),
             WebFetch(),
