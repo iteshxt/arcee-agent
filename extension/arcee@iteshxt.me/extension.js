@@ -421,6 +421,8 @@ class ShellBridge {
     }
 
     _now() {
+        // Every event Arcee injects is stamped here: the session tells it from the user's.
+        this._control.injected();
         // Strictly increasing, so a press and its release never share a timestamp.
         this._time = Math.max(GLib.get_monotonic_time(), this._time + EVENT_GAP_US);
         return this._time;

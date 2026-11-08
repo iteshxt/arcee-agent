@@ -45,3 +45,20 @@ mice have `/dev/input/event*` nodes, so the two can be told apart.
   Arcee. Revisit if remote use matters.
 - The pause was tested only through its parts (the headless shell has no physical
   devices); it needs a check on the real desktop.
+
+## Amended 2026-11-08: the user's input over app windows pauses too
+
+The pause relied on a Clutter event filter, and GNOME gives an extension's filter only
+input meant for the Shell's own UI: over Chrome, Files or any app window the user's
+mouse and keys never reached it, so Arcee kept driving while the user worked (found
+with Esc on 2026-11-04, when a headless test with an app focused saw no key at the
+filter). The session now also watches, ten times a second, what GNOME knows whoever the
+input is for: the pointer's position, and the time since any input (its idle monitor).
+The pointer moving more than 40 px that Arcee did not move pauses it (small moves are
+forgotten after a second still); input after Arcee's last event, with the pointer
+still, is a key, a click or a scroll and pauses it. Arcee's own input is told apart by
+time: the bridge notes each event it injects, and input within 250 ms of one counts as
+Arcee's. The filter stays for Esc and the Shell's own UI.
+`tests/desktop/control_pause.sh` checks it in a headless GNOME Shell with an app window
+in front: Arcee's own click and typing, and a 7 px nudge, do not pause; the user's key,
+mouse, a key after a nudge, and a key after Arcee acted, do.
