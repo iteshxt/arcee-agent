@@ -12,6 +12,7 @@ from arcee.models.errors import (
     QuotaExhaustedError,
     TruncatedReplyError,
 )
+from arcee.models.fallback import FallbackAdapter
 from arcee.models.openai_compat import OpenAICompatAdapter
 from arcee.models.presets import cloud_profile, core_ladder, planner_for, share_budget
 from arcee.models.rotation import RotatingAdapter
@@ -168,8 +169,10 @@ def test_core_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "g")
     [groq] = core_ladder("groq:openai/gpt-oss-20b")
     assert groq.profile.model == "openai/gpt-oss-20b"
-    small, large = core_ladder("groq")
-    assert [m.profile.model for m in cast(RotatingAdapter, small).members] == [
+    small, large = (cast(FallbackAdapter, rank) for rank in core_ladder("groq"))
+    # Each Groq rank has the local model of its rank behind it.
+    assert [m.fallback.profile.model for m in (small, large)] == ["lfm3-omni", "lfm3"]
+    assert [m.profile.model for m in cast(RotatingAdapter, small.primary).members] == [
         "openai/gpt-oss-20b",
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-120b",
@@ -185,8 +188,13 @@ def test_planner_shares_the_large_models_budget(monkeypatch: pytest.MonkeyPatch)
     share_budget(ladder, planner)
 
     assert planner.profile.model == "openai/gpt-oss-120b"
-    assert isinstance(planner, RotatingAdapter)
-    members = [m for rank in [*ladder, planner] for m in cast(RotatingAdapter, rank).members]
+    assert isinstance(planner, FallbackAdapter)
+    assert planner.fallback.profile.call_mode == "schema"
+    members = [
+        m
+        for rank in [*ladder, planner]
+        for m in cast(RotatingAdapter, cast(FallbackAdapter, rank).primary).members
+    ]
     assert all(isinstance(m, OpenAICompatAdapter) for m in members)
     # One budget object tracks every Groq model, each by its own name.
     budgets = {id(cast(OpenAICompatAdapter, m).budget) for m in members}
