@@ -471,3 +471,57 @@ async def test_wall_clock_limit(home: Path) -> None:
 def test_needs_a_model() -> None:
     with pytest.raises(ValueError, match="at least one model"):
         Agent([], Registry(), Executor(Gate(Policy(), User())), User(), home=Path("/tmp"))
+
+
+class Glance(Tool[NoArgs]):
+    """A step the user sees (the ui namespace): it takes control of the screen first."""
+
+    name = "ui.glance"
+    description = "Look at the window in front."
+    usage = Usage(when="w")
+    args_model = NoArgs
+    read_only = True
+
+    async def run(self, args: NoArgs, ctx: ToolContext) -> ToolResult:
+        await asyncio.sleep(0.01)  # as a real tool does: the loop runs (and timeouts fire)
+        return ToolResult.ok("looked")
+
+
+class PausedFor:
+    """The user has paused Arcee for `seconds` when it next takes control."""
+
+    held = False
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+
+    async def acting(self) -> None:
+        await asyncio.sleep(self.seconds)
+
+    async def release(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize(("grace", "status"), [(0.05, "done"), (10.0, "failed")])
+async def test_time_paused_by_the_user_does_not_count(
+    home: Path, monkeypatch: pytest.MonkeyPatch, grace: float, status: str
+) -> None:
+    """A request paused longer than its whole time limit still finishes once resumed;
+    counted (a wait under the grace is taken for Arcee's own), it stops."""
+    from arcee.core import agent as agent_module
+
+    monkeypatch.setattr(agent_module, "PAUSE_GRACE_S", grace)
+    user = User()
+    agent = Agent(
+        [FakeAdapter([call("ui_glance"), say("Done.")], PROFILE)],
+        Registry([Glance(), *(tool() for tool in CONTROL_TOOLS)]),
+        Executor(Gate(Policy(), user)),
+        user,
+        home=home,
+        limits=Limits(max_seconds=0.3),
+        presence=PausedFor(0.5),  # pyright: ignore[reportArgumentType]
+    )
+
+    outcome = await agent.run("look at the window")
+
+    assert outcome.status == status

@@ -62,3 +62,8 @@ Arcee's. The filter stays for Esc and the Shell's own UI.
 `tests/desktop/control_pause.sh` checks it in a headless GNOME Shell with an app window
 in front: Arcee's own click and typing, and a 7 px nudge, do not pause; the user's key,
 mouse, a key after a nudge, and a key after Arcee acted, do.
+
+A pause no longer counts against the request's time limit (10 minutes): while Arcee
+waits to take control back, the limit is suspended, and afterwards moved back by the
+time the user held it (a wait under half a second is Arcee's own, and counts). A
+request paused for longer than its whole limit finishes once resumed.
