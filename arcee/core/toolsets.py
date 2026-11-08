@@ -35,7 +35,7 @@ WEB: Final = ("web.*",)
 MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*",)
-REMINDERS: Final = ("reminder.*",)
+REMINDERS: Final = ("reminder.*", "routine.*", "time.*")
 VOICE: Final = ("voice.*",)
 # The desktop's settings: sound, screen, appearance, radios, power, default apps, updates.
 SETTINGS: Final = ("settings.*", "bluetooth.*", "session.*", "updates.*")
@@ -139,7 +139,11 @@ _MAIL_REQUEST: Final = _words(
 )
 # Timers and reminders (decision 0018): "set a timer", "remind me at 5", "wake me at 7".
 _REMINDER_REQUEST: Final = _words(
-    r"\b(timers?|remind(er|ers)?|alarms?|wake me|ping me|nudge me|countdown|"
+    r"\b(timers?|remind(er|ers)?|alarms?|wake me|ping me|nudge me|countdown|stopwatch|"
+    r"time (is it )?in|what time|time zone|timezone|o'?clock in|routines?|"
+    r"every (day|morning|evening|night|week|weekday|monday|tuesday|wednesday|thursday|"
+    r"friday|saturday|sunday)|each (day|morning|evening|week)|focus (session|mode)|"
+    r"how long since|lap\b|pomodoro|"
     r"in \d+ ?(s|sec|secs|seconds?|m|min|mins|minutes?|h|hrs?|hours?)\b)"
 )
 # Asking to hear something (decision 0019): "read it out loud", "say that aloud".

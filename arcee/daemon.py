@@ -232,6 +232,10 @@ ALWAYS: Final = re.compile(
 ORDINALS: Final = ("first", "second", "third", "fourth", "fifth")
 # Said for a request that failed: the reason is on screen, and rarely reads well aloud.
 FAILED_ALOUD: Final = "Sorry, that did not work. The reason is on screen."
+# Routines (routine.add): run up to this late, waiting this long for Arcee to be free.
+ROUTINE_LATE_S: Final = 2 * 3600.0
+ROUTINE_WAIT_S: Final = 30 * 60.0
+ROUTINE_POLL_S: Final = 5.0
 PREVIEW_ALOUD: Final = "Hi, I'm Arcee. I've set a reminder for 5 PM to call mom."
 
 
@@ -346,10 +350,31 @@ class AgentService(ServiceInterface):
     def Run(self, request: DBusStr) -> DBusStr:
         if self.busy:
             raise DBusError(BUSY_ERROR, f"Arcee is already working on: {self._request}")
+        self.start_request(request)
+        return "started"
+
+    def start_request(self, request: str) -> None:
         self._request = request.strip()
         self.hush()
         self._task = asyncio.ensure_future(self._run(self._request))
-        return "started"
+
+    async def run_routine(self, request: str, late: float) -> bool:
+        """A routine came due (routine.add): its request runs as if the user had asked
+        it, in a conversation of its own, once Arcee is free. One missed by more than
+        ROUTINE_LATE_S (the computer off) is skipped. Whether it ran."""
+        if late > ROUTINE_LATE_S:
+            log.info("routine skipped, %d min late: %s", late // 60, request)
+            return False
+        waited = 0.0
+        while self.busy and waited < ROUTINE_WAIT_S:
+            await asyncio.sleep(ROUTINE_POLL_S)
+            waited += ROUTINE_POLL_S
+        if self.busy:
+            log.info("routine skipped, Arcee stayed busy: %s", request)
+            return False
+        self.conversation.end()
+        self.start_request(request)
+        return True
 
     @method()
     def Cancel(self) -> None:
@@ -886,6 +911,7 @@ async def watch_shell_stop(bus: MessageBus, service: AgentService) -> None:
 
 async def start_reminders(bus: MessageBus, service: AgentService) -> asyncio.Task[None] | None:
     """Fire timers and reminders while arceed runs (decision 0018)."""
+    from arcee.context.store import ReminderRow
     from arcee.reminders import DesktopNotifier, Scheduler
 
     store = getattr(service._runner, "store", None)  # pyright: ignore[reportPrivateUsage]
@@ -896,7 +922,14 @@ async def start_reminders(bus: MessageBus, service: AgentService) -> asyncio.Tas
         await notifier.watch()
     except Exception:  # the snooze button only; reminders still fire
         log.exception("not watching the reminder notifications")
-    scheduler = Scheduler(store, notifier.show)
+
+    async def fire(reminder: ReminderRow, late: float) -> None:
+        if reminder.kind == "routine":
+            await service.run_routine(reminder.text, late)
+        else:
+            await notifier.show(reminder, late)
+
+    scheduler = Scheduler(store, fire)
     store.on_reminders(scheduler.poke)
     return asyncio.ensure_future(scheduler.run())
 

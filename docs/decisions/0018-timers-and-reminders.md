@@ -43,3 +43,18 @@ reminders as its first use.
 - Checked against a headless GNOME Shell: a timer set for 2 s fired on time and sat in
   GNOME's tray with its title, body, critical urgency and both buttons. The sound needs
   a real session to hear.
+
+## Amended 2026-11-08: alarms, repeats and routines
+
+- An alarm (`reminder.add(alarm=true)`, "wake me at 7") is a reminder that rings: the
+  alarm sound every 2.5 s through pw-play until the notification is dismissed or
+  snoozed, five minutes at most.
+- `repeat` (daily, weekdays, weekends, weekly) keeps a reminder or alarm pending after
+  it fires, at its next time with the same clock time (history.db schema 6: a `repeat`
+  column). Snoozing one that repeats makes a one-off copy, so its own time stays.
+- A routine (`routine.add`, "every morning at 9 tell me the weather and my meetings")
+  is a repeating reminder of kind `routine` whose text is a request: when due, arceed
+  runs it as if the user had asked, in a new conversation, once it is free (up to 30
+  minutes). One missed by more than two hours (the computer off) is skipped. Setting
+  one asks first: it will act later, unattended. They are listed and cancelled with
+  reminder.list and reminder.cancel.

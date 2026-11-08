@@ -330,6 +330,8 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "doc.create",
         "image.edit",
         "print.file",
+        "time.in",
+        "time.stopwatch",
         "calendar.list",
         "calendar.free",
         "calendar.add",

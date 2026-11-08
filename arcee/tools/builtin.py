@@ -6,6 +6,7 @@ from arcee.tools.apps import AppList, AppOpen
 from arcee.tools.browser import BrowserSession, browser_tools
 from arcee.tools.calendar import calendar_tools
 from arcee.tools.capture import capture_tools
+from arcee.tools.clock import clock_tools
 from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
 from arcee.tools.desktop import desktop_tools
 from arcee.tools.desktop_settings import settings_tools
@@ -67,6 +68,7 @@ def builtin_registry(
             *settings_tools(),
             *capture_tools(),
             *document_tools(),
+            *clock_tools(),
             *calendar_tools(),
             *mail_tools(),
             WebFetch(),
