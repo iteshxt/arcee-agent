@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import getaddresses, make_msgid, parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Final, Literal, TypeVar, cast
+from typing import Any, ClassVar, Final, Literal, TypeVar, cast
 
 from pydantic import Field
 
@@ -886,6 +886,76 @@ class ShareFile(Tool[ShareArgs]):
         )
 
 
+# --- contacts.find ---------------------------------------------------------------------------
+
+AUTOMATED: Final = re.compile(
+    r"no-?reply|do-?not-?reply|notifications?@|newsletter|mailer|bounce|support@|info@|alerts?@",
+    re.IGNORECASE,
+)
+
+
+def people(envelopes: Sequence[Envelope], wanted: str, me: str = "") -> list[dict[str, Any]]:
+    """The addresses in `envelopes` whose name or address has `wanted` in it, with how
+    often each was seen, most first; the user's own and machines' left out."""
+    key = wanted.lower().strip()
+    seen: dict[str, dict[str, Any]] = {}
+    for envelope in envelopes:
+        for name, address in getaddresses([envelope.sender, envelope.to]):
+            address = address.lower()
+            if not address or address == me.lower() or AUTOMATED.search(address):
+                continue
+            if key not in name.lower() and key not in address:
+                continue
+            entry = seen.setdefault(address, {"email": address, "name": name, "emails": 0})
+            entry["emails"] += 1
+            if name and not entry["name"]:
+                entry["name"] = name
+    return sorted(seen.values(), key=lambda e: e["emails"], reverse=True)
+
+
+class ContactsArgs(ToolArgs):
+    name: str = Field(min_length=2, max_length=80, description="Who: a name, as the user said it")
+
+
+class ContactsFind(Tool[ContactsArgs]):
+    name = "contacts.find"
+    description = (
+        "Find someone's email address from the user's Gmail: the people they have written "
+        "to or heard from, by name, most frequent first."
+    )
+    usage = Usage(
+        when="\"What's Priya's email?\", and before mail.send to someone named but not "
+        'addressed ("email Rahul that ..."). Several matches: ask which.',
+        avoid="Phone numbers: Arcee cannot see the phone's contacts.",
+        example='contacts.find(name="Rahul")',
+    )
+    args_model = ContactsArgs
+    read_only: ClassVar[bool] = True
+    personal: ClassVar[str] = "your contacts"
+    timeout_s = 45
+
+    def __init__(self, gmail: Gmail | None = None) -> None:
+        self._gmail = gmail or Gmail()
+
+    async def run(self, args: ContactsArgs, ctx: ToolContext) -> ToolResult:
+        query = " ".join(args.name.split())
+        try:
+            me = await self._gmail.address()
+            found = await self._gmail.envelopes(
+                unread_only=False, query=f"from:({query}) OR to:({query})", n=MAX_LIST * 4
+            )
+        except (MailError, GoogleError) as exc:
+            return ToolResult.fail(str(exc))
+        matches = people(found, args.name, me)[:8]
+        if not matches:
+            return ToolResult.ok(
+                f"No one called “{args.name}” in your email", data={"contacts": []}
+            )
+        return ToolResult.ok(
+            f"{len(matches)} people match “{args.name}”", data={"contacts": matches}
+        )
+
+
 def mail_tools(gmail: Gmail | None = None) -> list[Tool[Any]]:
     shared = gmail or Gmail()
     return [
@@ -898,4 +968,5 @@ def mail_tools(gmail: Gmail | None = None) -> list[Tool[Any]]:
         MailUpdate(shared),
         MailUnsubscribe(shared),
         ShareFile(shared),
+        ContactsFind(shared),
     ]

@@ -352,6 +352,7 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "mail.update",
         "mail.unsubscribe",
         "share.file",
+        "contacts.find",
         "web.fetch",
         "browser.tabs",
         "browser.navigate",

@@ -34,7 +34,7 @@ DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
 WEB: Final = ("web.*", "convert.*", "market.*", "maps.*")
 MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
-MAIL: Final = ("mail.*",)
+MAIL: Final = ("mail.*", "share.*", "contacts.*")
 REMINDERS: Final = ("reminder.*", "routine.*", "time.*")
 VOICE: Final = ("voice.*",)
 # The desktop's settings: sound, screen, appearance, radios, power, default apps, updates.
@@ -143,7 +143,8 @@ _CALENDAR_REQUEST: Final = _words(
 )
 _MAIL_REQUEST: Final = _words(
     r"\b(e-?mails?|mails?|gmail|inbox|unread|drafts?|reply|forward|newsletters?|"
-    r"unsubscribe|to my phone|onto my phone|on my phone|to myself|"
+    r"unsubscribe|to my phone|onto my phone|on my phone|to myself|contacts?|"
+    r"(his|her|their|\w+'s) (email|e-mail|address)|email address of|"
     r"attachments?|sent me|wrote to me|message from)\b"
 )
 # Timers and reminders (decision 0018): "set a timer", "remind me at 5", "wake me at 7".

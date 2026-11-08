@@ -153,3 +153,39 @@ async def test_a_file_is_sent_to_the_users_own_gmail(tmp_path: Path) -> None:
 )
 def test_these_bring_the_mail_tools(said: str) -> None:
     assert set(MAIL) <= set(filters_for([Message("user", said)]))
+
+
+async def test_a_contact_is_found_in_the_mail_most_frequent_first(tmp_path: Path) -> None:
+    from arcee.tools.mail import ContactsArgs, ContactsFind, Envelope, people
+
+    seen = [
+        Envelope("1", "Rahul Sharma <rahul@work.in>", "me@gmail.com", "a", "Mon", False),
+        Envelope(
+            "2", "me@gmail.com", "Rahul Sharma <rahul@work.in>, Priya <p@x.in>", "b", "Tue", False
+        ),
+        Envelope("3", "Rahul (old) <rahul.s@gmail.com>", "me@gmail.com", "c", "Wed", False),
+        Envelope("4", "Rahul at Swiggy <noreply@swiggy.in>", "me@gmail.com", "d", "Thu", False),
+    ]
+    assert [p["email"] for p in people(seen, "rahul", "me@gmail.com")] == [
+        "rahul@work.in",
+        "rahul.s@gmail.com",
+    ]
+
+    class Mail(Me):
+        async def envelopes(self, *, unread_only: bool, query: str, n: int) -> list[Envelope]:
+            assert query == "from:(Rahul) OR to:(Rahul)"
+            return seen
+
+    tool = ContactsFind(Mail())  # pyright: ignore[reportArgumentType]
+    result = await tool.run(ContactsArgs(name="Rahul"), tool_ctx(tmp_path))
+    assert result.data is not None
+    assert result.data["contacts"][0] == {
+        "email": "rahul@work.in",
+        "name": "Rahul Sharma",
+        "emails": 2,
+    }
+    assert tool.personal == "your contacts"
+
+
+def test_asking_for_an_email_address_brings_contacts() -> None:
+    assert "contacts.*" in filters_for([Message("user", "What's Priya's email?")])
