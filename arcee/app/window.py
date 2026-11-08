@@ -60,14 +60,79 @@ ASKABLE: Final = (
     ("fs.write", "Writing files", "In your Arcee folder; anywhere else it asks"),
     ("fs.move", "Moving and renaming files", "Inside your home folder"),
     ("shell.run", "Running safe commands", "Commands that only read, such as ls and df"),
+    ("settings.volume", "Changing settings", "Volume, brightness, dark mode, Wi-Fi, Bluetooth"),
+    ("media.play", "Playing music", "On Spotify, in the app or in Chrome"),
+    ("control.set_timer", "Checking back later", "Arcee's own timers and watches"),
+    ("shell.start", "Background jobs", "Safe commands left running; others always ask"),
+    ("image.edit", "Editing photos", "Resizing and converting, into new files"),
+    ("print.file", "Printing", "On your default printer"),
 )
+# A switch that stands for several tools: the first is the switch's own.
+ASK_GROUPS: Final = {
+    "settings.volume": (
+        "settings.volume",
+        "settings.audio_output",
+        "settings.brightness",
+        "settings.appearance",
+        "settings.dnd",
+        "settings.radio",
+        "bluetooth.devices",
+        "settings.accessibility",
+        "settings.default_app",
+    ),
+    "media.play": ("media.play", "media.control"),
+    "shell.start": ("shell.start", "job.stop"),
+}
+
+
+# A day's allowance this nearly used shows red, and the local models are said to answer
+# (decision: Groq falls back to them); under LOW, orange.
+SPENT: Final = 0.05
+LOW: Final = 0.2
+BAR_CSS: Final = """
+levelbar.spent block.filled { background-color: var(--error-bg-color); }
+levelbar.low block.filled { background-color: var(--warning-bg-color); }
+"""
+_bar_styled = False
+
+
+def allowance_bar() -> Gtk.LevelBar:
+    """A bar of what is left of an allowance (`show_left` colours it)."""
+    global _bar_styled
+    display = Gdk.Display.get_default()
+    if display is not None and not _bar_styled:
+        css = Gtk.CssProvider()
+        css.load_from_string(BAR_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        _bar_styled = True
+    return Gtk.LevelBar(min_value=0, max_value=1, valign=Gtk.Align.CENTER, width_request=140)
+
+
+def show_left(bar: Gtk.LevelBar, left: float) -> None:
+    """Set what is left (0-1): red when spent, orange when low."""
+    bar.set_value(max(0.0, min(1.0, left)))
+    for name, on in (("spent", left < SPENT), ("low", SPENT <= left < LOW)):
+        if on:
+            bar.add_css_class(name)
+        else:
+            bar.remove_css_class(name)
+
+
+def ask_tools(switch: str) -> tuple[str, ...]:
+    """The tools one "Ask before these too" switch makes ask first."""
+    return ASK_GROUPS.get(switch, (switch,))
+
+
 CORE_CHOICES: Final = (
     (
         "groq",
         "Groq",
         "gpt-oss-20b does most of the work; qwen3.8-27b and gpt-oss-120b take turns when "
         "it is busy, and 120b takes over when it struggles. Fast; what Arcee reads goes "
-        "to Groq.",
+        "to Groq. When Groq's free allowance for the day runs out, the local models take "
+        "over until it refills.",
     ),
     ("local", "Local (Ollama)", "LFM models on this computer. Private; slower and less able."),
 )
@@ -312,7 +377,7 @@ class ArceeWindow(Adw.ApplicationWindow):
         self._budget.set_header_suffix(reload)
         self._budget_rows: dict[str, tuple[Adw.ActionRow, Gtk.LevelBar]] = {}
         for model in GROQ_MODELS:
-            bar = Gtk.LevelBar(min_value=0, max_value=1, valign=Gtk.Align.CENTER, width_request=140)
+            bar = allowance_bar()
             row = Adw.ActionRow(title=model.split("/")[-1], subtitle="No use recorded yet")
             row.add_suffix(bar)
             self._budget.add(row)
@@ -324,9 +389,8 @@ class ArceeWindow(Adw.ApplicationWindow):
             description="When speech goes to Groq: whisper-large-v3-turbo, on its own key and "
             "allowance.",
         )
-        self._speech_bar = Gtk.LevelBar(
-            min_value=0, max_value=1, value=1, valign=Gtk.Align.CENTER, width_request=140
-        )
+        self._speech_bar = allowance_bar()
+        show_left(self._speech_bar, 1.0)
         self._speech_row = Adw.ActionRow(title="whisper-large-v3-turbo", subtitle="No use yet")
         self._speech_row.add_suffix(self._speech_bar)
         speech.add(self._speech_row)
@@ -455,7 +519,9 @@ class ArceeWindow(Adw.ApplicationWindow):
             if "day_tokens_limit" in counts:
                 left, limit = counts["day_tokens_left"], counts["day_tokens_limit"]
                 parts.append(f"{left / 1000:.0f}K of {limit / 1000:.0f}K tokens left today")
-                bar.set_value(left / limit if limit else 0)
+                show_left(bar, left / limit if limit else 0)
+                if limit and left / limit < SPENT:
+                    parts.insert(0, "Spent: the local models answer until it refills")
             if "requests_limit" in counts:
                 parts.append(
                     f"{counts['requests_left']:.0f} of {counts['requests_limit']:.0f} requests"
@@ -476,7 +542,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             f"today · {hour_left / 60:.0f} min this hour · {use['requests_day']:.0f} of "
             f"{use['requests_day_limit']:.0f} requests"
         )
-        self._speech_bar.set_value(max(0.0, day_left / use["audio_s_day_limit"]))
+        show_left(self._speech_bar, day_left / use["audio_s_day_limit"])
 
     # --- History --------------------------------------------------------------------
 
@@ -723,7 +789,9 @@ class ArceeWindow(Adw.ApplicationWindow):
         for each in self._ask_rows.values():
             each.set_active(on)
         self._syncing = False
-        self._settings.always_ask = sorted(self._ask_rows) if on else []
+        self._settings.always_ask = (
+            sorted(tool for switch in self._ask_rows for tool in ask_tools(switch)) if on else []
+        )
         self._saved()
 
     def _on_confirm_all(self, row: Adw.SwitchRow, _param: Any) -> None:
@@ -735,9 +803,9 @@ class ArceeWindow(Adw.ApplicationWindow):
             return
         asks = set(self._settings.always_ask)
         if row.get_active():
-            asks.add(tool)
+            asks.update(ask_tools(tool))
         else:
-            asks.discard(tool)
+            asks.difference_update(ask_tools(tool))
         self._settings.always_ask = sorted(asks)
         self._syncing = True
         self._ask_all.set_active(all(r.get_active() for r in self._ask_rows.values()))
