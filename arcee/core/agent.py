@@ -96,6 +96,8 @@ class Limits:
 
 
 DEFAULT_LIMITS: Final = Limits()
+# Taking control takes a moment; a wait longer than this was the user's pause.
+PAUSE_GRACE_S: Final = 0.5
 
 
 # --- Events, for the CLI now and the D-Bus signals later --------------------------
@@ -187,6 +189,8 @@ SPOKEN: Final = (
 @dataclass(slots=True)
 class _State:
     messages: list[Message]
+    # The request's time limit; moved back by time spent paused (the user's, not Arcee's).
+    deadline: asyncio.Timeout | None = None
     plan: PlannerOutput | None = None
     index: int = 0
     tried: list[str] = field(default_factory=list[str])
@@ -293,7 +297,8 @@ class Agent:
         state.base_tier = state.tier = state.task_tier
         ctx = ToolContext(task_id=task_id, home=self._home, notes=self._notes, request=request)
         try:
-            async with asyncio.timeout(self._limits.max_seconds):
+            state.deadline = asyncio.timeout(self._limits.max_seconds)
+            async with state.deadline:
                 await self._remember(state, request, task_id)
                 state.memory = "\n\n".join(x for x in (conversation, state.memory) if x)
                 planned = self._planner is not None and self._plan_if(request)
@@ -304,6 +309,22 @@ class Agent:
         except TimeoutError:
             minutes = self._limits.max_seconds / 60
             return self._fail(state, f"I stopped after {minutes:g} minutes without finishing.")
+
+    async def _held_for_user(self, state: _State) -> None:
+        """Take control of the screen (the glow), waiting while the user has paused it.
+        The wait does not count against the time limit: a request paused for five minutes
+        while the user worked had stopped at ten, with half its time gone to the user."""
+        deadline = state.deadline
+        when = deadline.when() if deadline is not None else None
+        if deadline is not None and when is not None:
+            deadline.reschedule(None)  # it would run out during the pause, not after it
+        started = time.monotonic()
+        try:
+            await self._presence.acting()
+        finally:
+            waited = time.monotonic() - started
+            if deadline is not None and when is not None:
+                deadline.reschedule(when + (waited if waited > PAUSE_GRACE_S else 0.0))
 
     async def _plan(
         self, state: _State, request: str, replan: ReplanContext | None = None
@@ -443,7 +464,7 @@ class Agent:
                 self._executor.gate.tier(valid, model_asked=state.confirm_next) is not Tier.AUTO
             )
             if is_visible(valid.tool.name):
-                await self._presence.acting()  # the glow, and a pause the user asked for
+                await self._held_for_user(state)
             result = await self._executor.execute(
                 valid, state.steps, ctx, model_asked=state.confirm_next
             )
