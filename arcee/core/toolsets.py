@@ -31,7 +31,7 @@ ALWAYS: Final = LOCAL + CONTROL
 BROWSER: Final = ("browser.*",)
 # Desktop apps: their window tree first, the screen (OCR, clicks, keys) as fallback.
 DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
-WEB: Final = ("web.*",)
+WEB: Final = ("web.*", "convert.*", "market.*", "maps.*")
 MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*",)
@@ -100,6 +100,9 @@ _BROWSER_REQUEST: Final = _words(
 )
 _WEB_REQUEST: Final = _words(
     r"\b(web|websites?|internet|google|search (the|for|online)|look up|news|weather|"
+    r"dollars?|rupees?|euros?|pounds?|currency|exchange rate|convert \d|in (inr|usd|eur)|"
+    r"stocks?|shares?|share price|price of|bitcoin|crypto|ethereum|sensex|nifty|"
+    r"how (far|long) (is|to|does)|drive to|distance (from|to|between)|directions|"
     r"forecast|rain(ing|y)?|temperature|humid(ity)?|snow(ing)?|umbrella|"
     r"wikipedia|links?|urls?|articles?)\b|https?://|www\.|\.(com|org|net|io)\b"
 )

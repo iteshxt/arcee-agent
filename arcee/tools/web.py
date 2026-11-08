@@ -335,6 +335,7 @@ class WebNews(Tool[NewsArgs]):
 
 WTTR: Final = "https://wttr.in"
 GEOCODE: Final = "https://geocoding-api.open-meteo.com/v1/search"
+WTTR_DAYS: Final = 3
 FORECAST: Final = "https://api.open-meteo.com/v1/forecast"
 # Open-Meteo's weather codes (WMO), in words.
 WMO: Final = {
@@ -368,7 +369,7 @@ class WeatherArgs(ToolArgs):
         description="A city or place the user named; leave empty for where the user is "
         "(found by itself)",
     )
-    days: int = Field(default=2, ge=1, le=3, description="Days of forecast, from today")
+    days: int = Field(default=2, ge=1, le=16, description="Days of forecast, from today (up to 16)")
 
 
 class WebWeather(Tool[WeatherArgs]):
@@ -394,6 +395,15 @@ class WebWeather(Tool[WeatherArgs]):
     async def run(self, args: WeatherArgs, ctx: ToolContext) -> ToolResult:
         place = args.place.strip()
         async with _maybe_owned(self._client) as client:
+            if args.days > WTTR_DAYS:  # wttr.in forecasts 3 days; Open-Meteo 16
+                try:
+                    where = place or (await _wttr(client, "", 1))["place"]
+                    data = await _open_meteo(client, where, args.days)
+                except (SearchRefusedError, httpx.HTTPError, ValueError, KeyError) as exc:
+                    return ToolResult.fail(f"no {args.days}-day forecast: {exc}")
+                now = data["now"]
+                summary = f"{data['place']}: {now['condition'].lower()}, {now['temp_c']}°C"
+                return ToolResult.ok(summary, data=data)
             try:
                 data = await _wttr(client, place, args.days)
             except (SearchRefusedError, httpx.HTTPError, ValueError, KeyError, IndexError) as exc:
