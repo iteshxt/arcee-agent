@@ -764,6 +764,23 @@ async def watch_shell_stop(bus: MessageBus, service: AgentService) -> None:
     )
 
 
+async def start_reminders(bus: MessageBus, service: AgentService) -> asyncio.Task[None] | None:
+    """Fire timers and reminders while arceed runs (decision 0018)."""
+    from arcee.reminders import DesktopNotifier, Scheduler
+
+    store = getattr(service._runner, "store", None)  # pyright: ignore[reportPrivateUsage]
+    if store is None:
+        return None
+    notifier = DesktopNotifier(bus, store)
+    try:
+        await notifier.watch()
+    except Exception:  # the snooze button only; reminders still fire
+        log.exception("not watching the reminder notifications")
+    scheduler = Scheduler(store, notifier.show)
+    store.on_reminders(scheduler.poke)
+    return asyncio.ensure_future(scheduler.run())
+
+
 async def serve(runner: TaskRunner, bus: MessageBus, *, listen: bool = False) -> None:
     """Export the service on `bus` and run until the bus disconnects."""
     service = AgentService(runner)
@@ -775,10 +792,13 @@ async def serve(runner: TaskRunner, bus: MessageBus, *, listen: bool = False) ->
         raise SystemExit(f"{BUS_NAME} is already running")
     log.info("arceed ready on the session bus as %s", BUS_NAME)
     service.listen_for_wake(listen)
+    reminders = await start_reminders(bus, service)
     try:
         await bus.wait_for_disconnect()
     finally:
         service.listen_for_wake(False)
+        if reminders is not None:
+            reminders.cancel()
 
 
 async def _main() -> None:

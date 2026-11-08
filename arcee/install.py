@@ -104,12 +104,12 @@ LISTEN_UNIT: Final = "arceed-listen.service"
 
 
 def listen_unit(condition: str) -> str:
-    """The login unit: starts arceed when "Listen for Hey Arcee" is on, so the wake word
-    works from login with nothing clicked; with listening off nothing starts (arceed
-    still starts on the panel's first request)."""
+    """The login unit: starts arceed when "Listen for Hey Arcee" is on or a reminder is
+    still to fire, so the wake word works and reminders fire from login with nothing
+    clicked; otherwise nothing starts (arceed still starts on the panel's first request)."""
     return (
         "[Unit]\n"
-        'Description=Start Arcee at login when "Hey Arcee" is on\n'
+        'Description=Start Arcee at login when "Hey Arcee" is on or reminders are set\n'
         "PartOf=graphical-session.target\n"
         "After=graphical-session.target pipewire.service\n\n"
         "[Service]\n"

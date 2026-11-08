@@ -20,6 +20,7 @@ from arcee.tools.mail import mail_tools
 from arcee.tools.media import MediaControl, MediaNowPlaying
 from arcee.tools.memory import Memory, memory_tools
 from arcee.tools.registry import Registry
+from arcee.tools.reminders import Reminders, reminder_tools
 from arcee.tools.screen import screen_tools
 from arcee.tools.shell import ShellRun, ShellScript
 from arcee.tools.system import NetworkStatus, SystemStatus
@@ -32,9 +33,10 @@ def builtin_registry(
     shell_limits: bool = True,
     browser: BrowserSession | None = None,
     memory: Memory | None = None,
+    reminders: Reminders | None = None,
 ) -> Registry:
     """Every built-in tool: files, system facts, shell, then the control tools; and the
-    memory tools when there is a store to back them."""
+    memory and reminder tools when there is a store to back them."""
     return Registry(
         [
             FsList(),
@@ -67,5 +69,6 @@ def builtin_registry(
             *(tool() for tool in UTILITY_CONTROL_TOOLS),
             *(tool() for tool in CONTROL_TOOLS),
             *(memory_tools(memory) if memory is not None else ()),
+            *(reminder_tools(reminders) if reminders is not None else ()),
         ]
     )
