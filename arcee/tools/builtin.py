@@ -33,6 +33,7 @@ from arcee.tools.reminders import Reminders, reminder_tools
 from arcee.tools.screen import screen_tools
 from arcee.tools.shell import ShellRun, ShellScript
 from arcee.tools.system import NetworkStatus, SystemStatus
+from arcee.tools.travel import travel_tools
 from arcee.tools.voice import Say, VoiceSay
 from arcee.tools.web import WebFetch, WebNews, WebSearch, WebWeather
 from arcee.tools.windows import window_tools
@@ -73,6 +74,7 @@ def builtin_registry(
             *document_tools(),
             *clock_tools(),
             *market_tools(),
+            *travel_tools(),
             *extra_tools(memory),  # pyright: ignore[reportArgumentType]
             *calendar_tools(),
             *mail_tools(),

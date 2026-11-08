@@ -83,6 +83,9 @@ doing the work: plan steps that open and read each item and decide for each one,
 and put your reading of the condition in interpretation. The reading step says what \
 to decide ("decide which need the user's attention"), and later steps act only on the \
 items it chose, never on every item.
+- A dedicated tool beats web.search when one is listed: trains and flights \
+travel.search, weather web.weather, money convert.currency, prices market.quote, \
+distances maps.route. web.search is for what none of them covers.
 - Never plan an action the tools cannot do; say so in a one-step plan instead."""
 
 

@@ -335,6 +335,7 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "convert.currency",
         "market.quote",
         "maps.route",
+        "travel.search",
         "app.install",
         "terminal.run",
         "control.wait_for",

@@ -15,7 +15,7 @@ from arcee.core.protocol import ConfirmRequest
 from arcee.models.base import Completion, Message, ModelProfile, ToolRequest, WireCall
 from arcee.models.errors import MalformedReplyError
 from arcee.models.fake import FakeAdapter
-from arcee.tools.base import NoArgs, Tool, ToolContext, ToolResult, Usage
+from arcee.tools.base import NoArgs, Tool, ToolArgs, ToolContext, ToolResult, Usage
 from arcee.tools.control import CONTROL_TOOLS
 from arcee.tools.files import FsList, FsSearch, FsTrash
 from arcee.tools.registry import AnyTool, Registry
@@ -525,3 +525,38 @@ async def test_time_paused_by_the_user_does_not_count(
     outcome = await agent.run("look at the window")
 
     assert outcome.status == status
+
+
+class FakeSearchArgs(ToolArgs):
+    query: str
+
+
+class FakeWebSearch(Tool[FakeSearchArgs]):
+    name = "web.search"
+    description = "Search the web."
+    usage = Usage(when="Facts from the web.")
+    args_model = FakeSearchArgs
+    read_only = True
+
+    async def run(self, args: FakeSearchArgs, ctx: ToolContext) -> ToolResult:
+        return ToolResult.ok(f"5 results for {args.query!r}", data={"count": 5})
+
+
+async def test_web_lookups_in_a_step_are_capped(home: Path) -> None:
+    searches = [call("web_search", query=f"hotels in Shimla {n}") for n in range(10)]
+    agent, [model], events, _ = make(
+        home,
+        [*searches, say("The Cecil and Peterhoff came up; prices were not found.")],
+        limits=Limits(max_steps=15),
+        extra=[FakeWebSearch()],
+    )
+
+    outcome = await agent.run("Search the web for hotels in Shimla")
+
+    assert outcome.status == "done"
+    assert sum(isinstance(e, ToolRan) for e in events) == 8
+    sixth = [m for m in model.requests[6].messages if m.role == "tool"][-1]
+    assert "That is enough: answer now" in sixth.text
+    refused = tool_results(model)[8]
+    assert refused["status"] == "refused"
+    assert Guarded(9, "web lookups for this step spent (8)") in events
