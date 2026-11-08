@@ -37,6 +37,8 @@ CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*",)
 REMINDERS: Final = ("reminder.*",)
 VOICE: Final = ("voice.*",)
+# The desktop's settings: sound, screen, appearance, radios, power, default apps, updates.
+SETTINGS: Final = ("settings.*", "bluetooth.*", "session.*", "updates.*")
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -142,6 +144,18 @@ _VOICE_REQUEST: Final = _words(
     r"(say|speak|tell me) (it|this|that)\b.*\b(voice|loud)|by voice|in your voice|"
     r"speak (it|this|that|to me)|let me hear)"
 )
+_SETTINGS_REQUEST: Final = _words(
+    r"\b(volume|louder|quieter|softer|mute|unmute|sound (output|device|settings)|speakers?|"
+    r"headphones|headset|earbuds|buds|hdmi|audio (output|input|device)|microphone|mic|"
+    r"brightness|brighter|dimmer|dim (the )?screen|dark mode|light mode|dark theme|"
+    r"night ?light|wallpaper|background image|do not disturb|dnd|silence notifications|"
+    r"notifications (off|on)|focus (mode|session)|wi-?fi|bluetooth|airplane|connect my|"
+    r"text (size|bigger|smaller)|(bigger|larger|smaller) text|magnif\w*|zoom (in|out) on the "
+    r"screen|high contrast|lock (my|the) (computer|screen|pc|laptop)|suspend|sleep|"
+    r"shut ?down|power off|restart (my |the )?(computer|pc|laptop|system)|reboot|log ?out|"
+    r"sign out|default (browser|app|application|mail|email|pdf|video|player)|"
+    r"open (pdfs|videos|images|photos) with|updates?|upgrade)\b"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
@@ -226,6 +240,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (MAIL, _MAIL_REQUEST, "mail"),
             (REMINDERS, _REMINDER_REQUEST, "reminder"),
             (VOICE, _VOICE_REQUEST, "voice"),
+            (SETTINGS, _SETTINGS_REQUEST, "settings"),
         )
         if pattern.search(request) or namespace in namespaces
     ]
