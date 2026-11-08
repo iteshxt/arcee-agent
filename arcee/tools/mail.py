@@ -17,6 +17,7 @@ import contextlib
 import email
 import email.policy
 import imaplib
+import mimetypes
 import re
 import smtplib
 import time
@@ -42,6 +43,8 @@ MAX_UPDATE: Final = 50
 READ_CHARS: Final = 6000
 SUBJECT_CHARS: Final = 120
 PREVIEW_LINES: Final = 10
+MAX_ATTACHMENTS: Final = 10
+MAX_ATTACH_BYTES: Final = 20_000_000  # Gmail's 25 MB, less the encoding's third
 HEADERS: Final = "BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE)]"
 T = TypeVar("T")
 
@@ -316,6 +319,11 @@ class Gmail:
 
         return await self._imap(work)
 
+    async def address(self) -> str:
+        """The user's own Gmail address."""
+        _, account = await self._account.token("mail")
+        return account.email
+
     async def send(self, message: EmailMessage) -> None:
         token, account = await self._account.token("mail")
         message["From"] = account.email
@@ -556,12 +564,48 @@ class WriteArgs(ToolArgs):
     cc: list[str] = Field(default_factory=list[str])
     reply_to: str = Field(default="", description="message_id of the email this replies to")
     forward: str = Field(default="", description="message_id of the email this forwards")
+    attachments: list[str] = Field(
+        default_factory=list[str],
+        max_length=MAX_ATTACHMENTS,
+        description="Files to attach, by path (~/Documents/resume.pdf)",
+    )
 
 
-async def _composed(gmail: Gmail, args: WriteArgs) -> EmailMessage:
+def attachment_files(paths: Sequence[str], home: Path) -> list[Path]:
+    """The files to attach: inside home, existing, MAX_ATTACH_BYTES in all."""
+    files: list[Path] = []
+    for raw in paths:
+        path = home / raw[2:] if raw.startswith("~/") else Path(raw)
+        path = path if path.is_absolute() else home / path
+        if not path.is_file():
+            raise MailError(f"{raw} is not a file")
+        if home not in path.resolve().parents:
+            raise MailError(f"{raw} is outside your home folder")
+        files.append(path)
+    total = sum(p.stat().st_size for p in files)
+    if total > MAX_ATTACH_BYTES:
+        raise MailError(
+            f"the attachments come to {total / 1e6:.1f} MB; Gmail takes 25 MB at most "
+            "(share a larger file with a Drive link)"
+        )
+    return files
+
+
+def attach(message: EmailMessage, files: Sequence[Path]) -> None:
+    for path in files:
+        kind, _ = mimetypes.guess_type(path.name)
+        main, sub = (kind or "application/octet-stream").split("/", 1)
+        message.add_attachment(path.read_bytes(), maintype=main, subtype=sub, filename=path.name)
+
+
+async def _composed(gmail: Gmail, args: WriteArgs, home: Path) -> EmailMessage:
     replying = (await gmail.fetch(args.reply_to))[0] if args.reply_to else None
     forwarding = (await gmail.fetch(args.forward))[0] if args.forward else None
-    return compose(args.to, args.subject, args.body, args.cc, replying, forwarding)
+    message = compose(args.to, args.subject, args.body, args.cc, replying, forwarding)
+    if args.attachments:
+        files = await asyncio.to_thread(attachment_files, args.attachments, home)
+        await asyncio.to_thread(attach, message, files)
+    return message
 
 
 class MailDraft(Tool[WriteArgs]):
@@ -580,7 +624,7 @@ class MailDraft(Tool[WriteArgs]):
 
     async def run(self, args: WriteArgs, ctx: ToolContext) -> ToolResult:
         try:
-            message = await _composed(self._gmail, args)
+            message = await _composed(self._gmail, args, ctx.home)
             await self._gmail.draft(message)
         except (MailError, GoogleError) as exc:
             return ToolResult.fail(str(exc))
@@ -624,15 +668,18 @@ class MailSend(Tool[WriteArgs]):
             lines.append(f"… and {len(body) - PREVIEW_LINES} more lines")
         if args.forward:
             lines.append("(with the forwarded email below)")
+        if args.attachments:
+            lines.append(f"Attached: {', '.join(Path(a).name for a in args.attachments)}")
         return tuple(lines)
 
     async def run(self, args: WriteArgs, ctx: ToolContext) -> ToolResult:
         try:
-            message = await _composed(self._gmail, args)
+            message = await _composed(self._gmail, args, ctx.home)
             await self._gmail.send(message)
         except (MailError, GoogleError) as exc:
             return ToolResult.fail(str(exc))
-        return ToolResult.ok(f"Sent “{message['Subject']}” to {', '.join(args.to)}")
+        attached = f" with {len(args.attachments)} attachments" if args.attachments else ""
+        return ToolResult.ok(f"Sent “{message['Subject']}” to {', '.join(args.to)}{attached}")
 
 
 Action = Literal["read", "unread", "archive", "trash"]
@@ -698,6 +745,147 @@ class MailUpdate(Tool[UpdateArgs]):
         return ToolResult.ok(summary, data={"emails": [e.public() for e in changed]})
 
 
+# --- mail.unsubscribe and share.file -----------------------------------------------------
+
+
+def unsubscribe_ways(raw: bytes) -> tuple[str | None, str | None, bool]:
+    """From an email's List-Unsubscribe headers: (https link, mailto address, one-click),
+    one-click being RFC 8058's: a POST to the link unsubscribes, with nothing to click."""
+    message = email.message_from_bytes(raw, policy=email.policy.default)
+    header = str(message.get("List-Unsubscribe", ""))
+    links = re.findall(r"<([^>]+)>", header) or [h.strip() for h in header.split(",") if h.strip()]
+    web = next((link for link in links if link.lower().startswith("https://")), None)
+    mailto = next((link for link in links if link.lower().startswith("mailto:")), None)
+    post = str(message.get("List-Unsubscribe-Post", ""))
+    return web, mailto, bool(web) and "one-click" in post.lower()
+
+
+class UnsubscribeArgs(ToolArgs):
+    message_id: str = Field(description="message_id of an email from the list (mail.list)")
+    sender: str = Field(description="Who it is from, as listed (shown to the user)")
+
+
+class MailUnsubscribe(Tool[UnsubscribeArgs]):
+    name = "mail.unsubscribe"
+    tier = Tier.CONFIRM
+    risk = "medium"
+    description = (
+        "Unsubscribe from a mailing list or newsletter, the way its email offers "
+        "(List-Unsubscribe): one-click, or an unsubscribe email from the user's Gmail."
+    )
+    usage = Usage(
+        when='"Unsubscribe me from this newsletter", "stop these emails from Swiggy".',
+        mistakes="Clicking unsubscribe links in the email's text yourself: this tool does it "
+        "the safe way; if it returns a link, open it in the browser for the user to finish.",
+        example='mail.unsubscribe(message_id="178…", sender="Swiggy")',
+    )
+    args_model = UnsubscribeArgs
+    timeout_s = 60
+
+    def __init__(self, gmail: Gmail | None = None, client: Any = None) -> None:
+        self._gmail = gmail or Gmail()
+        self._client = client
+
+    def sentence(self, args: UnsubscribeArgs) -> str:
+        return f"Unsubscribe from {args.sender}'s emails?"
+
+    async def run(self, args: UnsubscribeArgs, ctx: ToolContext) -> ToolResult:
+        import httpx
+
+        try:
+            _letter, raw = await self._gmail.fetch(args.message_id)
+        except (MailError, GoogleError) as exc:
+            return ToolResult.fail(str(exc))
+        web, mailto, one_click = unsubscribe_ways(raw)
+        if one_click and web:
+            client = self._client or httpx.AsyncClient(timeout=20, follow_redirects=True)
+            try:
+                response = await client.post(
+                    web,
+                    content=b"List-Unsubscribe=One-Click",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+            except httpx.HTTPError as exc:
+                return ToolResult.fail(f"{args.sender}'s unsubscribe did not answer: {exc}")
+            finally:
+                if self._client is None:
+                    await client.aclose()
+            if response.status_code < 400:
+                return ToolResult.ok(
+                    f"Unsubscribed from {args.sender} (one-click)", data={"how": "one-click"}
+                )
+        if mailto:
+            address = mailto[len("mailto:") :].split("?", 1)
+            subject = "unsubscribe"
+            if len(address) > 1 and (m := re.search(r"subject=([^&]+)", address[1])):
+                from urllib.parse import unquote
+
+                subject = unquote(m[1])
+            message = compose([address[0]], subject, "Please unsubscribe me from this list.")
+            try:
+                await self._gmail.send(message)
+            except (MailError, GoogleError) as exc:
+                return ToolResult.fail(str(exc))
+            return ToolResult.ok(
+                f"Asked {args.sender} to unsubscribe you (an email to {address[0]})",
+                data={"how": "email", "to": address[0]},
+            )
+        if web:
+            return ToolResult.ok(
+                f"{args.sender} unsubscribes on its website: open the link for the user to "
+                "finish there",
+                data={"how": "website", "link": web},
+            )
+        return ToolResult.fail(
+            f"{args.sender}'s email offers no unsubscribe; archive or filter it instead"
+        )
+
+
+class ShareArgs(ToolArgs):
+    paths: list[str] = Field(
+        min_length=1, max_length=MAX_ATTACHMENTS, description="The files to send to yourself"
+    )
+    note: str = Field(default="", description="A line to go with them")
+
+
+class ShareFile(Tool[ShareArgs]):
+    name = "share.file"
+    tier = Tier.CONFIRM
+    description = (
+        "Send files to the user's own phone or other devices: an email to their own Gmail "
+        "with the files attached."
+    )
+    usage = Usage(
+        when='"Send this photo to my phone", "get this PDF onto my phone", "mail it to myself".',
+        avoid="Sending files to someone else: mail.send with attachments.",
+        example='share.file(paths=["~/Pictures/ticket.png"])',
+    )
+    args_model = ShareArgs
+    timeout_s = 90
+
+    def __init__(self, gmail: Gmail | None = None) -> None:
+        self._gmail = gmail or Gmail()
+
+    def sentence(self, args: ShareArgs) -> str:
+        names = ", ".join(Path(p).name for p in args.paths)
+        return f"Email {names} to yourself (your Gmail)?"
+
+    async def run(self, args: ShareArgs, ctx: ToolContext) -> ToolResult:
+        try:
+            files = await asyncio.to_thread(attachment_files, args.paths, ctx.home)
+            me = await self._gmail.address()
+            names = ", ".join(p.name for p in files)
+            message = compose([me], f"From your computer: {names}", args.note or names)
+            await asyncio.to_thread(attach, message, files)
+            await self._gmail.send(message)
+        except (MailError, GoogleError) as exc:
+            return ToolResult.fail(str(exc))
+        return ToolResult.ok(
+            f"Sent {names} to {me}: open it on your phone's Gmail",
+            data={"to": me, "files": [p.name for p in files]},
+        )
+
+
 def mail_tools(gmail: Gmail | None = None) -> list[Tool[Any]]:
     shared = gmail or Gmail()
     return [
@@ -708,4 +896,6 @@ def mail_tools(gmail: Gmail | None = None) -> list[Tool[Any]]:
         MailDraft(shared),
         MailSend(shared),
         MailUpdate(shared),
+        MailUnsubscribe(shared),
+        ShareFile(shared),
     ]

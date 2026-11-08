@@ -347,6 +347,8 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "mail.draft",
         "mail.send",
         "mail.update",
+        "mail.unsubscribe",
+        "share.file",
         "web.fetch",
         "browser.tabs",
         "browser.navigate",
