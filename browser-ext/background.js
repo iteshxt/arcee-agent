@@ -91,6 +91,27 @@ async function handle(method, params) {
     case "close_tab":
       await chrome.tabs.remove(params.tab);
       return {};
+    case "bookmark": {
+      // The page in the tab (or the address given), into the bookmarks bar or a folder.
+      const tab = params.url ? null : await activeTab(params.tab);
+      const url = params.url || tab.url;
+      const title = params.title || (tab ? tab.title : url);
+      const [existing] = await chrome.bookmarks.search({ url });
+      if (existing) return { id: existing.id, title: existing.title, url, already: true };
+      let parentId = "1"; // the bookmarks bar
+      if (params.folder) {
+        const folders = (await chrome.bookmarks.search({ title: params.folder })).filter((b) => !b.url);
+        parentId = folders.length
+          ? folders[0].id
+          : (await chrome.bookmarks.create({ parentId: "1", title: params.folder })).id;
+      }
+      const made = await chrome.bookmarks.create({ parentId, title, url });
+      return { id: made.id, title: made.title, url: made.url, already: false };
+    }
+    case "find_bookmarks": {
+      const found = await chrome.bookmarks.search(params.query);
+      return found.filter((b) => b.url).slice(0, 30).map((b) => ({ title: b.title, url: b.url }));
+    }
     case "navigate": {
       const tab = await activeTab(params.tab);
       if (tab.url !== params.url) {

@@ -361,6 +361,7 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "browser.fill",
         "browser.scroll",
         "browser.back",
+        "browser.bookmark",
         "ui.windows",
         "ui.tree",
         "ui.act",
