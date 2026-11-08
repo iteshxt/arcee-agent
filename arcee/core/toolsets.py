@@ -39,6 +39,8 @@ REMINDERS: Final = ("reminder.*",)
 VOICE: Final = ("voice.*",)
 # The desktop's settings: sound, screen, appearance, radios, power, default apps, updates.
 SETTINGS: Final = ("settings.*", "bluetooth.*", "session.*", "updates.*")
+# The clipboard, screenshots kept for the user, recordings.
+CAPTURE: Final = ("clipboard.*", "screen.save", "record.*")
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -156,6 +158,11 @@ _SETTINGS_REQUEST: Final = _words(
     r"sign out|default (browser|app|application|mail|email|pdf|video|player)|"
     r"open (pdfs|videos|images|photos) with|updates?|upgrade)\b"
 )
+_CAPTURE_REQUEST: Final = _words(
+    r"\b(clipboard|copy (it|this|that|my|the|them)|copied|paste|(did i|i just) copy|screen ?shots?|"
+    r"record(ing)? (my |the )?(screen|audio|voice|mic|microphone|meeting|call|lecture)|"
+    r"voice memo|stop recording|screencast|screen recording|still recording)\b"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
@@ -241,6 +248,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (REMINDERS, _REMINDER_REQUEST, "reminder"),
             (VOICE, _VOICE_REQUEST, "voice"),
             (SETTINGS, _SETTINGS_REQUEST, "settings"),
+            (CAPTURE, _CAPTURE_REQUEST, "clipboard"),
         )
         if pattern.search(request) or namespace in namespaces
     ]

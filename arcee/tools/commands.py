@@ -35,7 +35,12 @@ class Done:
 
 class Commands(Protocol):
     async def run(
-        self, argv: Sequence[str], *, limit_s: float = TIMEOUT_S, stdin: bytes | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        limit_s: float = TIMEOUT_S,
+        stdin: bytes | None = None,
+        quiet: bool = False,
     ) -> Done: ...
 
     def has(self, program: str) -> bool: ...
@@ -45,14 +50,22 @@ class SystemCommands:
     """The real ones."""
 
     async def run(
-        self, argv: Sequence[str], *, limit_s: float = TIMEOUT_S, stdin: bytes | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        limit_s: float = TIMEOUT_S,
+        stdin: bytes | None = None,
+        quiet: bool = False,
     ) -> Done:
+        """`quiet`: not reading its output, for a program that leaves a child behind
+        holding it (wl-copy serves the paste after it returns)."""
+        output = asyncio.subprocess.DEVNULL if quiet else asyncio.subprocess.PIPE
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
                 stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdout=output,
+                stderr=output,
             )
         except FileNotFoundError:
             return Done(127, "", f"{argv[0]} is not installed")
@@ -65,8 +78,8 @@ class SystemCommands:
             return Done(124, "", f"{argv[0]} did not finish in {limit_s:.0f} s")
         return Done(
             process.returncode if process.returncode is not None else 1,
-            out[:OUTPUT_LIMIT].decode(errors="replace"),
-            err[:OUTPUT_LIMIT].decode(errors="replace"),
+            (out or b"")[:OUTPUT_LIMIT].decode(errors="replace"),
+            (err or b"")[:OUTPUT_LIMIT].decode(errors="replace"),
         )
 
     def has(self, program: str) -> bool:

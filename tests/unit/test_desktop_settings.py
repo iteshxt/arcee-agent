@@ -50,7 +50,12 @@ class FakeCommands:
         self.settings: dict[str, str] = {}
 
     async def run(
-        self, argv: Sequence[str], *, limit_s: float = 15, stdin: bytes | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        limit_s: float = 15,
+        stdin: bytes | None = None,
+        quiet: bool = False,
     ) -> Done:
         line = " ".join(argv)
         self.ran.append(line)
