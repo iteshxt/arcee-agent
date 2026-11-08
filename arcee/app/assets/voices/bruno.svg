@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8e9eab"/>
+      <stop offset="1" stop-color="#3c4a5c"/>
+    </linearGradient>
+    <clipPath id="round"><circle cx="48" cy="48" r="48"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+  <rect width="96" height="96" fill="url(#bg)"/>
+  <circle cx="74" cy="20" r="22" fill="#ffffff" opacity="0.10"/>
+  <path d="M14 96 C16 80 30 72 48 72 C66 72 80 80 82 96 Z" fill="#2d3a4a"/>
+  <path d="M41 62 h14 v12 c-4 4 -10 4 -14 0 Z" fill="#b97a56"/>
+  <path d="M41 66 h14 v4 c-4 2 -10 2 -14 0 Z" fill="#000000" opacity="0.10"/>
+  <ellipse cx="48" cy="46" rx="17" ry="20" fill="#b97a56"/>
+  <ellipse cx="31.5" cy="48" rx="3" ry="4.5" fill="#b97a56"/>
+  <ellipse cx="64.5" cy="48" rx="3" ry="4.5" fill="#b97a56"/>
+  <ellipse cx="41.5" cy="47" rx="2" ry="2.6" fill="#2b2230"/>
+  <ellipse cx="54.5" cy="47" rx="2" ry="2.6" fill="#2b2230"/>
+  <circle cx="42.2" cy="46.1" r="0.7" fill="#ffffff"/>
+  <circle cx="55.2" cy="46.1" r="0.7" fill="#ffffff"/>
+  <path d="M38 41.5 q3.5 -2.2 7 -0.6" stroke="#2b2230" stroke-width="1.4" fill="none" stroke-linecap="round" opacity="0.75"/>
+  <path d="M51 40.9 q3.5 -1.6 7 0.6" stroke="#2b2230" stroke-width="1.4" fill="none" stroke-linecap="round" opacity="0.75"/>
+  <path d="M47 50 q1 3 2.4 2.6" stroke="#000000" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.18"/>
+  <path d="M43 56.5 q5 4.2 10 0" stroke="#b5485a" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <ellipse cx="38" cy="53.5" rx="3.4" ry="2.1" fill="#ff7a8a" opacity="0.15"/>
+  <ellipse cx="58" cy="53.5" rx="3.4" ry="2.1" fill="#ff7a8a" opacity="0.15"/>
+  <path d="M31 42 C30 27 40 21 49 21 C59 21 67 27 66 42 C63 33 57 29 49 29 C41 29 34 33 31 42 Z" fill="#1f1a17"/>
+  <path d="M31 48 C31 66 40 73 48 73 C56 73 65 66 65 48 C62 57 57 61 48 61 C39 61 34 57 31 48 Z" fill="#1f1a17"/>
+  <path d="M41 55 q7 -3.5 14 0 q-7 2 -14 0 Z" fill="#1f1a17"/>
+  </g>
+</svg>

@@ -51,23 +51,24 @@ class Voice:
     name: str  # KittenTTS's own name for it
     key: str  # its style in voices.npz
     about: str  # how it sounds, for Settings → Voice
-    pace: float  # KittenTTS's speed for it: each speaks a little fast at 1.0
+    pace: float  # KittenTTS's speed for it: set so every voice speaks about 215 wpm
 
 
 # In the order of their styles in voices.bin (the speaker ids). How each sounds was
-# measured on the same sentence (2026-11-08): median pitch and its spread (YIN), and
-# words a minute. Bruno 121 Hz; Jasper, Hugo and Leo about 195 Hz, wide; Bella, Luna
-# and Rosie 197-214 Hz; Kiki 255 Hz. Leo 110 and Bella 125 words a minute, Luna, Bruno
-# and Rosie 154-160, Jasper, Kiki and Hugo 171-175.
+# measured on the same sentence (2026-11-08): median pitch and its spread (YIN). Bruno
+# 121 Hz; Jasper, Hugo and Leo about 195 Hz, wide; Bella, Luna and Rosie 197-214 Hz;
+# Kiki 255 Hz. At one speed they ran from 133 words a minute (Bella, Leo) to 196, and
+# at the old 0.8 they all sounded drawn out (the user, 2026-11-09). Each pace is now set
+# so all of them speak about 215 words a minute on a three-sentence answer.
 VOICES: Final[tuple[Voice, ...]] = (
-    Voice("Jasper", "expr-voice-2-m", "A light man's voice, brisk", 0.8),
-    Voice("Bella", "expr-voice-2-f", "Calm and unhurried, even in tone", 0.8),
-    Voice("Bruno", "expr-voice-3-m", "The deepest voice, steady", 0.8),
-    Voice("Luna", "expr-voice-3-f", "Natural pace, expressive", 0.8),
-    Voice("Hugo", "expr-voice-4-m", "Quick and lively", 0.9),
-    Voice("Rosie", "expr-voice-4-f", "Clear and even", 0.8),
-    Voice("Leo", "expr-voice-5-m", "Slow and drawn out", 0.8),
-    Voice("Kiki", "expr-voice-5-f", "The brightest voice, quick", 0.8),
+    Voice("Jasper", "expr-voice-2-m", "A light man's voice", 0.96),
+    Voice("Bella", "expr-voice-2-f", "Calm and warm, even in tone", 1.34),
+    Voice("Bruno", "expr-voice-3-m", "The deepest voice, steady", 0.9),
+    Voice("Luna", "expr-voice-3-f", "Natural and expressive", 1.13),
+    Voice("Hugo", "expr-voice-4-m", "Lively, with a wide range", 0.96),
+    Voice("Rosie", "expr-voice-4-f", "Clear and even", 1.05),
+    Voice("Leo", "expr-voice-5-m", "Relaxed and low-key", 1.3),
+    Voice("Kiki", "expr-voice-5-f", "The brightest voice", 0.86),
 )
 DEFAULT_VOICE: Final = "Luna"
 THREADS: Final = 2

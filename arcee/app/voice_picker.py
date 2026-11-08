@@ -3,12 +3,14 @@
 sounds (decision 0019). Choosing one says a sentence in it, through arceed."""
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
+gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
 from arcee.voice_reply import VOICES, Voice, voice_id  # noqa: E402
@@ -45,13 +47,31 @@ def _style() -> None:
     _styled = True
 
 
+AVATARS = Path(__file__).parent / "assets" / "voices"
+
+
+def avatar(voice: Voice, size: int) -> Any:
+    """The voice's portrait (packaging/voice_avatars.py draws them), drawn at twice the
+    size for sharp HiDPI screens; its initial when the picture cannot be read."""
+    widget = Adw.Avatar(size=size, text=voice.name, show_initials=True)
+    try:
+        from gi.repository import GdkPixbuf
+
+        path = AVATARS / f"{voice.name.lower()}.svg"
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(str(path), size * 2, size * 2)
+        widget.set_custom_image(Gdk.Texture.new_for_pixbuf(pixbuf))
+    except Exception:  # no SVG loader: the initial stays
+        pass
+    return widget
+
+
 class VoiceCard(Gtk.Button):
     def __init__(self, voice: Voice, on_pick: Callable[[Voice], None]) -> None:
         super().__init__(css_classes=["voice-card", "flat"], hexpand=True)
         self.voice = voice
         self.update_property([Gtk.AccessibleProperty.LABEL], [f"{voice.name}: {voice.about}"])
         box = Gtk.Box(spacing=12)
-        box.append(Adw.Avatar(size=40, text=voice.name, show_initials=True))
+        box.append(avatar(voice, 48))
         words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         words.append(Gtk.Label(label=voice.name, xalign=0, css_classes=["voice-name"]))
         words.append(
