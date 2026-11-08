@@ -37,6 +37,23 @@ const INTERFACE = `
       <arg type="s" direction="in" name="action"/>
       <arg type="b" direction="out" name="done"/>
     </method>
+    <method name="TileWindow">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="s" direction="in" name="where"/>
+      <arg type="b" direction="out" name="done"/>
+    </method>
+    <method name="MoveWindow">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="i" direction="in" name="monitor"/>
+      <arg type="i" direction="in" name="workspace"/>
+      <arg type="b" direction="out" name="done"/>
+    </method>
+    <method name="Monitors">
+      <arg type="s" direction="out" name="monitors_json"/>
+    </method>
+    <method name="Notifications">
+      <arg type="s" direction="out" name="notifications_json"/>
+    </method>
     <method name="FocusTitle">
       <arg type="s" direction="in" name="title"/>
       <arg type="b" direction="out" name="focused"/>
@@ -168,7 +185,108 @@ class ShellBridge {
             focused: window.has_focus(),
             minimized: window.minimized,
             maximized: window.is_maximized(),
+            monitor: window.get_monitor(),
+            workspace: window.get_workspace()?.index() ?? -1,
         })));
+    }
+
+    // Put a window in a half or quarter of its monitor's work area (left, right,
+    // top-left, ...), or centre it at two thirds; only while Arcee holds control.
+    TileWindowAsync([id, where], invocation) {
+        if (!this._allowed(invocation))
+            return;
+        const window = windows().find(w => w.get_id() === id);
+        if (!window) {
+            invocation.return_value(new GLib.Variant('(b)', [false]));
+            return;
+        }
+        if (!window.allows_resize()) {
+            this._fail(invocation, 'this window cannot be resized');
+            return;
+        }
+        const area = Main.layoutManager.getWorkAreaForMonitor(window.get_monitor());
+        const half = {w: Math.floor(area.width / 2), h: Math.floor(area.height / 2)};
+        const spots = {
+            'left': [area.x, area.y, half.w, area.height],
+            'right': [area.x + half.w, area.y, area.width - half.w, area.height],
+            'top': [area.x, area.y, area.width, half.h],
+            'bottom': [area.x, area.y + half.h, area.width, area.height - half.h],
+            'top-left': [area.x, area.y, half.w, half.h],
+            'top-right': [area.x + half.w, area.y, area.width - half.w, half.h],
+            'bottom-left': [area.x, area.y + half.h, half.w, area.height - half.h],
+            'bottom-right': [area.x + half.w, area.y + half.h, area.width - half.w, area.height - half.h],
+            'center': [area.x + Math.floor(area.width / 6), area.y + Math.floor(area.height / 6),
+                Math.floor(area.width * 2 / 3), Math.floor(area.height * 2 / 3)],
+        };
+        const spot = spots[where];
+        if (!spot) {
+            this._fail(invocation, `unknown place ${where}`);
+            return;
+        }
+        window.unminimize();
+        if (window.is_fullscreen())
+            window.unmake_fullscreen();
+        window.unmaximize();
+        window.move_resize_frame(true, ...spot);
+        invocation.return_value(new GLib.Variant('(b)', [true]));
+    }
+
+    // Move a window to another monitor and/or workspace (-1: leave as it is).
+    MoveWindowAsync([id, monitor, workspace], invocation) {
+        if (!this._allowed(invocation))
+            return;
+        const window = windows().find(w => w.get_id() === id);
+        if (!window) {
+            invocation.return_value(new GLib.Variant('(b)', [false]));
+            return;
+        }
+        if (monitor >= global.display.get_n_monitors()) {
+            this._fail(invocation, `there are ${global.display.get_n_monitors()} monitors`);
+            return;
+        }
+        if (monitor >= 0)
+            window.move_to_monitor(monitor);
+        if (workspace >= 0) {
+            const manager = global.workspace_manager;
+            // Dynamic workspaces: one past the last opens a new one.
+            while (workspace >= manager.get_n_workspaces())
+                manager.append_new_workspace(false, global.get_current_time());
+            window.change_workspace_by_index(workspace, false);
+        }
+        invocation.return_value(new GLib.Variant('(b)', [true]));
+    }
+
+    Monitors() {
+        const primary = global.display.get_primary_monitor();
+        const all = [];
+        for (let i = 0; i < global.display.get_n_monitors(); i++) {
+            const rect = global.display.get_monitor_geometry(i);
+            all.push({index: i, primary: i === primary, width: rect.width, height: rect.height,
+                connector: Main.layoutManager.monitors[i]?.connector ?? ''});
+        }
+        return JSON.stringify({
+            monitors: all,
+            workspaces: global.workspace_manager.get_n_workspaces(),
+            active_workspace: global.workspace_manager.get_active_workspace_index(),
+        });
+    }
+
+    // The notifications waiting in the message tray: what the user missed.
+    Notifications() {
+        const out = [];
+        for (const source of Main.messageTray.getSources()) {
+            for (const notification of source.notifications ?? []) {
+                const when = notification.datetime;
+                out.push({
+                    app: source.title ?? '',
+                    title: notification.title ?? '',
+                    body: notification.body ?? '',
+                    time: when ? when.to_unix() : 0,
+                    urgent: notification.urgency === 3,
+                });
+            }
+        }
+        return JSON.stringify(out);
     }
 
     FocusWindow(id) {

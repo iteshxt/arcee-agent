@@ -25,6 +25,10 @@ class Windows(Protocol):
     def available(self) -> bool: ...
     def windows(self) -> list[dict[str, Any]]: ...
     def window_action(self, window_id: int, action: str) -> bool: ...
+    def tile_window(self, window_id: int, where: str) -> bool: ...
+    def move_window(self, window_id: int, monitor: int, workspace: int) -> bool: ...
+    def monitors(self) -> dict[str, Any]: ...
+    def notifications(self) -> list[dict[str, Any]]: ...
 
 
 def find_window(wanted: str, windows: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -159,6 +163,170 @@ class AppClose(_WindowTool[AppCloseArgs]):
         )
 
 
+# --- window.tile, window.move ---------------------------------------------------------------
+
+Place = Literal[
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "top-left",
+    "top-right",
+    "bottom-left",
+    "bottom-right",
+    "center",
+]
+
+
+class TileArgs(ToolArgs):
+    window: str = Field(description="Window id from window.list, or its app or title")
+    where: Place = Field(description="left or right half, a quarter, top/bottom, or center")
+
+
+class WindowTile(_WindowTool[TileArgs]):
+    name = "window.tile"
+    description = "Put a window in the left or right half of its screen, a quarter, or the middle."
+    usage = Usage(
+        when='"Put Chrome on the left and the terminal on the right": one call each.',
+        example='window.tile(window="Chrome", where="left")',
+    )
+    args_model = TileArgs
+
+    async def run(self, args: TileArgs, ctx: ToolContext) -> ToolResult:
+        try:
+            window = find_window(args.window, await self._windows())
+            if window is None:
+                return ToolResult.fail(f"no open window matches {args.window!r}; see window.list")
+            done = await asyncio.to_thread(self._shell.tile_window, int(window["id"]), args.where)
+        except ShellUnavailableError as exc:
+            return ToolResult.fail(str(exc))
+        if not done:
+            return ToolResult.fail(f"the window {window.get('title')!r} is gone")
+        return ToolResult.ok(
+            f"Put {window.get('title')} on the {args.where}", data={"window": describe(window)}
+        )
+
+
+class MoveArgs(ToolArgs):
+    window: str = Field(description="Window id from window.list, or its app or title")
+    monitor: int | None = Field(
+        default=None, ge=1, le=8, description="Screen number, 1 the first (window.screens)"
+    )
+    workspace: int | None = Field(default=None, ge=1, le=32, description="Workspace, 1 the first")
+
+
+class WindowMove(_WindowTool[MoveArgs]):
+    name = "window.move"
+    description = "Move a window to another screen (monitor) or workspace."
+    usage = Usage(
+        when='"Open Files on my second screen" (app.open, then this), "move Spotify to '
+        'workspace 2".',
+        example='window.move(window="Files", monitor=2)',
+    )
+    args_model = MoveArgs
+
+    async def run(self, args: MoveArgs, ctx: ToolContext) -> ToolResult:
+        if args.monitor is None and args.workspace is None:
+            return ToolResult.fail("say a monitor or a workspace to move it to")
+        monitor = args.monitor - 1 if args.monitor else -1
+        workspace = args.workspace - 1 if args.workspace else -1
+        try:
+            window = find_window(args.window, await self._windows())
+            if window is None:
+                return ToolResult.fail(f"no open window matches {args.window!r}; see window.list")
+            done = await asyncio.to_thread(
+                self._shell.move_window, int(window["id"]), monitor, workspace
+            )
+        except ShellUnavailableError as exc:
+            return ToolResult.fail(str(exc))
+        if not done:
+            return ToolResult.fail(f"the window {window.get('title')!r} is gone")
+        where = " and ".join(
+            f"{name} {n}"
+            for name, n in (("screen", args.monitor), ("workspace", args.workspace))
+            if n
+        )
+        return ToolResult.ok(
+            f"Moved {window.get('title')} to {where}", data={"window": describe(window)}
+        )
+
+
+class WindowScreens(_WindowTool[NoArgs]):
+    name = "window.screens"
+    read_only = True
+    description = "The screens (monitors) connected, which is the main one, and the workspaces."
+    usage = Usage(
+        when='"Which is my second screen?", before window.move.', example="window.screens()"
+    )
+    args_model = NoArgs
+
+    async def run(self, args: NoArgs, ctx: ToolContext) -> ToolResult:
+        try:
+            if not await asyncio.to_thread(self._shell.available):
+                raise ShellUnavailableError(NO_EXTENSION)
+            found = await asyncio.to_thread(self._shell.monitors)
+        except ShellUnavailableError as exc:
+            return ToolResult.fail(str(exc))
+        screens = [
+            f"screen {m['index'] + 1}: {m['width']}x{m['height']}"
+            + (f" {m['connector']}" if m.get("connector") else "")
+            + (" (main)" if m.get("primary") else "")
+            for m in found.get("monitors", [])
+        ]
+        data = {
+            "screens": screens,
+            "workspaces": found.get("workspaces"),
+            "current_workspace": int(found.get("active_workspace", 0)) + 1,
+        }
+        return ToolResult.ok(f"{len(screens)} screens", data=data)
+
+
+# --- notifications.list ---------------------------------------------------------------------
+
+
+class NotificationsList(_WindowTool[NoArgs]):
+    name = "notifications.list"
+    read_only = True
+    untrusted = True  # other apps' words
+    personal = "your notifications"
+    description = "The notifications waiting in GNOME's message tray: what the user missed."
+    usage = Usage(
+        when='"What notifications did I miss?", "did anyone message me?".',
+        example="notifications.list()",
+    )
+    args_model = NoArgs
+
+    async def run(self, args: NoArgs, ctx: ToolContext) -> ToolResult:
+        from datetime import datetime
+
+        try:
+            if not await asyncio.to_thread(self._shell.available):
+                raise ShellUnavailableError(NO_EXTENSION)
+            found = await asyncio.to_thread(self._shell.notifications)
+        except ShellUnavailableError as exc:
+            return ToolResult.fail(str(exc))
+        found.sort(key=lambda n: n.get("time", 0), reverse=True)
+        lines: list[str] = []
+        for n in found[:40]:
+            when = datetime.fromtimestamp(n["time"]).strftime("%a %H:%M") if n.get("time") else ""
+            body = str(n.get("body", "")).replace("\n", " ")[:200]
+            lines.append(
+                f"{when} {n.get('app', '')}: {n.get('title', '')}" + (f" — {body}" if body else "")
+            )
+        if not lines:
+            return ToolResult.ok("No notifications waiting", data={"notifications": []})
+        return ToolResult.ok(f"{len(found)} notifications waiting", data={"notifications": lines})
+
+
 def window_tools(shell: Windows | None = None) -> list[Tool[Any]]:
-    shared = shell or ShellBridge()
-    return [WindowList(shared), WindowAct(shared), AppClose(shared)]
+    """The window tools, sharing one shell connection."""
+    bridge: Windows = shell or ShellBridge()
+    return [
+        WindowList(bridge),
+        WindowAct(bridge),
+        WindowTile(bridge),
+        WindowMove(bridge),
+        WindowScreens(bridge),
+        AppClose(bridge),
+        NotificationsList(bridge),
+    ]

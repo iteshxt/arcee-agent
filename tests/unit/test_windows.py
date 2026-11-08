@@ -41,6 +41,18 @@ class Shell:
         self.actions.append((window_id, action))
         return True
 
+    def tile_window(self, window_id: int, where: str) -> bool:
+        return True
+
+    def move_window(self, window_id: int, monitor: int, workspace: int) -> bool:
+        return True
+
+    def monitors(self) -> dict[str, Any]:
+        return {}
+
+    def notifications(self) -> list[dict[str, Any]]:
+        return []
+
 
 def test_a_window_is_found_by_id_app_or_title_and_never_by_a_terminal_title() -> None:
     assert find_window("3", WINDOWS) == WINDOWS[2]

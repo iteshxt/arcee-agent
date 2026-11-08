@@ -74,6 +74,27 @@ class ShellBridge:
 
         return bool(self._must("WindowAction", GLib.Variant("(ts)", (window_id, action)))[0])
 
+    def tile_window(self, window_id: int, where: str) -> bool:
+        """left, right, top, bottom, the quarters or center; False when the window is gone."""
+        from gi.repository import GLib
+
+        return bool(self._must("TileWindow", GLib.Variant("(ts)", (window_id, where)))[0])
+
+    def move_window(self, window_id: int, monitor: int, workspace: int) -> bool:
+        """To monitor and/or workspace (0-based; -1 leaves it); False when it is gone."""
+        from gi.repository import GLib
+
+        variant = GLib.Variant("(tii)", (window_id, monitor, workspace))
+        return bool(self._must("MoveWindow", variant)[0])
+
+    def monitors(self) -> dict[str, Any]:
+        result = self._must("Monitors", None)
+        return json.loads(result[0]) if result else {}
+
+    def notifications(self) -> list[dict[str, Any]]:
+        result = self._must("Notifications", None)
+        return json.loads(result[0]) if result else []
+
     def focus_window(self, window_id: int) -> bool:
         from gi.repository import GLib
 
@@ -143,6 +164,12 @@ class ShellBridge:
                 method, args, Gio.DBusCallFlags.NONE, timeout_ms, None
             )
         except GLib.Error as exc:
+            if "UnknownMethod" in exc.message:
+                # GNOME loads an extension's new code only at the next login.
+                raise ShellUnavailableError(
+                    "Arcee's GNOME Shell extension running now is older than Arcee: log out "
+                    "and back in to load the new one"
+                ) from exc
             # Keep the extension's own words, without "GDBus.Error:<error name>: ".
             message = re.sub(r"^GDBus\.Error:[\w.\-]+:\s*", "", exc.message)
             raise ShellUnavailableError(f"{method} failed: {message}") from exc
