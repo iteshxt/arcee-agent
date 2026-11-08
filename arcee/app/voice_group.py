@@ -18,8 +18,9 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from arcee import voice_local, wake_match  # noqa: E402
 from arcee.app.wake_training import WakeTrainingDialog  # noqa: E402
-from arcee.settings import load, save_learn_wakes, save_listen  # noqa: E402
-from arcee.voice_local import MODELS, VoiceModel, installed  # noqa: E402
+from arcee.settings import load, save_learn_wakes, save_listen, save_settings  # noqa: E402
+from arcee.voice_local import MODELS, VoiceModel, download, installed  # noqa: E402
+from arcee.voice_reply import SPEECH, VOICES  # noqa: E402
 
 
 async def set_wake_word(on: bool) -> None:
@@ -52,6 +53,31 @@ async def set_wake_word(on: bool) -> None:
     except OSError, DBusError:
         pass
     save_listen(on)
+
+
+async def _agent(member: str, signature: str, body: list[Any]) -> None:
+    """Call arceed, starting it if needed; nothing when the session bus is not there."""
+    from dbus_fast import BusType, Message
+    from dbus_fast.aio import MessageBus
+    from dbus_fast.errors import DBusError
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SESSION).connect()
+    except OSError, DBusError:
+        return
+    try:
+        await bus.call(
+            Message(
+                destination="me.iteshxt.Arcee.Agent",
+                path="/me/iteshxt/Arcee/Agent",
+                interface="me.iteshxt.Arcee.Agent",
+                member=member,
+                signature=signature,
+                body=body,
+            )
+        )
+    finally:
+        bus.disconnect()
 
 
 Runner = Callable[..., Any]  # (work, done[, failed]), as Background.run
@@ -110,6 +136,35 @@ class VoiceGroup(Adw.PreferencesGroup):
         )
         self._learn.connect("notify::active", self._on_learn)
         self.add(self._learn)
+
+        # Spoken replies (decision 0019): made on this computer, downloaded when turned on.
+        self._aloud = Adw.SwitchRow(
+            title="Answer aloud",
+            subtitle="When you ask by voice, Arcee says its answer and its questions too, "
+            "in a voice made on this computer. Closing the pill stops it.",
+            active=settings.speak_replies and installed(SPEECH),
+        )
+        self._aloud.connect("notify::active", self._on_aloud)
+        self._aloud_progress = Gtk.ProgressBar(
+            valign=Gtk.Align.CENTER, width_request=100, visible=False
+        )
+        self._aloud.add_suffix(self._aloud_progress)
+        self.add(self._aloud)
+        self._voice = Adw.ComboRow(
+            title="Arcee's voice",
+            model=Gtk.StringList.new([f"Voice {n + 1}" for n in range(VOICES)]),
+            selected=min(max(settings.voice, 0), VOICES - 1),
+        )
+        self._voice.connect("notify::selected", self._on_voice)
+        hear = Gtk.Button(
+            icon_name="media-playback-start-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text="Hear it",
+        )
+        hear.add_css_class("flat")
+        hear.connect("clicked", lambda _b: self._preview())
+        self._voice.add_suffix(hear)
+        self.add(self._voice)
         self._show_training()
 
     def refresh(self) -> None:
@@ -119,6 +174,10 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._settings.learn_wakes = saved.learn_wakes
         self._listen.set_active(self._settings.listen)
         self._learn.set_active(self._settings.learn_wakes)
+        self._settings.speak_replies = saved.speak_replies
+        self._settings.voice = saved.voice
+        self._aloud.set_active(saved.speak_replies and installed(SPEECH))
+        self._voice.set_selected(min(max(saved.voice, 0), VOICES - 1))
         self._show_training()
 
     def _show_training(self) -> None:
@@ -137,6 +196,7 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._forget.set_visible(trained)
         self._train.set_sensitive(self._settings.listen)
         self._learn.set_sensitive(self._settings.listen and trained)  # learns your samples
+        self._voice.set_sensitive(self._aloud.get_active())
 
     def _open_training(self) -> None:
         WakeTrainingDialog(self._run, self._show_training).present(self.get_root())
@@ -156,6 +216,60 @@ class VoiceGroup(Adw.PreferencesGroup):
         # arceed reads the setting as it learns; reloading the wake word now brings in
         # the samples it learned before (on) or stops matching against them (off).
         self._run(wake_match.hold_wake(False), lambda _none: None)
+
+    def _on_aloud(self, row: Adw.SwitchRow, _param: Any) -> None:
+        on = row.get_active()
+        if on and not installed(SPEECH):
+            row.set_active(False)  # on once the voice is here
+            self._confirm_voice()
+            return
+        if on != self._settings.speak_replies:
+            self._settings.speak_replies = on
+            save_settings(speak_replies=on)
+        self._voice.set_sensitive(on)
+
+    def _on_voice(self, row: Adw.ComboRow, _param: Any) -> None:
+        voice = int(row.get_selected())
+        if voice != self._settings.voice:
+            self._settings.voice = voice
+            save_settings(voice=voice)
+            self._preview()
+
+    def _preview(self) -> None:
+        if installed(SPEECH):
+            self._run(_agent("PreviewVoice", "u", [self._settings.voice]), lambda _none: None)
+
+    def _confirm_voice(self) -> None:
+        dialog = Adw.AlertDialog(
+            heading=f"Download {SPEECH.size_mb} MB?",
+            body="Arcee's voice (Supertonic, from sherpa-onnx's releases on GitHub), kept "
+            "on this computer: answers are said here, nothing is sent anywhere to be said.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("download", "Download")
+        dialog.set_response_appearance("download", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect("response", lambda _d, r: r == "download" and self._fetch_voice())
+        dialog.present(self.get_root())
+
+    def _fetch_voice(self) -> None:
+        self._aloud.set_sensitive(False)
+        self._aloud_progress.set_visible(True)
+
+        def progress(fraction: float) -> None:
+            GLib.idle_add(lambda: self._aloud_progress.set_fraction(fraction) and False)
+
+        def finished(_none: None) -> None:
+            self._aloud.set_sensitive(True)
+            self._aloud_progress.set_visible(False)
+            self._aloud.set_active(True)  # now that the voice is here
+            self._preview()
+
+        def failed(error: BaseException) -> None:
+            self._aloud.set_sensitive(True)
+            self._aloud_progress.set_visible(False)
+            self._toast(f"Could not download: {error}")
+
+        self._run(download(SPEECH, progress), finished, failed)
 
     def _on_listen(self, row: Adw.SwitchRow, _param: Any) -> None:
         on = row.get_active()

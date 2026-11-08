@@ -271,7 +271,10 @@ class ArceeWindow(Adw.ApplicationWindow):
         saved = load()
         self._settings.listen = saved.listen
         self._settings.always_allow = saved.always_allow
-        self._settings.learn_wakes = saved.learn_wakes  # saved by its switch at once
+        # Saved by Settings → Voice at once.
+        self._settings.learn_wakes = saved.learn_wakes
+        self._settings.speak_replies = saved.speak_replies
+        self._settings.voice = saved.voice
         save(self._settings)
 
     def _saved(self) -> None:

@@ -47,6 +47,10 @@ class Settings:
     # (2026-11-08): while false wakes still came, it pulled the wake word toward ordinary
     # speech. Settings → Voice turns it on.
     learn_wakes: bool = False
+    # Say the answer to a spoken request aloud, and its questions (decision 0019), with
+    # a voice made on this computer. Off until the user turns it on (it downloads it).
+    speak_replies: bool = False
+    voice: int = 0  # which of Supertonic's voices, 0-9
     # Learn from finished tasks (their summaries and facts) and bring back what matters
     # (decision 0014). Off: nothing new is remembered and nothing is recalled.
     memory: bool = True
@@ -76,6 +80,7 @@ def load(path: Path | None = None) -> Settings:
     asks = raw.get("always_ask")
     allows = raw.get("always_allow")
     sharing = raw.get("personal_to_cloud")
+    voice = raw.get("voice")
     return Settings(
         core=core if core in CORES else "groq",
         confirm_all=raw.get("confirm_all") is True,
@@ -86,6 +91,8 @@ def load(path: Path | None = None) -> Settings:
         memory=raw.get("memory") is not False,
         listen=raw.get("listen") is True,
         learn_wakes=raw.get("learn_wakes") is True,
+        speak_replies=raw.get("speak_replies") is True,
+        voice=voice if isinstance(voice, int) and 0 <= voice <= 9 else 0,
         personal_to_cloud=sharing if sharing in SHARINGS else "ask",
     )
 
@@ -121,6 +128,17 @@ def save_learn_wakes(on: bool, path: Path | None = None) -> None:
     if settings.learn_wakes != on:
         settings.learn_wakes = on
         save(settings, path)
+
+
+def save_settings(path: Path | None = None, **changed: Any) -> None:
+    """Only the settings named, the rest as saved (Settings → Voice saves its own at once,
+    while the app may hold others unsaved)."""
+    settings = load(path)
+    for name, value in changed.items():
+        if not hasattr(settings, name):
+            raise AttributeError(f"no setting {name!r}")
+        setattr(settings, name, value)
+    save(settings, path)
 
 
 def reminders_pending(history: Path | None = None) -> bool:
