@@ -750,6 +750,11 @@ def plan_brief(plan: PlannerOutput | None, index: int) -> str:
         lines.append(f"{step.id}. [{mark}] {step.do}")
     current = plan.steps[index]
     lines.append(f"Current step: {current.do} Done when: {current.success}")
+    if index > 0:
+        lines.append(
+            "If the earlier steps' notes show this step is already done, reply at once "
+            "with what they found; do not do it again."
+        )
     if plan.constraints:
         lines.append("Constraints: " + "; ".join(plan.constraints))
     last = index + 1 >= len(plan.steps)

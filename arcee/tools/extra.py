@@ -25,6 +25,7 @@ from typing import Any, ClassVar, Final, Literal, Protocol, cast
 from pydantic import Field
 
 from arcee.core.policy import Policy, Tier
+from arcee.jobs import JOBS, Jobs
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
 from arcee.tools.commands import Commands, SystemCommands
 from arcee.tools.files import display, resolve
@@ -387,10 +388,13 @@ _CHANGES: Final = frozenset(
 
 
 class WaitForArgs(ToolArgs):
-    event: Literal["file_exists", "file_done", "window_opens", "window_closes", "program_exits"]
+    event: Literal[
+        "file_exists", "file_done", "window_opens", "window_closes", "program_exits", "job_done"
+    ]
     target: str = Field(
         min_length=1,
-        description="The file's path, the window's app or title, or the program's name",
+        description="The file's path, the window's app or title, the program's name, or the "
+        "job id from shell.start",
     )
     timeout_s: int = Field(default=60, ge=1, le=600, description="Give up after this long")
 
@@ -399,7 +403,8 @@ class WaitFor(Tool[WaitForArgs]):
     name = "control.wait_for"
     description = (
         "Wait until something happens, and go on the moment it does: a file appears or stops "
-        "growing (a download), a window opens or closes, a program exits."
+        "growing (a download), a window opens or closes, a program exits, a background job "
+        "(shell.start) ends."
     )
     usage = Usage(
         when="After starting something that takes a while: an app opening, a download, an "
@@ -417,9 +422,11 @@ class WaitFor(Tool[WaitForArgs]):
         self,
         windows: Callable[[], list[dict[str, Any]]] | None = None,
         commands: Commands | None = None,
+        jobs: Jobs | None = None,
     ) -> None:
         self._windows = windows
         self._commands = commands or SystemCommands()
+        self._jobs = jobs or JOBS
 
     def _window_list(self) -> list[dict[str, Any]]:
         if self._windows is not None:
@@ -432,6 +439,14 @@ class WaitFor(Tool[WaitForArgs]):
         self, args: WaitForArgs, ctx: ToolContext, state: dict[str, Any]
     ) -> str | None:
         """What happened, or None while waiting."""
+        if args.event == "job_done":
+            job = self._jobs.get(args.target)
+            if job is None:
+                raise LookupError(f"there is no job {args.target!r} (job.check lists them)")
+            if not job.done:
+                return None
+            job.seen = True
+            return f"{job.id} {job.state()}; job.check(job={job.id!r}) shows its output"
         if args.event in ("file_exists", "file_done"):
             path = resolve(args.target, ctx)
             if not path.exists():

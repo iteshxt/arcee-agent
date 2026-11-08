@@ -24,7 +24,7 @@ from arcee.context.redact import redact, redact_value
 from arcee.core.executor import ActionRecord
 from arcee.core.protocol import PlannerOutput
 
-SCHEMA_VERSION: Final = 6
+SCHEMA_VERSION: Final = 7
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,
@@ -150,6 +150,9 @@ class ReminderRow:
     fired: float | None
     # "", or how it comes again once fired: daily, weekdays, weekends, weekly.
     repeat: str = ""
+    # A follow-up's own facts (decision 0020): the request it continues and what it
+    # watches, as JSON. Empty for the user's timers, reminders, alarms and routines.
+    detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +236,9 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, due);
 """
-_REMINDER_COLUMNS: Final = "id, text, due, created, kind, status, fired, COALESCE(repeat, '')"
+_REMINDER_COLUMNS: Final = (
+    "id, text, due, created, kind, status, fired, COALESCE(repeat, ''), COALESCE(detail, '')"
+)
 
 # Version 5: what happened each day and each week, in a few sentences (spec section 8's
 # summary hierarchy: step, task, day, week). Written by arceed after the day or the week
@@ -306,6 +311,10 @@ class Store:
                 columns = {row[1] for row in self._db.execute("PRAGMA table_info(reminders)")}
                 if "repeat" not in columns:
                     self._db.execute("ALTER TABLE reminders ADD COLUMN repeat TEXT")
+            if version < 7:  # 7: Arcee's own follow-ups (decision 0020)
+                columns = {row[1] for row in self._db.execute("PRAGMA table_info(reminders)")}
+                if "detail" not in columns:
+                    self._db.execute("ALTER TABLE reminders ADD COLUMN detail TEXT")
             self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -739,14 +748,15 @@ class Store:
         kind: str = "reminder",
         task_id: str | None = None,
         repeat: str = "",
+        detail: str = "",
     ) -> str:
         reminder_id = f"r_{secrets.token_hex(4)}"
 
         def write() -> None:
             with self._db:
                 self._db.execute(
-                    "INSERT INTO reminders (id, text, due, created, kind, task_id, repeat) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO reminders (id, text, due, created, kind, task_id, repeat, detail) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         reminder_id,
                         redact(text.strip()),
@@ -755,6 +765,7 @@ class Store:
                         kind,
                         task_id,
                         repeat or None,
+                        detail or None,
                     ),
                 )
 

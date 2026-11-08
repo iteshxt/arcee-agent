@@ -108,6 +108,8 @@ class TaskRunner:
         self._usable: list[ModelAdapter] = []
         # Set by whoever cancels a run because the user pressed Stop.
         self.stopped = False
+        # The task running now (background jobs wait for theirs to end, decision 0020).
+        self.current_task: str | None = None
 
     async def check(self) -> tuple[list[str], str | None]:
         """Notes about skipped tiers, and why nothing can run (None when it can).
@@ -187,6 +189,7 @@ class TaskRunner:
         )
         started = time.monotonic()
         self.stopped = False
+        self.current_task = task_id
         try:
             outcome = await agent.run(
                 request,
@@ -207,6 +210,8 @@ class TaskRunner:
             # A crash (the shell not answering) left the task "running" in History.
             await self._finish(task_id, "failed", f"{type(exc).__name__}: {exc}", plans)
             raise
+        finally:
+            self.current_task = None
         await self.store.finish_task(
             task_id,
             status=outcome.status,
