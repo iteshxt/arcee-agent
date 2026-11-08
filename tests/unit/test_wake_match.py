@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from arcee import wake_match
+from arcee.settings import load as load_settings
+from arcee.settings import save_learn_wakes
 from arcee.voice import VoiceError
 from arcee.wake_match import HOP, WIN, Trained, distance, log_mel, normalise, train
 
@@ -18,9 +20,9 @@ def data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def learning(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Learning from wakes, off for now (2026-11-08) but kept: its tests turn it on."""
-    monkeypatch.setattr(wake_match, "LEARNING", True)
+def learning() -> None:
+    """Learning from wakes, off by default (2026-11-08): turned on in Settings → Voice."""
+    save_learn_wakes(True)
 
 
 def sweep(start_hz: float, end_hz: float, seconds: float, seed: int = 0) -> list[float]:
@@ -250,6 +252,13 @@ def test_with_learning_off_nothing_is_learned_or_used() -> None:
     loaded = wake_match.load()
     assert loaded is not None
     assert loaded.learned == []
+    # They stay in the file: turned on in Settings → Voice, they are used again.
+    assert not load_settings().learn_wakes  # off by default
+    save_learn_wakes(True)
+    assert load_settings().learn_wakes
+    again = wake_match.load()
+    assert again is not None
+    assert len(again.learned) == 1
 
 
 def test_the_threshold_sits_a_quarter_of_the_way_to_ordinary_speech() -> None:

@@ -73,3 +73,17 @@ def test_listening_is_switched_alone(tmp_path: Path) -> None:
     saved = load(path)
     assert not saved.listen
     assert saved.memory is False  # what the app holds is not touched
+
+
+def test_learning_from_wakes_is_off_until_switched_on_alone(tmp_path: Path) -> None:
+    from arcee.settings import save_learn_wakes
+
+    path = tmp_path / "settings.json"
+    assert not load(path).learn_wakes  # no settings yet
+    save(Settings(listen=True, core="local"), path)
+    assert not load(path).learn_wakes  # saved before there was such a setting
+    save_learn_wakes(True, path)
+    saved = load(path)
+    assert saved.learn_wakes
+    assert saved.listen  # the rest as it was
+    assert saved.core == "local"

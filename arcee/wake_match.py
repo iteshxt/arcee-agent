@@ -37,10 +37,6 @@ SAMPLES: Final = 3
 STOP_SAMPLES: Final = 2  # and "Arcee stop"s
 # Samples learned from wakes the user went on to use: at most this many, newest kept.
 MAX_LEARNED: Final = 3
-# Learning from wakes is off (2026-11-08): with false wakes still coming, a wake's
-# words did not show it was meant, and samples learned from them pulled the wake word
-# toward ordinary speech. Learned samples are neither kept nor used while it is off.
-LEARNING: Final = False
 # Where between the samples' own spread and the ordinary sentence the threshold sits.
 # 0.4 let a stretch of the user's talk wake Arcee at 0.098 among real wakes at
 # 0.084-0.108 (2026-11-08); 0.25 would have kept it out.
@@ -386,6 +382,17 @@ def save(trained: Trained) -> None:
     path.write_text(json.dumps(data))
 
 
+def learning() -> bool:
+    """Whether wakes the user went on to use are learned (Settings → Voice, "Learn from
+    your wakes"). Off by default (2026-11-08): with false wakes still coming, a wake's
+    words did not show it was meant, and samples learned from them pulled the wake word
+    toward ordinary speech. While it is off, learned samples are neither kept nor used;
+    those already saved stay in the file for when it is turned on again."""
+    from arcee.settings import load as settings
+
+    return settings().learn_wakes
+
+
 def load(check: bool = True) -> Trained | None:
     """The user's trained wake word, if they trained one (and since its samples were
     last made the way they are now). Learned samples that are not `sure` are dropped
@@ -404,7 +411,7 @@ def load(check: bool = True) -> Trained | None:
             frames(data.get("stops", [])),  # trained before "Arcee stop" was: none
             float(data.get("stop_threshold", 0.0)),
         )
-        learned = frames(data.get("learned", [])) if LEARNING else []
+        learned = frames(data.get("learned", [])) if learning() else []
         if check:  # learned before the rule was this strict: only the sure ones
             learned = [heard for heard in learned if sure(trained, heard)]
         return Trained(
@@ -432,7 +439,7 @@ def learned_from(trained: Trained, heard: Frames) -> Trained:
     request) kept as a sample too: the newest MAX_LEARNED, the trained ones never
     replaced. Kept as their sound, as the trained ones are. Only a `sure` match of the
     trained samples is kept: never one that only a learned sample came near."""
-    if not LEARNING or len(heard) < SHORTEST_S * RATE // HOP or not sure(trained, heard):
+    if not learning() or len(heard) < SHORTEST_S * RATE // HOP or not sure(trained, heard):
         return trained
     learned = [*trained.learned, heard][-MAX_LEARNED:]
     return Trained(
