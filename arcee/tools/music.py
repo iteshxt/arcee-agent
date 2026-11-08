@@ -102,6 +102,8 @@ class MediaPlay(BrowserTool[PlayArgs]):
         when='"Play Arijit Singh on Spotify", "play Blinding Lights", "put on my liked '
         'songs", "play some lo-fi playlist".',
         avoid="Pause, skip or resume what is already playing: media.control.",
+        mistakes="Opening Spotify or Chrome afterwards (app.open, browser.navigate): media.play "
+        "already did, and says what is playing; reply with that.",
         example='media.play(query="Arijit Singh", kind="artist")',
     )
     args_model = PlayArgs
