@@ -125,7 +125,7 @@ def task_registry(home: Path, *, shell_limits: bool = True) -> Registry:
             FsCopy(),
             FsOpen(command=("true",)),
             AppList(),
-            AppOpen(command=("true",)),
+            AppOpen(command=("true",), window_wait_s=0),  # "true" opens no window
             SystemStatus(),
             NetworkStatus(),
             ShellRun(limits=shell_limits),
