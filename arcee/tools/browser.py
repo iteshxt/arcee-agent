@@ -31,6 +31,24 @@ RISKY_CLICK: Final = re.compile(
 SECRET_FIELD: Final = re.compile(
     r"password|passcode|card|cvv|cvc|cc-|iban|otp|one-time", re.IGNORECASE
 )
+# The step that spends the user's money (SHOP-007): Arcee stops here, whatever was allowed;
+# the user presses it. Getting to the cart and the checkout page still only asks.
+PAYMENT_CLICK: Final = re.compile(
+    r"\b(pay( now| securely| ₹| rs\.?| inr| \$|$)|place (your )?order|buy now|complete "
+    r"(your )?(purchase|payment|order)|confirm (and )?(pay|payment|purchase|order)|"
+    r"make payment|proceed to pay|book (and|&) pay|submit payment)",
+    re.IGNORECASE,
+)
+# Card details are the user's to type: never Arcee's.
+CARD_FIELD: Final = re.compile(
+    r"cc-number|cc-csc|cc-exp|card ?number|cardnumber|cvv|cvc|security code|expiry|"
+    r"upi pin|\bpin\b",
+    re.IGNORECASE,
+)
+STOP_AT_PAYMENT: Final = (
+    "Arcee stops at payment: the user pays (presses it, or types the card details) "
+    "themselves. Tell them it is ready for them."
+)
 
 
 # Chrome cold-starts and loads its extensions in a few seconds on the reference machine.
@@ -469,7 +487,13 @@ class BrowserClick(_BrowserTool[ClickArgs]):
     args_model = ClickArgs
 
     def tier_for(self, args: ClickArgs, policy: Policy) -> Tier:
-        return Tier.CONFIRM if RISKY_CLICK.search(_label(self.session, args.target)) else Tier.AUTO
+        label = _label(self.session, args.target)
+        if PAYMENT_CLICK.search(label.strip()):
+            return Tier.NEVER
+        return Tier.CONFIRM if RISKY_CLICK.search(label) else Tier.AUTO
+
+    def refusal(self, args: ClickArgs, policy: Policy) -> str:
+        return STOP_AT_PAYMENT
 
     def sentence(self, args: ClickArgs) -> str:
         return f"Click “{_label(self.session, args.target) or args.target}” in Chrome?"
@@ -515,7 +539,12 @@ class BrowserFill(_BrowserTool[FillArgs]):
     def tier_for(self, args: FillArgs, policy: Policy) -> Tier:
         element = self.session.element(args.target)
         described = " ".join(str(element.get(k, "")) for k in ("type", "autocomplete", "name"))
+        if CARD_FIELD.search(described):
+            return Tier.NEVER
         return Tier.CONFIRM if SECRET_FIELD.search(described) else Tier.AUTO
+
+    def refusal(self, args: FillArgs, policy: Policy) -> str:
+        return STOP_AT_PAYMENT
 
     def sentence(self, args: FillArgs) -> str:
         return f"Type into “{_label(self.session, args.target) or args.target}” in Chrome?"
