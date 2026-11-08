@@ -7,6 +7,7 @@ from arcee.tools.browser import BrowserSession, browser_tools
 from arcee.tools.calendar import calendar_tools
 from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
 from arcee.tools.desktop import desktop_tools
+from arcee.tools.desktop_settings import settings_tools
 from arcee.tools.files import (
     FsCopy,
     FsList,
@@ -61,6 +62,7 @@ def builtin_registry(
             WebWeather(),
             MediaControl(),
             MediaNowPlaying(),
+            *settings_tools(),
             *calendar_tools(),
             *mail_tools(),
             WebFetch(),
