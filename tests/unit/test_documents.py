@@ -1,5 +1,6 @@
 """Documents read and made, recent files, drives, photos, printing."""
 
+import importlib.util
 import json
 import shutil
 import zipfile
@@ -31,6 +32,9 @@ from arcee.tools.documents import (
 from arcee.tools.files import FsCopy, FsRead, MoveArgs, ReadArgs
 
 TESSERACT = shutil.which("tesseract") is not None
+# PDFs are drawn with the system's Pango and Cairo (python3-cairo, PyGObject): CI's
+# plain Python has neither.
+CAIRO = all(importlib.util.find_spec(name) is not None for name in ("cairo", "gi"))
 
 
 def ctx(tmp_path: Path) -> ToolContext:
@@ -92,7 +96,13 @@ def test_markdown_becomes_a_document_page() -> None:
     assert "<td>2</td>" in page
 
 
-@pytest.mark.parametrize("suffix", [".docx", ".pdf"])
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        ".docx",
+        pytest.param(".pdf", marks=pytest.mark.skipif(not CAIRO, reason="no Pango/Cairo")),
+    ],
+)
 async def test_a_document_is_made_and_read_back(tmp_path: Path, suffix: str) -> None:
     tool = DocCreate()
     args = DocArgs(
