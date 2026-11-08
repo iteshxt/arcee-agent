@@ -86,6 +86,14 @@ class Players:
         finally:
             bus.disconnect()
 
+    async def open_uri(self, bus_name: str, uri: str) -> None:
+        """Ask a player to open and play `uri` (Spotify: spotify:track:<id>)."""
+        bus = await self._connect()
+        try:
+            await _call(bus, bus_name, PATH, PLAYER, "OpenUri", "s", (uri,))
+        finally:
+            bus.disconnect()
+
     async def command(self, player: Player, method: str) -> None:
         bus = await self._connect()
         try:

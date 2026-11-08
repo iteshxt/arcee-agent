@@ -183,6 +183,11 @@ class _BrowserTool[A: ToolArgs](Tool[A]):
         return None
 
 
+# For tools elsewhere that work in Chrome through the same session (media.play,
+# whatsapp.send).
+BrowserTool = _BrowserTool
+
+
 # --- tabs and navigation --------------------------------------------------------
 
 
