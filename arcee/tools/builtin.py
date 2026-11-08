@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 from arcee.tools.apps import AppList, AppOpen
-from arcee.tools.browser import BrowserSession, browser_tools
+from arcee.tools.browser import BrowserSession, browser_tools, launch_chrome, show_chrome
 from arcee.tools.calendar import calendar_tools
 from arcee.tools.capture import capture_tools
 from arcee.tools.clock import clock_tools
@@ -28,6 +28,7 @@ from arcee.tools.mail import mail_tools
 from arcee.tools.markets import market_tools
 from arcee.tools.media import MediaControl, MediaNowPlaying
 from arcee.tools.memory import Memory, memory_tools
+from arcee.tools.music import MediaPlay
 from arcee.tools.registry import Registry
 from arcee.tools.reminders import Reminders, reminder_tools
 from arcee.tools.screen import screen_tools
@@ -36,6 +37,7 @@ from arcee.tools.system import NetworkStatus, SystemStatus
 from arcee.tools.travel import travel_tools
 from arcee.tools.voice import Say, VoiceSay
 from arcee.tools.web import WebFetch, WebNews, WebSearch, WebWeather
+from arcee.tools.whatsapp import WhatsAppSend
 from arcee.tools.windows import window_tools
 
 
@@ -49,6 +51,8 @@ def builtin_registry(
 ) -> Registry:
     """Every built-in tool: files, system facts, shell, then the control tools; and the
     memory and reminder tools when there is a store to back them."""
+    # One Chrome session for every tool that works in the browser.
+    chrome = browser or BrowserSession(launch=launch_chrome, show=show_chrome)
     return Registry(
         [
             FsList(),
@@ -69,6 +73,7 @@ def builtin_registry(
             WebWeather(),
             MediaControl(),
             MediaNowPlaying(),
+            MediaPlay(chrome),
             *settings_tools(),
             *capture_tools(),
             *document_tools(),
@@ -79,7 +84,8 @@ def builtin_registry(
             *calendar_tools(),
             *mail_tools(),
             WebFetch(),
-            *browser_tools(browser),
+            *browser_tools(chrome),
+            WhatsAppSend(chrome),
             *desktop_tools(),
             *screen_tools(),
             *window_tools(),

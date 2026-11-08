@@ -37,6 +37,8 @@ WEB: Final = ("web.*", "convert.*", "market.*", "maps.*")
 # Trains (and a flight search to open): SHOP-005, FLOW-008.
 TRAVEL: Final = ("travel.*", "web.*", "maps.*")
 MEDIA: Final = ("media.*",)
+# WhatsApp Web in Chrome: sending through whatsapp.send, reading with the browser tools.
+WHATSAPP: Final = ("whatsapp.*", "browser.*")
 CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*", "share.*", "contacts.*")
 REMINDERS: Final = ("reminder.*", "routine.*", "time.*")
@@ -189,6 +191,7 @@ _DOCS_REQUEST: Final = _words(
     r"photos? to|compress (the |this |these )?(photos?|images?)|print(er|ing)?|"
     r"receipts?|scan(ned)?)\b"
 )
+_WHATSAPP_REQUEST: Final = _words(r"\b(whats ?app|wa message)\b")
 _TRAVEL_REQUEST: Final = _words(
     r"\b(trains?|railways?|rail|irctc|tatkal|stations?|shatabdi|rajdhani|vande bharat|"
     r"flights?|fly(ing)? to|airfare|plane tickets?|(book|get) (a |the )?tickets? to|"
@@ -307,6 +310,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (DOCS, _DOCS_REQUEST, "doc"),
             (LATER, _LATER_REQUEST, "job"),
             (TRAVEL, _TRAVEL_REQUEST, "travel"),
+            (WHATSAPP, _WHATSAPP_REQUEST, "whatsapp"),
         )
         if pattern.search(request) or namespace in namespaces
     ]

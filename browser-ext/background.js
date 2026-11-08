@@ -146,6 +146,15 @@ async function handle(method, params) {
       const tab = await activeTab(params.tab);
       return inPage(tab.id, readText, [params.selector || "", params.max_chars || 4000]);
     }
+    case "select": {
+      // For Arcee's own tools (music.play), never the model: the elements matching a CSS
+      // selector, waited for up to wait_ms, read (text, href) or the first one clicked.
+      const tab = await activeTab(params.tab);
+      return inPage(tab.id, selectElements, [
+        params.selector, params.action || "read", params.wait_ms || 0, params.limit || 10,
+        params.match || "", params.text || "",
+      ]);
+    }
     case "scroll": {
       const tab = await activeTab(params.tab);
       return inPage(tab.id, scrollPage, [params.direction || "down", params.amount || 0.8]);
@@ -238,6 +247,44 @@ function clickElement(target) {
   }
   el.click();
   return { clicked: target, url: location.href, title: document.title };
+}
+
+async function selectElements(selector, action, waitMs, limit, match, text) {
+  // `match`: only elements whose words (text, title or label) contain it, exact first.
+  const wanted = match.trim().toLowerCase();
+  const words = (el) => (el.innerText || el.getAttribute("title") || el.getAttribute("aria-label") || "").trim();
+  const pick = () => {
+    const all = [...document.querySelectorAll(selector)];
+    if (!wanted) return all;
+    const exact = all.filter((el) => words(el).toLowerCase() === wanted);
+    return exact.length ? exact : all.filter((el) => words(el).toLowerCase().includes(wanted));
+  };
+  const deadline = Date.now() + waitMs;
+  let found = pick();
+  while (!found.length && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    found = pick();
+  }
+  if (action === "click" || action === "type") {
+    if (!found.length) return { done: false, url: location.href };
+    const el = found[0];
+    el.scrollIntoView({ block: "center" });
+    if (action === "click") {
+      el.click();
+    } else {
+      el.focus();
+      // Typed as the browser types (insertText), which React and editors like Lexical
+      // see; a value set directly is undone by the page's own state.
+      if (el.isContentEditable) document.execCommand("selectAll", false);
+      else el.select();
+      document.execCommand("insertText", false, text);
+    }
+    return { done: true, text: words(el).slice(0, 200), url: location.href, title: document.title };
+  }
+  return found.slice(0, limit).map((el) => ({
+    text: words(el).slice(0, 200),
+    href: el.href || el.getAttribute("href") || "",
+  }));
 }
 
 function fillElement(target, text, submit) {
