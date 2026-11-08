@@ -189,11 +189,11 @@ async def test_forgetting_a_task_drops_the_day_that_told_of_it(tmp_path: Path) -
     store.close()
 
 
-def test_the_store_is_at_version_5(tmp_path: Path) -> None:
+def test_the_store_has_the_periods_table(tmp_path: Path) -> None:
     store = Store(tmp_path)
     store.close()
     with sqlite3.connect(tmp_path / "history.db") as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION >= 5
         assert db.execute("SELECT COUNT(*) FROM periods").fetchone()[0] == 0
 
 
