@@ -27,7 +27,7 @@ from arcee.voice import VoiceError  # noqa: E402
 Runner = Callable[..., Any]  # (work, done[, failed]) -> its future, as Background.run
 SENTENCE: Final = "“Hey, what's the weather like today?”"
 ABOUT: Final = (
-    "You will say “Hey Arcee” five times, “Arcee stop” twice, then one ordinary "
+    "You will say “Hey Arcee” three times, “Arcee stop” twice, then one ordinary "
     "sentence. Say them the way you naturally do, run together or with a pause, from "
     "where you usually sit. It takes about half a minute."
 )

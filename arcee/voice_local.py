@@ -335,7 +335,7 @@ class WakeListener:
         """The request after the last wake was real (`meant`): its "hey Arcee" becomes
         a sample of the wake word too; else it is forgotten."""
         candidate, self._candidate = self._candidate, None
-        if not meant or candidate is None or self.trained is None:
+        if not wake_match.LEARNING or not meant or candidate is None or self.trained is None:
             return
         learned = wake_match.learned_from(self.trained, candidate)
         if learned is self.trained:
