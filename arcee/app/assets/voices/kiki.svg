@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff6a5"/>
+      <stop offset="1" stop-color="#ffb347"/>
+    </linearGradient>
+    <clipPath id="round"><circle cx="48" cy="48" r="48"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+  <rect width="96" height="96" fill="url(#bg)"/>
+  <circle cx="74" cy="20" r="22" fill="#ffffff" opacity="0.10"/>
+  <circle cx="33" cy="22" r="8" fill="#1b1b2f"/><circle cx="63" cy="22" r="8" fill="#1b1b2f"/>
+  <path d="M14 96 C16 80 30 72 48 72 C66 72 80 80 82 96 Z" fill="#7b5cff"/>
+  <path d="M41 62 h14 v12 c-4 4 -10 4 -14 0 Z" fill="#f7d6bf"/>
+  <path d="M41 66 h14 v4 c-4 2 -10 2 -14 0 Z" fill="#000000" opacity="0.10"/>
+  <ellipse cx="48" cy="46" rx="17" ry="20" fill="#f7d6bf"/>
+  <ellipse cx="31.5" cy="48" rx="3" ry="4.5" fill="#f7d6bf"/>
+  <ellipse cx="64.5" cy="48" rx="3" ry="4.5" fill="#f7d6bf"/>
+  <ellipse cx="41.5" cy="47" rx="2" ry="2.6" fill="#2b2230"/>
+  <ellipse cx="54.5" cy="47" rx="2" ry="2.6" fill="#2b2230"/>
+  <circle cx="42.2" cy="46.1" r="0.7" fill="#ffffff"/>
+  <circle cx="55.2" cy="46.1" r="0.7" fill="#ffffff"/>
+  <path d="M38 41.5 q3.5 -2.2 7 -0.6" stroke="#2b2230" stroke-width="1.4" fill="none" stroke-linecap="round" opacity="0.75"/>
+  <path d="M51 40.9 q3.5 -1.6 7 0.6" stroke="#2b2230" stroke-width="1.4" fill="none" stroke-linecap="round" opacity="0.75"/>
+  <path d="M47 50 q1 3 2.4 2.6" stroke="#000000" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.18"/>
+  <path d="M43 56.5 q5 4.2 10 0" stroke="#b5485a" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <ellipse cx="38" cy="53.5" rx="3.4" ry="2.1" fill="#ff7a8a" opacity="0.45"/>
+  <ellipse cx="58" cy="53.5" rx="3.4" ry="2.1" fill="#ff7a8a" opacity="0.45"/>
+  <path d="M30 44 C29 28 39 21 50 21 C61 21 68 28 67 43 C64 36 58 32 52 33 C48 30 42 31 38 34 C34 37 31 40 30 44 Z" fill="#1b1b2f"/>
+  <path d="M64 30 l1.6 3.3 l3.6 0.5 l-2.6 2.5 l0.6 3.6 l-3.2 -1.7 l-3.2 1.7 l0.6 -3.6 l-2.6 -2.5 l3.6 -0.5 Z" fill="#ffd400" stroke="#e0a800" stroke-width="0.6"/>
+  </g>
+</svg>
