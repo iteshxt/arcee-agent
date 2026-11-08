@@ -18,7 +18,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from arcee import voice_local, wake_match  # noqa: E402
 from arcee.app.wake_training import WakeTrainingDialog  # noqa: E402
-from arcee.settings import load, save_listen  # noqa: E402
+from arcee.settings import load, save_learn_wakes, save_listen  # noqa: E402
 from arcee.voice_local import MODELS, VoiceModel, installed  # noqa: E402
 
 
@@ -100,12 +100,25 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._train.add_suffix(self._forget)
         self._train.add_suffix(self._train_button)
         self.add(self._train)
+
+        self._learn = Adw.SwitchRow(
+            title="Learn from your wakes",
+            subtitle="A “Hey Arcee” you go on to use, if it is as close to your training "
+            "as your samples are to each other, becomes a sample too. Off by default: a "
+            "false wake can teach it ordinary speech.",
+            active=settings.learn_wakes,
+        )
+        self._learn.connect("notify::active", self._on_learn)
+        self.add(self._learn)
         self._show_training()
 
     def refresh(self) -> None:
         """Show the settings as they are now (first-run setup may have changed them)."""
-        self._settings.listen = load().listen  # the panel may have switched it
+        saved = load()
+        self._settings.listen = saved.listen  # the panel may have switched it
+        self._settings.learn_wakes = saved.learn_wakes
         self._listen.set_active(self._settings.listen)
+        self._learn.set_active(self._settings.learn_wakes)
         self._show_training()
 
     def _show_training(self) -> None:
@@ -123,6 +136,7 @@ class VoiceGroup(Adw.PreferencesGroup):
             self._train_button.remove_css_class("suggested-action")
         self._forget.set_visible(trained)
         self._train.set_sensitive(self._settings.listen)
+        self._learn.set_sensitive(self._settings.listen and trained)  # learns your samples
 
     def _open_training(self) -> None:
         WakeTrainingDialog(self._run, self._show_training).present(self.get_root())
@@ -132,6 +146,16 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._run(wake_match.hold_wake(False), lambda _none: None)  # arceed forgets it too
         self._show_training()
         self._toast("Forgot the training.")
+
+    def _on_learn(self, row: Adw.SwitchRow, _param: Any) -> None:
+        on = row.get_active()
+        if on == self._settings.learn_wakes:
+            return
+        self._settings.learn_wakes = on
+        save_learn_wakes(on)
+        # arceed reads the setting as it learns; reloading the wake word now brings in
+        # the samples it learned before (on) or stops matching against them (off).
+        self._run(wake_match.hold_wake(False), lambda _none: None)
 
     def _on_listen(self, row: Adw.SwitchRow, _param: Any) -> None:
         on = row.get_active()

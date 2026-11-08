@@ -42,6 +42,11 @@ class Settings:
     # Listen for "hey Arcee" (decision 0015): the wake word here, the request to Groq.
     # Off until the user turns it on.
     listen: bool = False
+    # Keep a "hey Arcee" the user went on to use as a sample of the wake word too, when
+    # it is as close to the training as the samples are to each other. Off by default
+    # (2026-11-08): while false wakes still came, it pulled the wake word toward ordinary
+    # speech. Settings → Voice turns it on.
+    learn_wakes: bool = False
     # Learn from finished tasks (their summaries and facts) and bring back what matters
     # (decision 0014). Off: nothing new is remembered and nothing is recalled.
     memory: bool = True
@@ -80,6 +85,7 @@ def load(path: Path | None = None) -> Settings:
         extension_turned_on=raw.get("extension_turned_on") is True,
         memory=raw.get("memory") is not False,
         listen=raw.get("listen") is True,
+        learn_wakes=raw.get("learn_wakes") is True,
         personal_to_cloud=sharing if sharing in SHARINGS else "ask",
     )
 
@@ -105,6 +111,15 @@ def save_listen(on: bool, path: Path | None = None) -> None:
     settings = load(path)
     if settings.listen != on:
         settings.listen = on
+        save(settings, path)
+
+
+def save_learn_wakes(on: bool, path: Path | None = None) -> None:
+    """Only "Learn from your wakes", the rest as saved: arceed reads it as it learns, and
+    reloads the wake word (with or without what it learned) when told to."""
+    settings = load(path)
+    if settings.learn_wakes != on:
+        settings.learn_wakes = on
         save(settings, path)
 
 

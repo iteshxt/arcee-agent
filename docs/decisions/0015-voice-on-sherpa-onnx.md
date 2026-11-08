@@ -149,9 +149,11 @@ it led to, the user's real wakes came at 0.084-0.108 and a stretch of their talk
 don't think I have enough time to sit for a while…") at 0.098, under a threshold of
 0.116: real and false overlap, and no threshold parts them cleanly. At the user's word:
 
-- Learning from wakes is off (`wake_match.LEARNING`): a wake's words did not show it
+- Learning from wakes is off by default (Settings → Voice, "Learn from your wakes"): a wake's words did not show it
   was meant, and learned samples pulled the wake word toward ordinary speech. Learned
-  samples are neither kept nor used; the code stays for when wakes can be trusted.
+  samples are neither kept nor used while it is off; those already saved stay in the
+  file, and the switch (`learn_wakes`, read by arceed as it learns) brings them back,
+  still only the `sure` ones. Switching it reloads arceed's wake word at once.
 - Training asks for three samples again: five gave more chances for one unlike the
   rest, which loosened the threshold.
 - The threshold sits a quarter of the way from the samples' spread to the ordinary
