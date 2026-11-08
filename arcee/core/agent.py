@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal, Protocol, cast
 
 from arcee.context.examples import ExampleLibrary
 from arcee.context.examples import render as render_examples
@@ -63,6 +63,16 @@ EMPTY_LOOKUPS_BEFORE_ASKING: Final = 3
 # Room for a reasoning trace on the thinking tier as well as the answer.
 MAX_TOKENS: Final = 2048
 SEARCH_TOOLS: Final = frozenset({"fs.search"})
+# Web lookups in one plan step: after WEB_LOOKUPS_NOTE the model is told to answer from
+# what it has; after WEB_LOOKUPS_MAX more are refused. "Hotels in Shimla" ran 15
+# searches, none ever enough, and the task ran out of steps with no answer.
+WEB_LOOKUPS: Final = frozenset({"web.search", "web.fetch", "web.news"})
+WEB_LOOKUPS_NOTE: Final = 6
+WEB_LOOKUPS_MAX: Final = 8
+WEB_ENOUGH: Final = (
+    "You have looked on the web {n} times in this step. That is enough: answer now from "
+    "what the results already show, and say plainly what you could not find."
+)
 CONTROL: Final = frozenset({DONE, ASK_USER, REPLAN})
 MAX_REPLANS: Final = 2
 # How much of the latest result joins the request in the example search.
@@ -205,6 +215,7 @@ class _State:
     steps: int = 0
     model_calls: int = 0
     empty_lookups: list[str] = field(default_factory=list[str])
+    web_lookups: dict[int, int] = field(default_factory=dict[int, int])  # per plan step
     # Read calls since the last change: their key -> (index of the result, the result).
     seen: dict[str, tuple[int, str]] = field(default_factory=dict[str, tuple[int, str]])
     grounding_nudges: int = 0
@@ -456,6 +467,14 @@ class Agent:
                 self._emit(Guarded(state.steps, f"blocked a repeat of {valid.tool.name}"))
                 await self._strike(state, "repeated an earlier call")
                 continue
+            if valid.tool.name in WEB_LOOKUPS:
+                done = state.web_lookups.get(state.index, 0)
+                if done >= WEB_LOOKUPS_MAX:
+                    error = WEB_ENOUGH.format(n=done)
+                    self._answer(state, call, json.dumps({"status": "refused", "error": error}))
+                    self._emit(Guarded(state.steps, f"web lookups for this step spent ({done})"))
+                    continue
+                state.web_lookups[state.index] = done + 1
             if valid.tool.personal and (refused := await self._may_share(state, valid.tool)):
                 self._answer(state, call, json.dumps({"status": "refused", "error": refused}))
                 self._emit(Guarded(state.steps, f"{valid.tool.name}: {refused}"))
@@ -483,6 +502,10 @@ class Agent:
                 )
             state.tried.append(result.summary)
             message = tool_message(result)
+            if state.web_lookups.get(state.index) == WEB_LOOKUPS_NOTE and (
+                valid.tool.name in WEB_LOOKUPS
+            ):
+                message = _with_note(message, WEB_ENOUGH.format(n=WEB_LOOKUPS_NOTE))
             self._answer(state, call, message, summary=result.summary)
             # After anything that can change the system or the page, looking again is
             # verification, not a repeat.
@@ -769,6 +792,17 @@ def plan_brief(plan: PlannerOutput | None, index: int) -> str:
         )
     )
     return "\n".join(lines)
+
+
+def _with_note(message: str, note: str) -> str:
+    """A tool message (JSON) with a note for the model added."""
+    try:
+        data: Any = json.loads(message)
+    except json.JSONDecodeError:
+        return f"{message}\n\n{note}"
+    if not isinstance(data, dict):
+        return f"{message}\n\n{note}"
+    return json.dumps({**cast(dict[str, Any], data), "note": note}, ensure_ascii=False)
 
 
 def _key(call: ToolCall) -> str:

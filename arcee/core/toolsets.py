@@ -34,6 +34,8 @@ BROWSER: Final = ("browser.*",)
 # Desktop apps: their window tree first, the screen (OCR, clicks, keys) as fallback.
 DESKTOP: Final = ("ui.*", "screen.*", "kbd.*", "window.*")
 WEB: Final = ("web.*", "convert.*", "market.*", "maps.*")
+# Trains (and a flight search to open): SHOP-005, FLOW-008.
+TRAVEL: Final = ("travel.*", "web.*", "maps.*")
 MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*", "share.*", "contacts.*")
@@ -187,6 +189,11 @@ _DOCS_REQUEST: Final = _words(
     r"photos? to|compress (the |this |these )?(photos?|images?)|print(er|ing)?|"
     r"receipts?|scan(ned)?)\b"
 )
+_TRAVEL_REQUEST: Final = _words(
+    r"\b(trains?|railways?|rail|irctc|tatkal|stations?|shatabdi|rajdhani|vande bharat|"
+    r"flights?|fly(ing)? to|airfare|plane tickets?|(book|get) (a |the )?tickets? to|"
+    r"trip to|travel(l?ing)? to|journey to|getaway|holiday to|vacation to)\b"
+)
 # Something to come back to: a job left running, a page or file to watch, a check later.
 _LATER_REQUEST: Final = _words(
     r"\b(in the background|background (job|task|command)s?|"
@@ -299,6 +306,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (CAPTURE, _CAPTURE_REQUEST, "clipboard"),
             (DOCS, _DOCS_REQUEST, "doc"),
             (LATER, _LATER_REQUEST, "job"),
+            (TRAVEL, _TRAVEL_REQUEST, "travel"),
         )
         if pattern.search(request) or namespace in namespaces
     ]
