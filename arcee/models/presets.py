@@ -6,6 +6,7 @@ from typing import Final
 from arcee.context.store import data_dir
 from arcee.models.base import ModelAdapter, ModelProfile
 from arcee.models.budget import HeaderBudget
+from arcee.models.fallback import FallbackAdapter
 from arcee.models.ollama import ALL_LAYERS, DEFAULT_HOST, OllamaAdapter
 from arcee.models.openai_compat import OpenAICompatAdapter
 from arcee.models.rotation import RotatingAdapter
@@ -112,9 +113,16 @@ def groq_ladder() -> list[ModelAdapter]:
 
 
 def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
-    """`groq` (default), `local` (the Ollama ladder), or `<provider>:<model id>` as one tier."""
+    """`groq` (default), `local` (the Ollama ladder), or `<provider>:<model id>` as one tier.
+
+    Groq's ranks each have the local model of the same rank behind them: a spent day or
+    Groq out of reach moves the call to this computer instead of failing it."""
     if choice == "groq":
-        return groq_ladder()
+        local = local_core_ladder(host)
+        return [
+            FallbackAdapter(rank, local[min(i, len(local) - 1)])
+            for i, rank in enumerate(groq_ladder())
+        ]
     if choice == "local":
         return list(local_core_ladder(host))
     provider, _, model = choice.partition(":")
@@ -126,13 +134,16 @@ def core_ladder(choice: str, host: str = DEFAULT_HOST) -> list[ModelAdapter]:
 def planner_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     if choice == "groq":
         # Plans are worth the large model; the others plan when it is busy.
-        return RotatingAdapter(
-            [
-                OpenAICompatAdapter.provider(
-                    "groq", cloud_profile(model, schema=True), budget=rate_budget()
-                )
-                for model in (GROQ_LARGE, GROQ_MID, GROQ_SMALL)
-            ]
+        return FallbackAdapter(
+            RotatingAdapter(
+                [
+                    OpenAICompatAdapter.provider(
+                        "groq", cloud_profile(model, schema=True), budget=rate_budget()
+                    )
+                    for model in (GROQ_LARGE, GROQ_MID, GROQ_SMALL)
+                ]
+            ),
+            local_planner(host),
         )
     if choice == "local":
         return local_planner(host)
@@ -146,13 +157,16 @@ def digest_model_for(choice: str, host: str = DEFAULT_HOST) -> ModelAdapter:
     """The Context role (spec section 4): after each task, its summary and facts. The
     cheap model first: a digest is short, and it runs after every task."""
     if choice == "groq":
-        return RotatingAdapter(
-            [
-                OpenAICompatAdapter.provider(
-                    "groq", cloud_profile(model, schema=True), budget=rate_budget()
-                )
-                for model in (GROQ_SMALL, GROQ_MID, GROQ_LARGE)
-            ]
+        return FallbackAdapter(
+            RotatingAdapter(
+                [
+                    OpenAICompatAdapter.provider(
+                        "groq", cloud_profile(model, schema=True), budget=rate_budget()
+                    )
+                    for model in (GROQ_SMALL, GROQ_MID, GROQ_LARGE)
+                ]
+            ),
+            local_planner(host),
         )
     return planner_for(choice, host)  # locally the Planner's LFM3-Omni: no more VRAM
 
