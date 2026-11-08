@@ -913,10 +913,12 @@ async def serve(runner: TaskRunner, bus: MessageBus, *, listen: bool = False) ->
     log.info("arceed ready on the session bus as %s", BUS_NAME)
     service.listen_for_wake(listen)
     reminders = await start_reminders(bus, service)
+    days = asyncio.ensure_future(runner.keep_days())  # day and week summaries
     try:
         await bus.wait_for_disconnect()
     finally:
         service.listen_for_wake(False)
+        days.cancel()
         if reminders is not None:
             reminders.cancel()
 

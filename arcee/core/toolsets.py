@@ -146,7 +146,10 @@ _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forg
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
     r"\b(do you remember|what do you remember|you remembered|recall|forget|memor(y|ies)|"
-    r"do you know|what do you know|know about me)\b"
+    r"do you know|what do you know|know about me|"
+    r"what (did|have) (i|we) (do|did|done|ask|asked|work(ed)? on|been doing)|"
+    r"(did|have) i ask(ed)? you|i asked you|what (was|were) (i|we) (doing|working on)|"
+    r"(my|our) (history|activity) with you)\b"
 )
 # "Open X" may mean a file or an app: it brings in both.
 _OPEN: Final = _words(r"\bopen\b")

@@ -17,7 +17,7 @@ def ctx(tmp_path: Path) -> ToolContext:
 async def test_recall_lists_facts_with_their_ids(tmp_path: Path) -> None:
     store = Store(tmp_path)
     memory_id = await store.save_memory("The user's home station is Abu Road (ABR)", 0.9)
-    recall, _ = memory_tools(store)
+    recall, *_ = memory_tools(store)
     assert isinstance(recall, MemoryRecall)
 
     result = await recall.run(RecallArgs(query="home station"), ctx(tmp_path))
@@ -32,7 +32,7 @@ async def test_recall_lists_facts_with_their_ids(tmp_path: Path) -> None:
 async def test_forgetting_asks_with_the_facts_own_words(tmp_path: Path) -> None:
     store = Store(tmp_path)
     memory_id = await store.save_memory("The user lives in Jaipur", 0.9)
-    recall, forget = memory_tools(store)
+    recall, forget, *_ = memory_tools(store)
     assert isinstance(recall, MemoryRecall)
     assert isinstance(forget, MemoryForget)
     await recall.run(RecallArgs(query="where does the user live"), ctx(tmp_path))
@@ -51,7 +51,7 @@ async def test_forgetting_asks_with_the_facts_own_words(tmp_path: Path) -> None:
 
 async def test_nothing_remembered_says_so(tmp_path: Path) -> None:
     store = Store(tmp_path)
-    recall, _ = memory_tools(store)
+    recall, *_ = memory_tools(store)
     assert isinstance(recall, MemoryRecall)
 
     result = await recall.run(RecallArgs(query="passport number"), ctx(tmp_path))

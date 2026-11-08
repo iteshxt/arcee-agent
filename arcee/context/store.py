@@ -24,7 +24,7 @@ from arcee.context.redact import redact, redact_value
 from arcee.core.executor import ActionRecord
 from arcee.core.protocol import PlannerOutput
 
-SCHEMA_VERSION: Final = 4
+SCHEMA_VERSION: Final = 5
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT PRIMARY KEY,
@@ -192,6 +192,31 @@ class SummaryRow:
     created: float
 
 
+@dataclass(frozen=True, slots=True)
+class DoneRow:
+    """A request in a span of time, with its summary when memory has written one."""
+
+    id: str
+    request: str
+    status: str
+    started: float
+    summary: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PeriodRow:
+    """What happened in one day ("day:2026-11-07") or week ("week:2026-11-02", its
+    Monday), from `start` to `end` (epoch seconds, local midnights)."""
+
+    id: str
+    kind: str  # "day" or "week"
+    start: float
+    end: float
+    text: str
+    tasks: int
+    created: float
+
+
 # Timers and reminders (decision 0018): arceed's scheduler fires each when it is due.
 _REMINDER_SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS reminders (
@@ -207,6 +232,22 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, due);
 """
 _REMINDER_COLUMNS: Final = "id, text, due, created, kind, status, fired"
+
+# Version 5: what happened each day and each week, in a few sentences (spec section 8's
+# summary hierarchy: step, task, day, week). Written by arceed after the day or the week
+# is over, from the task summaries; `memory.history` shows them.
+_PERIOD_SCHEMA: Final = """
+CREATE TABLE IF NOT EXISTS periods (
+    id      TEXT PRIMARY KEY,
+    kind    TEXT NOT NULL,
+    start   REAL NOT NULL,
+    end     REAL NOT NULL,
+    text    TEXT NOT NULL,
+    tasks   INTEGER NOT NULL,
+    created REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS periods_start ON periods(kind, start);
+"""
 
 _MEMORY_COLUMNS: Final = (
     "id, task_id, text, importance, created, COALESCE(updated, created), source"
@@ -258,6 +299,7 @@ class Store:
                 "CREATE INDEX IF NOT EXISTS tasks_conversation ON tasks(conversation, started)"
             )
             self._db.executescript(_REMINDER_SCHEMA)  # 4: timers and reminders
+            self._db.executescript(_PERIOD_SCHEMA)  # 5: day and week summaries
             self._db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -433,6 +475,7 @@ class Store:
                     "DELETE FROM memories WHERE task_id = ?", (task_id,)
                 ).rowcount
                 self._db.execute("DELETE FROM summaries WHERE task_id = ?", (task_id,))
+                self._drop_periods([task_id])
                 return facts
 
         return await self._run(write)
@@ -449,6 +492,10 @@ class Store:
                     ids = [row[0] for row in self._db.execute("SELECT id FROM tasks")]
                 else:
                     ids = list(task_ids)
+                if task_ids is None:
+                    self._db.execute("DELETE FROM periods")
+                else:
+                    self._drop_periods(ids)
                 for table in ("observations", "steps", "summaries"):
                     self._db.executemany(
                         f"DELETE FROM {table} WHERE task_id = ?", [(i,) for i in ids]
@@ -463,6 +510,15 @@ class Store:
             return deleted
 
         return await self._run(write)
+
+    def _drop_periods(self, task_ids: Sequence[str]) -> None:
+        """The day and week summaries that told of these tasks (in a transaction)."""
+        for task_id in task_ids:
+            self._db.execute(
+                "DELETE FROM periods WHERE start <= (SELECT started FROM tasks WHERE id = ?) "
+                "AND end > (SELECT started FROM tasks WHERE id = ?)",
+                (task_id, task_id),
+            )
 
     def _drop_log_lines(self, task_ids: set[str] | None) -> None:
         """The action log without those tasks' lines (None: empty), rewritten in place."""
@@ -579,6 +635,64 @@ class Store:
             return [(SummaryRow(*row[:4]), float(row[4])) for row in rows]
 
         return await self._run(read)
+
+    # --- days and weeks (spec section 8) ---------------------------------------------------
+
+    async def done_between(
+        self, start: float, end: float, *, exclude: str | None = None
+    ) -> list[DoneRow]:
+        """The requests started in [start, end), oldest first, each with its summary."""
+
+        def read() -> list[DoneRow]:
+            rows = self._db.execute(
+                "SELECT t.id, t.request, t.status, t.started, s.text FROM tasks t "
+                "LEFT JOIN summaries s ON s.task_id = t.id "
+                "WHERE t.started >= ? AND t.started < ? AND t.id != ? ORDER BY t.started",
+                (start, end, exclude or ""),
+            ).fetchall()
+            return [DoneRow(*row) for row in rows]
+
+        return await self._run(read)
+
+    async def first_task_time(self) -> float | None:
+        def read() -> float | None:
+            row = self._db.execute("SELECT MIN(started) FROM tasks").fetchone()
+            return None if row is None or row[0] is None else float(row[0])
+
+        return await self._run(read)
+
+    async def periods_between(self, kind: str, start: float, end: float) -> list[PeriodRow]:
+        """The `kind` summaries ("day" or "week") starting in [start, end), oldest first."""
+
+        def read() -> list[PeriodRow]:
+            rows = self._db.execute(
+                "SELECT id, kind, start, end, text, tasks, created FROM periods "
+                "WHERE kind = ? AND start >= ? AND start < ? ORDER BY start",
+                (kind, start, end),
+            ).fetchall()
+            return [PeriodRow(*row) for row in rows]
+
+        return await self._run(read)
+
+    async def save_period(self, row: PeriodRow) -> None:
+        def write() -> None:
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO periods (id, kind, start, end, text, tasks, created) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "text = excluded.text, tasks = excluded.tasks, created = excluded.created",
+                    (
+                        row.id,
+                        row.kind,
+                        row.start,
+                        row.end,
+                        redact(row.text.strip()),
+                        row.tasks,
+                        row.created,
+                    ),
+                )
+
+        await self._run(write)
 
     async def memories(self, limit: int = 50) -> list[tuple[str, str, float]]:
         def read() -> list[tuple[str, str, float]]:

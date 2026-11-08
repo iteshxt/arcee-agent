@@ -61,6 +61,9 @@ class TaskResult:
 log = logging.getLogger(__name__)
 # How long closing waits for digests still running.
 DIGEST_WAIT_S = 30.0
+# After arceed starts, how long before it fills in the days and weeks with no summary
+# (it starts at login, when the user is likely to ask for something first).
+DAYS_DELAY_S = 120.0
 
 
 class TaskRunner:
@@ -266,6 +269,24 @@ class TaskRunner:
             await digest_task(self.digest_model, self.store, task_id, facts=facts)
         except Exception as error:  # memory is an aid: a failed digest loses one summary
             log.warning("could not digest %s: %s", task_id, error)
+
+    async def keep_days(self, *, delay: float = DAYS_DELAY_S) -> None:
+        """arceed, while it runs: write the summaries of the days and weeks that are over
+        (spec section 8), soon after it starts and then each night at 00:05."""
+        from datetime import datetime
+
+        from arcee.context.periods import catch_up, next_run
+
+        if not self.memory:
+            return
+        await asyncio.sleep(delay)
+        while True:
+            try:
+                if written := await catch_up(self.digest_model, self.store, datetime.now().date()):
+                    log.info("wrote %d day and week summaries", written)
+            except Exception as error:  # memory is an aid; try again tomorrow
+                log.warning("could not write the day summaries: %s", error)
+            await asyncio.sleep(next_run(datetime.now()))
 
     async def settle(self) -> None:
         """Let running digests finish, for up to DIGEST_WAIT_S (arcee-cli waits before
