@@ -122,7 +122,15 @@ def models_dir() -> Path:
     return data_dir() / "models"
 
 
+# Where the .deb puts the models, read-only: used when a model is complete there.
+BUNDLED: Final = Path("/usr/share/arcee/models")
+
+
 def model_path(model: VoiceModel) -> Path:
+    """The folder of `model`: the .deb's when it carries it, else the user's own."""
+    bundled = BUNDLED / model.name
+    if all((bundled / name).is_file() for name in model.files):
+        return bundled
     return models_dir() / model.name
 
 
@@ -140,7 +148,7 @@ async def download(
     client: httpx.AsyncClient | None = None,
 ) -> None:
     """Fetch `model`, keep its files in the models folder; reports the fraction done."""
-    target = model_path(model)
+    target = models_dir() / model.name
     target.mkdir(parents=True, exist_ok=True)
     data = bytearray()
     own = client is None

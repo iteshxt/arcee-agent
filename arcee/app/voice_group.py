@@ -17,10 +17,11 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from arcee import voice_local, wake_match  # noqa: E402
+from arcee.app.voice_picker import VoicePicker  # noqa: E402
 from arcee.app.wake_training import WakeTrainingDialog  # noqa: E402
 from arcee.settings import load, save_learn_wakes, save_listen, save_settings  # noqa: E402
-from arcee.voice_local import MODELS, VoiceModel, download, installed  # noqa: E402
-from arcee.voice_reply import SPEECH, VOICES  # noqa: E402
+from arcee.voice_local import MODELS, VoiceModel, installed  # noqa: E402
+from arcee.voice_reply import SPEECH, fetch  # noqa: E402
 
 
 async def set_wake_word(on: bool) -> None:
@@ -150,21 +151,8 @@ class VoiceGroup(Adw.PreferencesGroup):
         )
         self._aloud.add_suffix(self._aloud_progress)
         self.add(self._aloud)
-        self._voice = Adw.ComboRow(
-            title="Arcee's voice",
-            model=Gtk.StringList.new([f"Voice {n + 1}" for n in range(VOICES)]),
-            selected=min(max(settings.voice, 0), VOICES - 1),
-        )
-        self._voice.connect("notify::selected", self._on_voice)
-        hear = Gtk.Button(
-            icon_name="media-playback-start-symbolic",
-            valign=Gtk.Align.CENTER,
-            tooltip_text="Hear it",
-        )
-        hear.add_css_class("flat")
-        hear.connect("clicked", lambda _b: self._preview())
-        self._voice.add_suffix(hear)
-        self.add(self._voice)
+        # The voices, as their own group under this one (the window adds it).
+        self.picker = VoicePicker(settings.voice, self._on_voice)
         self._show_training()
 
     def refresh(self) -> None:
@@ -177,7 +165,7 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._settings.speak_replies = saved.speak_replies
         self._settings.voice = saved.voice
         self._aloud.set_active(saved.speak_replies and installed(SPEECH))
-        self._voice.set_selected(min(max(saved.voice, 0), VOICES - 1))
+        self.picker.show(saved.voice)
         self._show_training()
 
     def _show_training(self) -> None:
@@ -196,7 +184,7 @@ class VoiceGroup(Adw.PreferencesGroup):
         self._forget.set_visible(trained)
         self._train.set_sensitive(self._settings.listen)
         self._learn.set_sensitive(self._settings.listen and trained)  # learns your samples
-        self._voice.set_sensitive(self._aloud.get_active())
+        self.picker.set_sensitive(installed(SPEECH))  # "read it out loud" needs it too
 
     def _open_training(self) -> None:
         WakeTrainingDialog(self._run, self._show_training).present(self.get_root())
@@ -226,24 +214,23 @@ class VoiceGroup(Adw.PreferencesGroup):
         if on != self._settings.speak_replies:
             self._settings.speak_replies = on
             save_settings(speak_replies=on)
-        self._voice.set_sensitive(on)
+        self.picker.set_sensitive(installed(SPEECH))
 
-    def _on_voice(self, row: Adw.ComboRow, _param: Any) -> None:
-        voice = int(row.get_selected())
-        if voice != self._settings.voice:
-            self._settings.voice = voice
-            save_settings(voice=voice)
-            self._preview()
+    def _on_voice(self, name: str) -> None:
+        if name != self._settings.voice:
+            self._settings.voice = name
+            save_settings(voice=name)
+        self._preview()
 
     def _preview(self) -> None:
         if installed(SPEECH):
-            self._run(_agent("PreviewVoice", "u", [self._settings.voice]), lambda _none: None)
+            self._run(_agent("PreviewVoice", "s", [self._settings.voice]), lambda _none: None)
 
     def _confirm_voice(self) -> None:
         dialog = Adw.AlertDialog(
             heading=f"Download {SPEECH.size_mb} MB?",
-            body="Arcee's voice (Supertonic, from sherpa-onnx's releases on GitHub), kept "
-            "on this computer: answers are said here, nothing is sent anywhere to be said.",
+            body="Arcee's voice (Kitten TTS, from Hugging Face), kept on this computer: "
+            "answers are said here, nothing is sent anywhere to be said.",
         )
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("download", "Download")
@@ -269,7 +256,7 @@ class VoiceGroup(Adw.PreferencesGroup):
             self._aloud_progress.set_visible(False)
             self._toast(f"Could not download: {error}")
 
-        self._run(download(SPEECH, progress), finished, failed)
+        self._run(fetch(progress), finished, failed)
 
     def _on_listen(self, row: Adw.SwitchRow, _param: Any) -> None:
         on = row.get_active()

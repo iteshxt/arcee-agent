@@ -351,6 +351,7 @@ def test_builtin_registry_has_cards_for_every_tool() -> None:
         "control.done",
         "control.ask_user",
         "control.replan",
+        "voice.say",
     ]
     assert all(tool.usage.when for tool in tools)
 

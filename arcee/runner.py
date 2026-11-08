@@ -36,6 +36,7 @@ from arcee.models.presets import (
     share_budget,
 )
 from arcee.tools.builtin import builtin_registry
+from arcee.tools.voice import Say
 
 PlanMode = Literal["auto", "always", "never"]
 
@@ -91,7 +92,11 @@ class TaskRunner:
         # Digests still running: aclose waits for them before closing the store.
         self._digests: set[asyncio.Task[None]] = set()
         self.store = store or Store(data_dir())
-        self.registry = builtin_registry(memory=self.store, reminders=self.store)
+        # arceed's voice (decision 0019), set by arceed: `voice.say` fails without it.
+        self.say_aloud: Say | None = None
+        self.registry = builtin_registry(
+            memory=self.store, reminders=self.store, say=lambda: self.say_aloud
+        )
         self.presence = presence or NoPresence()
         self._limits = limits
         self._plan = plan

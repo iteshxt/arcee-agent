@@ -2,7 +2,6 @@
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -59,6 +58,17 @@ def test_short_sentences_are_made_with_the_next() -> None:
     ]
 
 
+def test_a_long_first_sentence_is_made_in_two_so_it_is_heard_sooner() -> None:
+    assert sentences(
+        "It's 18 degrees Celsius and cloudy, with rain likely after 5 PM, so take a "
+        "jacket. You have two meetings."
+    ) == [
+        "It's 18 degrees Celsius and cloudy,",
+        "with rain likely after 5 PM, so take a jacket.",
+        "You have two meetings.",
+    ]
+
+
 def test_questions_say_how_to_answer() -> None:
     assert question_aloud({"kind": "confirm", "text": "Open YouTube?"}) == (
         "Open YouTube? Say allow or deny."
@@ -77,9 +87,9 @@ class FakeSynth:
     def __init__(self) -> None:
         self.said: list[tuple[str, int]] = []
 
-    def generate(self, text: str, sid: int = 0, speed: float = 1.0) -> Any:
-        self.said.append((text, sid))
-        return SimpleNamespace(samples=[0.5] * 80)
+    def say(self, text: str, voice: int) -> list[float]:
+        self.said.append((text, voice))
+        return [0.5] * 80
 
 
 async def test_the_speaker_says_each_sentence_into_one_player(tmp_path: Path) -> None:
@@ -220,7 +230,7 @@ def service(log: list[str], said: list[str], monkeypatch: pytest.MonkeyPatch) ->
 async def test_a_spoken_request_is_answered_aloud_its_question_said_before_the_mic_opens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    save(Settings(speak_replies=True, voice=4))
+    save(Settings(speak_replies=True, voice="Hugo"))
     log: list[str] = []
     agent = service(log, ["open youtube", "yes"], monkeypatch)
     finished: asyncio.Future[str] = asyncio.get_running_loop().create_future()
@@ -294,3 +304,202 @@ async def test_the_wake_word_does_not_listen_while_arcee_talks(
     assert wake.paused  # it would hear Arcee's own voice
     await asyncio.sleep(0.1)
     assert not wake.paused  # and hears "hey Arcee" again after
+
+
+# --- the voices, Kitten made ready, the .deb's models ------------------------------------
+
+
+def test_voices_have_names_and_how_they_sound() -> None:
+    from arcee.voice_reply import DEFAULT_VOICE, VOICES, voice_id
+
+    names = [v.name for v in VOICES]
+    assert names == ["Jasper", "Bella", "Bruno", "Luna", "Hugo", "Rosie", "Leo", "Kiki"]
+    assert all(v.about for v in VOICES)
+    assert voice_id("bruno") == 2
+    assert voice_id("Voice 3") == voice_id(DEFAULT_VOICE) == 3  # unknown: the default
+
+
+def _fields(data: bytes) -> list[tuple[int, Any]]:
+    """Top-level protobuf fields, enough to read ONNX metadata back."""
+
+    def varint(i: int) -> tuple[int, int]:
+        result = shift = 0
+        while True:
+            byte = data[i]
+            i += 1
+            result |= (byte & 0x7F) << shift
+            shift += 7
+            if byte < 0x80:
+                return result, i
+
+    out: list[tuple[int, Any]] = []
+    i = 0
+    while i < len(data):
+        key, i = varint(i)
+        if key & 7 == 0:
+            value, i = varint(i)
+        else:
+            size, i = varint(i)
+            value, i = data[i : i + size], i + size
+        out.append((key >> 3, value))
+    return out
+
+
+def test_kitten_is_made_ready_for_sherpa_onnx(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    from arcee.voice_reply import VOICES, prepare
+
+    header = b"{'descr': '<f4', 'fortran_order': False, 'shape': (400, 256), }"
+    npz = io.BytesIO()
+    with zipfile.ZipFile(npz, "w") as archive:
+        for n, voice in enumerate(reversed(VOICES)):  # stored in another order
+            body = bytes([n]) * (400 * 256 * 4)
+            archive.writestr(
+                f"{voice.key}.npy",
+                b"\x93NUMPY\x01\x00" + len(header).to_bytes(2, "little") + header + body,
+            )
+    model = bytes([1 << 3, 9])  # ModelProto.ir_version = 9: a model, to the parser
+
+    prepare(model, npz.getvalue(), tmp_path)
+
+    styles = (tmp_path / "voices.bin").read_bytes()
+    assert len(styles) == len(VOICES) * 400 * 256 * 4
+    # In VOICES' order (the speaker ids), whatever the archive's.
+    assert styles[0] == len(VOICES) - 1
+    assert styles[-1] == 0
+    written = (tmp_path / "model.onnx").read_bytes()
+    assert written.startswith(model)  # the weights as published
+    metadata = {
+        dict(_fields(entry))[1].decode(): dict(_fields(entry))[2].decode()
+        for field, entry in _fields(written)
+        if field == 14
+    }
+    assert metadata["model_type"] == "kitten-tts"
+    assert metadata["style_dim"] == "400,256"
+    assert metadata["speaker_names"].split(",")[1] == "expr-voice-2-f"  # Bella, id 1
+    assert (tmp_path / "tokens.txt").read_bytes() == voice_reply.TOKENS.read_bytes()
+
+
+def test_a_model_the_deb_carries_is_used_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from arcee import voice_local
+    from arcee.voice_local import model_path, models_dir
+    from arcee.voice_reply import SPEECH
+
+    monkeypatch.setattr(voice_local, "BUNDLED", tmp_path)
+    assert model_path(SPEECH) == models_dir() / "voice"  # not in the .deb: the user's
+    (tmp_path / "voice").mkdir()
+    for name in SPEECH.files[:-1]:
+        (tmp_path / "voice" / name).write_text("x")
+    assert model_path(SPEECH) == models_dir() / "voice"  # incomplete: not used
+    (tmp_path / "voice" / SPEECH.files[-1]).write_text("x")
+    assert model_path(SPEECH) == tmp_path / "voice"
+
+
+def test_phonemes_keep_the_punctuation_and_fit_kittens_symbols() -> None:
+    from arcee import phonemes
+
+    try:
+        said = phonemes.phonemes("Done. I set it, Arcee!")
+    except Exception as exc:  # no libespeak-ng here
+        pytest.skip(f"libespeak-ng: {exc}")
+    assert said.count(".") == 1
+    assert "," in said
+    assert said.endswith("!")
+    assert "\u02c8" in said  # stress marks (ˈ), as KittenTTS gives them  # noqa: RUF003
+    table = {
+        line.rstrip("\n").rpartition(" ")[0] or " "
+        for line in voice_reply.TOKENS.read_text(encoding="utf-8").splitlines()
+    }
+    assert set(phonemes.symbols("It's 18 degrees outside; take a jacket.")) <= table
+
+
+# --- "read it out loud" ------------------------------------------------------------------
+
+
+async def test_read_it_out_loud_says_the_text() -> None:
+    from arcee.tools.base import ToolContext
+    from arcee.tools.voice import SayArgs, VoiceSay
+
+    ctx = ToolContext("t_1", Path("/home/user"))
+    said: list[str] = []
+
+    def say(text: str) -> str | None:
+        said.append(text)
+        return None
+
+    result = await VoiceSay(lambda: say).run(SayArgs(text="**Done**: 18 °C at 17:00."), ctx)
+    assert result.status == "ok"
+    assert said == ["Done: 18 degrees Celsius at 5 PM."]
+
+    no_voice = await VoiceSay(lambda: lambda _t: "the voice is not here").run(
+        SayArgs(text="Hello."), ctx
+    )
+    assert no_voice.status != "ok"
+    assert (await VoiceSay(lambda: None).run(SayArgs(text="Hello."), ctx)).status != "ok"
+
+
+@pytest.mark.parametrize(
+    ("request_", "offered"),
+    [
+        ("Read it out loud", True),
+        ("read that aloud please", True),
+        ("Read me the summary", True),
+        ("say it in your voice", True),
+        ("Open Chrome", False),
+        ("What's the weather like?", False),
+    ],
+)
+def test_asking_to_hear_it_brings_the_voice_tool(request_: str, offered: bool) -> None:
+    from arcee.core.toolsets import VOICE, filters_for
+    from arcee.models.base import Message
+
+    assert (set(VOICE) <= set(filters_for([Message("user", request_)]))) is offered
+
+
+async def test_what_was_asked_aloud_is_not_talked_over_by_the_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save(Settings(speak_replies=True))
+    log: list[str] = []
+    agent = service(log, [], monkeypatch)
+    agent.Finished = lambda _p: None  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def reads_it(request: str, user: Any, on_event: Any, **_: Any) -> Any:
+        from arcee.runner import TaskResult
+
+        assert agent.say_aloud("Once upon a time.") is None  # voice.say, from the request
+        return TaskResult("t_1", "done", "Reading it aloud.", 1, 1, 0.1)
+
+    agent._runner.run = reads_it  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]
+    agent._task = asyncio.ensure_future(  # pyright: ignore[reportPrivateUsage]
+        agent._run("read the story out loud", spoken=True)  # pyright: ignore[reportPrivateUsage]
+    )
+    await agent._task  # pyright: ignore[reportPrivateUsage]
+    await asyncio.sleep(0.01)
+    assert [line for line in log if line.startswith("say")] == ["say: Once upon a time."]
+
+
+async def test_the_app_can_have_a_reply_read_and_hear_a_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from arcee import daemon
+
+    log: list[str] = []
+    agent = service(log, [], monkeypatch)
+    voices: list[int] = []
+    agent._speaker.say = lambda text, voice=0: (  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]
+        voices.append(voice),
+        asyncio.ensure_future(asyncio.sleep(0)),
+    )[1]
+    assert agent.say_text("**Hello** there.") == ""
+    await asyncio.sleep(0.01)
+    agent.preview_voice("Bruno")
+    await asyncio.sleep(0.01)
+    assert voices == [3, 2]  # Luna, the default; then Bruno
+
+    monkeypatch.setattr(daemon, "installed", lambda model: False)
+    assert "Settings → Voice" in agent.say_text("Hello.")

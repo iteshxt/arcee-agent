@@ -1,5 +1,7 @@
 """The built-in tool set for phase 1 (spec section 11, the text-mode subset)."""
 
+from collections.abc import Callable
+
 from arcee.tools.apps import AppList, AppOpen
 from arcee.tools.browser import BrowserSession, browser_tools
 from arcee.tools.calendar import calendar_tools
@@ -24,6 +26,7 @@ from arcee.tools.reminders import Reminders, reminder_tools
 from arcee.tools.screen import screen_tools
 from arcee.tools.shell import ShellRun, ShellScript
 from arcee.tools.system import NetworkStatus, SystemStatus
+from arcee.tools.voice import Say, VoiceSay
 from arcee.tools.web import WebFetch, WebNews, WebSearch, WebWeather
 from arcee.tools.windows import window_tools
 
@@ -34,6 +37,7 @@ def builtin_registry(
     browser: BrowserSession | None = None,
     memory: Memory | None = None,
     reminders: Reminders | None = None,
+    say: Callable[[], Say | None] = lambda: None,
 ) -> Registry:
     """Every built-in tool: files, system facts, shell, then the control tools; and the
     memory and reminder tools when there is a store to back them."""
@@ -70,5 +74,6 @@ def builtin_registry(
             *(tool() for tool in CONTROL_TOOLS),
             *(memory_tools(memory) if memory is not None else ()),
             *(reminder_tools(reminders) if reminders is not None else ()),
+            VoiceSay(say),
         ]
     )

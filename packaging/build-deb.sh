@@ -136,6 +136,21 @@ done
 mkdir -p "$STAGE/usr/share/doc/arcee"
 cp README.md "$STAGE/usr/share/doc/arcee/"
 
+# The voice models (decision 0019): the wake word's, and Arcee's voice, so an installed
+# Arcee downloads nothing to listen or answer aloud. Fetched once into build/bundle.
+uv run python -m arcee.bundle build/bundle/models "$STAGE/usr/share/arcee/models"
+cat > "$STAGE/usr/share/doc/arcee/MODELS" <<'EOF'
+Models in /usr/share/arcee/models, as their makers publish them:
+
+wake     sherpa-onnx keyword spotter (zipformer gigaspeech 3.3M), Apache-2.0,
+         https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models
+vad      Silero VAD, MIT, https://github.com/snakers4/silero-vad
+denoise  GTCRN, MIT, https://github.com/Xiaobin-Rong/gtcrn
+voice    Kitten TTS nano 0.8 (fp32), Apache-2.0, by KittenML,
+         https://huggingface.co/KittenML/kitten-tts-nano-0.8-fp32
+         (its voices as voices.bin and sherpa-onnx's metadata added; the weights as published)
+EOF
+
 SIZE=$(du -sk "$STAGE" | cut -f1)
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: arcee
@@ -146,7 +161,7 @@ Homepage: https://iteshxt.me
 Installed-Size: $SIZE
 Depends: python3 (>= 3.14), python3 (<< 3.15), python3-gi, python3-pyatspi,
  gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-secret-1, gir1.2-atspi-2.0, gir1.2-pango-1.0,
- gnome-shell (>= 50), tesseract-ocr, pipewire-bin, libglib2.0-bin
+ gnome-shell (>= 50), tesseract-ocr, pipewire-bin, libglib2.0-bin, libespeak-ng1
 Recommends: google-chrome-stable | chromium
 Section: utils
 Priority: optional

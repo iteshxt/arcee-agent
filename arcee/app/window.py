@@ -752,6 +752,7 @@ class ArceeWindow(Adw.ApplicationWindow):
             self._background.run, self._toast, self._settings, self._saved
         )
         page.add(self._voice_group)
+        page.add(self._voice_group.picker)
 
         data = Adw.PreferencesGroup(
             title="Your data",

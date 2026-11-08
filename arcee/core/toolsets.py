@@ -36,6 +36,7 @@ MEDIA: Final = ("media.*",)
 CALENDAR: Final = ("calendar.*",)
 MAIL: Final = ("mail.*",)
 REMINDERS: Final = ("reminder.*",)
+VOICE: Final = ("voice.*",)
 
 
 def _words(pattern: str) -> re.Pattern[str]:
@@ -135,6 +136,12 @@ _REMINDER_REQUEST: Final = _words(
     r"\b(timers?|remind(er|ers)?|alarms?|wake me|ping me|nudge me|countdown|"
     r"in \d+ ?(s|sec|secs|seconds?|m|min|mins|minutes?|h|hrs?|hours?)\b)"
 )
+# Asking to hear something (decision 0019): "read it out loud", "say that aloud".
+_VOICE_REQUEST: Final = _words(
+    r"\b(out ?loud|aloud|read (it |this |that |them )?(to me|out)|read me\b|"
+    r"(say|speak|tell me) (it|this|that)\b.*\b(voice|loud)|by voice|in your voice|"
+    r"speak (it|this|that|to me)|let me hear)"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
@@ -215,6 +222,7 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
             (CALENDAR, _CALENDAR_REQUEST, "calendar"),
             (MAIL, _MAIL_REQUEST, "mail"),
             (REMINDERS, _REMINDER_REQUEST, "reminder"),
+            (VOICE, _VOICE_REQUEST, "voice"),
         )
         if pattern.search(request) or namespace in namespaces
     ]

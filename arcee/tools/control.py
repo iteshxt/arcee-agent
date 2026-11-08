@@ -100,14 +100,15 @@ class Speak(Tool[SpeakArgs]):
     name = "control.speak"
     description = "Tell the user something now without ending the task, e.g. progress."
     usage = Usage(
-        when="A long task has news the user should hear before it finishes.",
-        avoid="Giving the final answer: reply in plain text instead.",
+        when="A long task has news the user should see before it finishes (shown, not said aloud).",
+        avoid="Giving the final answer: reply in plain text instead. Reading something out "
+        "loud: voice.say.",
     )
     args_model = SpeakArgs
     observation_kind = "none"
 
     async def run(self, args: SpeakArgs, ctx: ToolContext) -> ToolResult:
-        # Shown by the CLI through the tool's summary; spoken once voice exists (phase 5).
+        # Shown through the tool's summary; voice.say is what says things aloud.
         return ToolResult.ok(f"Said: {args.text}")
 
 
