@@ -4,10 +4,17 @@
 // desktop unseen (decision 0010). The glow is Arcee's sunrise orange. The user's own
 // mouse or keyboard pauses the session at once: their input always goes through, the
 // glow turns blue (the user's colour), and the pill offers Resume or Stop. Esc stops.
+//
+// GNOME gives an extension's event filter only input meant for the Shell's own UI, not
+// for app windows, so over Chrome or Files the filter never saw the user (found with
+// Esc, 2026-11-04). So the session also watches what GNOME knows whoever the input is
+// for: where the pointer is, and how long since any input (its idle monitor). Input
+// Arcee made is told apart by time: the bridge notes each event it injects (`injected`).
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -16,6 +23,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 const IDLE_LIMIT_S = 120;
 // Pointer travel that counts as the user taking the mouse, not a nudge of the desk.
 const MOVE_THRESHOLD_PX = 40;
+// How often the session looks at the pointer and the idle time.
+const WATCH_MS = 100;
+// Input this soon after one of Arcee's own events counts as Arcee's.
+const OWN_INPUT_MS = 250;
+// Small moves stop adding up after this long with the pointer still.
+const NUDGE_FORGET_MS = 1000;
 const GLOW_PX = 28;
 const USER_EVENTS = new Set([
     Clutter.EventType.BUTTON_PRESS,
@@ -23,6 +36,15 @@ const USER_EVENTS = new Set([
     Clutter.EventType.SCROLL,
     Clutter.EventType.TOUCH_BEGIN,
 ]);
+
+// GNOME's idle monitor for all input devices (null where this Shell has none).
+function idleMonitor() {
+    try {
+        return global.backend.get_core_idle_monitor();
+    } catch {
+        return Meta.IdleMonitor.get_core?.() ?? null;
+    }
+}
 
 export class ControlSession {
     constructor({onStop, onPause, onResume}) {
@@ -50,6 +72,7 @@ export class ControlSession {
         this._restyle();
         this._filter = Clutter.Event.add_filter(global.stage, (event, actor) =>
             this._onEvent(event, actor));
+        this._startWatching();
         // The owner exiting, even by a crash, ends its session.
         this._watch = Gio.bus_watch_name(
             Gio.BusType.SESSION, owner, Gio.BusNameWatcherFlags.NONE, null, () => this.end());
@@ -86,6 +109,7 @@ export class ControlSession {
             return;
         this.state = 'active';
         this._moved = 0;
+        this._sinceNow();  // the click on Resume is not the user taking control again
         this.touch();
         this._restyle();
         this._onResume();
@@ -106,7 +130,8 @@ export class ControlSession {
         Clutter.Event.remove_filter(this._filter);
         Gio.bus_unwatch_name(this._watch);
         GLib.source_remove(this._idle);
-        this._filter = this._watch = this._idle = null;
+        GLib.source_remove(this._watcher);
+        this._filter = this._watch = this._idle = this._watcher = null;
         for (const glow of this._glows)
             glow.destroy();
         this._glows = [];
@@ -118,6 +143,59 @@ export class ControlSession {
     setShown(shown) {
         for (const glow of this._glows)
             glow.visible = shown;
+    }
+
+    // Arcee injected an event just now (the bridge, for each one).
+    injected() {
+        this._injectedAt = GLib.get_monotonic_time();
+    }
+
+    _startWatching() {
+        this._monitor = idleMonitor();
+        this._sinceNow();
+        this._watcher = GLib.timeout_add(GLib.PRIORITY_DEFAULT, WATCH_MS, () => {
+            this._watchInput();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // From now: input before this moment (typing the request, a click on Resume) is not
+    // the user taking control.
+    _sinceNow() {
+        this._injectedAt = GLib.get_monotonic_time();
+        const [x, y] = global.get_pointer();
+        this._pointerAt = [x, y];
+        this._moved = 0;
+        this._motionAt = 0;
+    }
+
+    _watchInput() {
+        const [x, y] = global.get_pointer();
+        const step = Math.hypot(x - this._pointerAt[0], y - this._pointerAt[1]);
+        this._pointerAt = [x, y];
+        if (this.state !== 'active')
+            return;
+        const now = GLib.get_monotonic_time();
+        const ownAgoMs = (now - this._injectedAt) / 1000;
+        if (ownAgoMs < OWN_INPUT_MS) {  // Arcee is acting: the pointer is going where it sent it
+            this._moved = 0;
+            return;
+        }
+        if (step > 0) {  // the user's mouse: a nudge of the desk is not taking control
+            this._motionAt = now;
+            this._moved += step;
+            if (this._moved > MOVE_THRESHOLD_PX)
+                this.pause();
+            return;
+        }
+        if (now - this._motionAt > NUDGE_FORGET_MS * 1000)
+            this._moved = 0;
+        // Input since Arcee's last event, the pointer still: a key, a click, a scroll. Not
+        // the movement just seen, which reset the idle time too (a nudge paused).
+        const idleMs = this._monitor ? Number(this._monitor.get_idletime()) : Infinity;
+        const inputAt = now - idleMs * 1000;
+        if (idleMs < 2 * WATCH_MS && idleMs + WATCH_MS < ownAgoMs && inputAt > this._motionAt + 20_000)
+            this.pause();
     }
 
     _onEvent(event, actor) {
