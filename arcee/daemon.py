@@ -37,7 +37,8 @@ from arcee.runner import TaskRunner
 from arcee.settings import load as load_settings
 from arcee.settings import save_listen
 from arcee.voice import Recorder, Transcriber, VoiceError
-from arcee.voice_local import WakeListener
+from arcee.voice_local import WakeListener, installed
+from arcee.voice_reply import SPEECH, Speaker, speakable
 
 BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
@@ -228,6 +229,21 @@ ALWAYS: Final = re.compile(
     re.IGNORECASE,
 )
 ORDINALS: Final = ("first", "second", "third", "fourth", "fifth")
+# Said for a request that failed: the reason is on screen, and rarely reads well aloud.
+FAILED_ALOUD: Final = "Sorry, that did not work. The reason is on screen."
+PREVIEW_ALOUD: Final = "Hi, I'm Arcee. I've set a reminder for 5 PM to call mom."
+
+
+def question_aloud(asked: dict[str, Any]) -> str:
+    """A question as said aloud, with how to answer it."""
+    text = speakable(str(asked.get("text", "")))
+    if asked.get("kind") == "confirm":
+        allow = "Say allow, always allow, or deny." if asked.get("allowable") else ""
+        return f"{text} {allow or 'Say allow or deny.'}".strip()
+    options = [str(o) for o in asked.get("options", [])][: len(ORDINALS)]
+    if len(options) >= 2:
+        return f"{text} {', '.join(options[:-1])}, or {options[-1]}?"
+    return text
 
 
 def spoken_answer(
@@ -289,11 +305,15 @@ class AgentService(ServiceInterface):
         *,
         recorder: Callable[[Callable[[float], None]], Recorder] = Recorder,
         transcriber: Speech | None = None,
+        speaker: Speaker | None = None,
     ) -> None:
         super().__init__(BUS_NAME)
         self._runner = runner
         self._make_recorder = recorder
         self._transcriber = transcriber or Transcriber()
+        # Says the answers to spoken requests (decision 0019), when the user turned it on.
+        self._speaker = speaker or Speaker()
+        self._speaking: asyncio.Task[None] | None = None  # `_say`, while it talks
         self._recorder: Recorder | None = None
         self._listening: asyncio.Task[None] | None = None
         # The wake-word listener, when the user turned it on; paused for the mic button.
@@ -324,14 +344,16 @@ class AgentService(ServiceInterface):
         if self.busy:
             raise DBusError(BUSY_ERROR, f"Arcee is already working on: {self._request}")
         self._request = request.strip()
+        self.hush()
         self._task = asyncio.ensure_future(self._run(self._request))
         return "started"
 
     @method()
     def Cancel(self) -> None:
         """Stop everything under way: the request running, and one being heard or
-        transcribed (Esc, Stop, or "Arcee stop")."""
+        transcribed, and an answer being said (Esc, Stop, or "Arcee stop")."""
         self._stop_task()
+        self.hush()
         dropped = False
         if self.wake is not None and self.wake.drop():
             dropped = True
@@ -369,6 +391,7 @@ class AgentService(ServiceInterface):
         """Record a spoken request; Heard carries its text when it ends."""
         if self._listening is not None and not self._listening.done():
             return
+        self.hush()  # the mic would hear Arcee's own voice
         self._recorder = self._make_recorder(self._level)
         self._dismissed = False
         if self.wake is not None:
@@ -416,8 +439,16 @@ class AgentService(ServiceInterface):
     @method()
     def EndConversation(self) -> None:
         """The user closed the pill (or started a New conversation): the next request
-        starts afresh."""
+        starts afresh. Closing it also stops an answer being said."""
         self.conversation.end()
+        self.hush()
+
+    @method()
+    def PreviewVoice(self, voice: DBusUInt32) -> None:
+        """Say a sentence in one of the voices (Settings → Voice, "Hear it")."""
+        if installed(SPEECH):
+            self.hush()
+            self._speaking = asyncio.ensure_future(self._speaker.say(PREVIEW_ALOUD, int(voice)))
 
     @method()
     def StopListening(self) -> None:
@@ -664,13 +695,19 @@ class AgentService(ServiceInterface):
         await presence.release()
         self._set_step("Waiting for your answer")
         self.Question(json.dumps({"id": question_id, **payload}))
-        self._hear_answer(question_id)
+        if self._spoken and self._speaks():
+            # Said first, then the mic opens for the answer: it would hear the question.
+            self._say(question_aloud(payload), then=lambda: self._hear_answer(question_id))
+        else:
+            self._hear_answer(question_id)
         try:
             return await future
         finally:
             self._questions.pop(question_id, None)
             self._asked.pop(question_id, None)
             self._answer_tries.pop(question_id, None)
+            if self._speaking is not None and not self._speaking.done():
+                self.hush()  # answered with a click while the question was being said
             if self._for_answer and self._recorder is not None:
                 # Answered with a click while the mic listened: what it hears is not a
                 # request ("yes" would have run as one).
@@ -689,6 +726,8 @@ class AgentService(ServiceInterface):
     async def _run(self, request: str, *, spoken: bool = False) -> None:
         self._spoken = spoken
         self._stats = TaskStats()
+        if spoken and self._speaks():
+            self._speaker.warm()  # loaded while it thinks: the answer is heard sooner
         self.Started(request)
         self._set_step(THINKING)
         payload: dict[str, Any]
@@ -719,6 +758,52 @@ class AgentService(ServiceInterface):
                 await self._runner.presence.release()
         payload |= self._stats.summary(getattr(self._runner, "core", ""))
         self.Finished(json.dumps(payload))
+        reply = str(payload.get("reply") or "")
+        if spoken and reply and payload["status"] in {"done", "failed"} and self._speaks():
+            self._say(speakable(reply) if payload["status"] == "done" else FAILED_ALOUD)
+
+    # --- saying it aloud (decision 0019) -------------------------------------------------
+
+    def _speaks(self) -> bool:
+        """Whether answers to spoken requests are said: on, and the voice downloaded."""
+        return load_settings().speak_replies and installed(SPEECH)
+
+    def _say(self, text: str, then: Callable[[], None] | None = None) -> None:
+        """Say `text`, the wake word not listening meanwhile (it would hear Arcee's own
+        voice), then `then` unless it was hushed."""
+        self.hush()
+        self._speaking = asyncio.ensure_future(self._saying(text, then))
+
+    async def _saying(self, text: str, then: Callable[[], None] | None) -> None:
+        wake = self.wake
+        quieted = wake is not None and not wake.paused
+        if quieted and wake is not None:
+            wake.paused = True
+        finished = False
+        try:
+            await self._speaker.say(text, load_settings().voice)
+            finished = True
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # a voice that fails must not take the reply or the service
+            log.exception("could not say the reply")
+            finished = True
+        finally:
+            listening = self._listening is not None and not self._listening.done()
+            # Back on, unless the mic button or training has taken the mic meanwhile.
+            if quieted and wake is not None and self.wake is wake:
+                wake.paused = listening or self._held is not None
+        if finished and then is not None:
+            then()
+
+    def hush(self) -> bool:
+        """Stop saying anything at once; whether something was being said."""
+        task, self._speaking = self._speaking, None
+        stopped = self._speaker.stop()
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        return stopped
 
     def _progress(self, event: Event) -> None:
         if isinstance(event, ModelTurn):
