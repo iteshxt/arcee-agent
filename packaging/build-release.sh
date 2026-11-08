@@ -68,4 +68,9 @@ https://console.groq.com/keys and enter it in setup. Or choose **Local
 Super+Shift+Escape stops Arcee at any time.
 EOF
 
+# What changed, from packaging/changes/<version>.md when there is one.
+if [ -f "packaging/changes/$VERSION.md" ]; then
+    { echo; cat "packaging/changes/$VERSION.md"; } >> dist/release-notes.md
+fi
+
 ls -l dist
