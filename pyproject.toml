@@ -1,6 +1,6 @@
 [project]
 name = "arcee"
-version = "0.4.0"
+version = "0.4.1"
 description = "Model-agnostic desktop agent harness for GNOME on Wayland"
 readme = "README.md"
 authors = [{ name = "Itesh Tomar" }]
