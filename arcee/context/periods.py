@@ -35,7 +35,9 @@ PLAIN_DAY: Final = 2
 # At most this many tasks go into a day's prompt (the newest kept), each line this long.
 DAY_TASKS: Final = 40
 LINE_CHARS: Final = 220
-PERIOD_MAX_TOKENS: Final = 512
+# gpt-oss reasons before it answers, inside this budget: at 512 Groq cut the JSON off
+# ("Failed to validate JSON", or a summary ending mid-sentence).
+PERIOD_MAX_TOKENS: Final = 2048
 
 _WEEKDAYS: Final = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _MONTHS: Final = (
