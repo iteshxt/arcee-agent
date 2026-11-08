@@ -53,8 +53,7 @@ called it: nothing was ever saved. Memory left to the Core's initiative does not
   covers most of what a person tells Arcee about themselves; embeddings would cover
   the rest.
 - Each task costs one more model call (about 1,500 tokens) for its digest.
-- Nightly day and week summaries (spec section 8) are not built yet; with a summary per
-  task and recency in the ranking they matter less until history grows large.
+- Day and week summaries (spec section 8): built 2026-11-08, see the amendment below.
 
 ## Amended 2026-11-06: only lasting facts
 
@@ -73,3 +72,19 @@ importance 0.6 or more and when it names none of those kinds of thing
 Local models still write summaries only: they had saved results as facts at top
 importance, and sending local tasks to a cloud model to learn from them would undo
 the reason to choose a local one.
+
+## Amended 2026-11-08: days and weeks
+
+"What did I ask you yesterday?" had no answer: recall finds tasks by their words, not
+by when they happened. `memory.history(when=...)` lists the requests of a day (with
+their summaries) or, for longer spans, one line a day. The words for the time
+("yesterday", "last week", "on Monday", "3 days ago", "the last 7 days", "7 November")
+become dates in code (`periods.span`): small models count days badly.
+
+arceed writes a summary of each day once it is over (00:05, and two minutes after it
+starts, for the days it missed: up to 14 days back) and of each week (Monday to
+Sunday, up to 8 weeks back) from its days, in the `periods` table (schema 5), on the
+digest model. A day of one or two requests is its tasks' summaries, without a model.
+Deleting a request deletes the day and week summaries that told of it; they are
+written again. `arcee-cli memory-days` writes them by hand. Run on a copy of the user's
+history with LFM3-Omni: 11 summaries in 100 s, each naming what was done that day.

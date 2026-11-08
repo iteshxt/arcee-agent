@@ -1,16 +1,26 @@
-"""The Core's own reach into memory (spec section 11): look something up, forget a fact.
+"""The Core's own reach into memory (spec section 11): look something up, forget a fact,
+and what was done on a day or in a week.
 
 Recall already puts what matters into every request (decision 0014); these are for
-when the user asks about it ("what do you know about me?", "forget my old address").
-Saving stays `control.note`.
+when the user asks about it ("what do you know about me?", "forget my old address",
+"what did I ask you yesterday?"). Saving stays `control.note`.
 """
 
-from typing import Any, ClassVar, Protocol
+from collections.abc import Callable
+from datetime import date, timedelta
+from typing import Any, ClassVar, Final, Protocol
 
 from pydantic import Field
 
+from arcee.context.periods import midnight, span, task_line
+from arcee.context.store import DoneRow, PeriodRow
 from arcee.core.policy import Policy, Tier
 from arcee.tools.base import Tool, ToolArgs, ToolContext, ToolResult, Usage
+
+# memory.history: at most this many requests listed for a day, and this much in all.
+DAY_LINES: Final = 30
+DAY_CHARS: Final = 700
+HISTORY_CHARS: Final = 4000
 
 
 class Memory(Protocol):
@@ -20,6 +30,10 @@ class Memory(Protocol):
         self, query: str, exclude_task: str | None
     ) -> list[tuple[str, str, str]]: ...  # (id, text, date)
     async def forget_memory(self, memory_id: str) -> bool: ...
+    async def done_between(
+        self, start: float, end: float, *, exclude: str | None = None
+    ) -> list[DoneRow]: ...
+    async def periods_between(self, kind: str, start: float, end: float) -> list[PeriodRow]: ...
 
 
 class RecallArgs(ToolArgs):
@@ -83,6 +97,96 @@ class MemoryForget(Tool[ForgetArgs]):
         return ToolResult.ok(f"Forgot: {text}", data=data)
 
 
+class HistoryArgs(ToolArgs):
+    when: str = Field(
+        min_length=1,
+        max_length=60,
+        description='The day or days, in the user\'s words: "today", "yesterday", "last '
+        'week", "this week", "Monday", "3 days ago", "the last 7 days", "2026-11-07", '
+        '"7 November".',
+    )
+
+
+class MemoryHistory(Tool[HistoryArgs]):
+    name = "memory.history"
+    description = "What the user asked Arcee, and what happened, on a day or in a week."
+    usage = Usage(
+        when='"What did I ask you yesterday?", "what did we do last week?", "what was I '
+        'working on on Monday?": pass the time in their words; the dates are worked out '
+        "for you.",
+        avoid="Looking for one thing by its subject (memory.recall), or files changed "
+        "recently (fs tools).",
+        example='memory.history(when="yesterday")',
+    )
+    args_model = HistoryArgs
+    read_only: ClassVar[bool] = True
+
+    def __init__(self, memory: Memory, today: Callable[[], date] = date.today) -> None:
+        self._memory = memory
+        self._today = today
+
+    async def run(self, args: HistoryArgs, ctx: ToolContext) -> ToolResult:
+        days = span(args.when, self._today())
+        if days is None:
+            return ToolResult.fail(
+                f"“{args.when}” is not a time memory.history knows: say today, yesterday, "
+                "this week, last week, a weekday, N days ago, the last N days, or a date "
+                "(2026-11-07)"
+            )
+        start, end = midnight(days.first), midnight(days.last + timedelta(days=1))
+        rows = await self._memory.done_between(start, end, exclude=ctx.task_id)
+        data: dict[str, Any] = {
+            "when": days.label,
+            "from": days.first.isoformat(),
+            "to": days.last.isoformat(),
+            "requests": len(rows),
+        }
+        if not rows:
+            return ToolResult.ok(f"Nothing was asked {days.label}", data=data)
+        summaries = {
+            row.start: row.text for row in await self._memory.periods_between("day", start, end)
+        }
+        if days.days == 1:
+            if text := summaries.get(start):
+                data["summary"] = text
+            lines = [task_line(row) for row in rows]
+            if len(lines) > DAY_LINES:
+                data["earlier_not_listed"] = len(lines) - DAY_LINES
+            data["asked"] = lines[-DAY_LINES:]
+        else:
+            weeks = [
+                f"week of {w.id.split(':', 1)[1]}: {w.text}"
+                for w in await self._memory.periods_between("week", start, end)
+                if w.end <= end
+            ]
+            if weeks:
+                data["weeks"] = weeks
+            data["days"] = _by_day(rows, summaries)
+        return ToolResult.ok(f"{len(rows)} requests {days.label}", data=data)
+
+
+def _by_day(rows: list[DoneRow], summaries: dict[float, str]) -> list[str]:
+    """One line a day: its summary, or its requests; the newest days kept within
+    HISTORY_CHARS."""
+    grouped: dict[date, list[DoneRow]] = {}
+    for row in rows:
+        grouped.setdefault(date.fromtimestamp(row.started), []).append(row)
+    lines: list[str] = []
+    for day, done in grouped.items():
+        text = summaries.get(midnight(day)) or "; ".join(task_line(row) for row in done)
+        if len(text) > DAY_CHARS:
+            text = text[: DAY_CHARS - 1] + "…"
+        lines.append(f"{day:%a %Y-%m-%d} ({len(done)} requests): {text}")
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        if used + len(line) > HISTORY_CHARS:
+            break
+        kept.insert(0, line)
+        used += len(line)
+    return kept
+
+
 def memory_tools(memory: Memory) -> list[Tool[Any]]:
     seen: dict[str, str] = {}
-    return [MemoryRecall(memory, seen), MemoryForget(memory, seen)]
+    return [MemoryRecall(memory, seen), MemoryForget(memory, seen), MemoryHistory(memory)]

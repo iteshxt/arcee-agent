@@ -796,6 +796,25 @@ async def memory_learn(core: str, host: str, limit: int, facts: bool) -> int:
     return 0 if failed == 0 else 1
 
 
+async def memory_days(core: str, host: str) -> int:
+    """Write the day and week summaries arceed has not written yet."""
+    from datetime import date
+
+    from arcee.context.periods import catch_up
+    from arcee.models.presets import digest_model_for
+
+    store = Store(data_dir())
+    model = digest_model_for(core, host)
+    try:
+        print(f"summarising the last days and weeks on {model.profile.model}")
+        written = await catch_up(model, store, date.today())
+    finally:
+        await model.aclose()
+        store.close()
+    print(f"done: {written} day and week summaries written")
+    return 0
+
+
 def _row(result: CaseResult) -> dict[str, object]:
     d = result.decision
     return {
@@ -856,6 +875,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     train_cmd = sub.add_parser("voice-train", help='train "Hey Arcee" to your voice')
     train_cmd.add_argument("--forget", action="store_true", help="forget the trained wake word")
+
+    days_cmd = sub.add_parser(
+        "memory-days", help="write the summaries of past days and weeks (memory)"
+    )
+    days_cmd.add_argument(
+        "--core", default="local", help="the model that writes them (default: local)"
+    )
+    days_cmd.add_argument("--host", default=host)
 
     learn_cmd = sub.add_parser(
         "memory-learn", help="learn from past tasks that have no summary yet (memory)"
@@ -939,6 +966,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(voice_train(args.forget))
         if args.command == "voice-test":
             return asyncio.run(voice_test(args.seconds, args.file))
+        if args.command == "memory-days":
+            return asyncio.run(memory_days(args.core, _host(args.host)))
         if args.command == "memory-learn":
             facts = args.facts or args.core != "local"
             return asyncio.run(memory_learn(args.core, _host(args.host), args.n, facts))
