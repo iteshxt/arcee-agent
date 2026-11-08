@@ -141,3 +141,21 @@ someone in the room. "Hey Arcee" starts a stretch of speech, so the trained wake
 is matched only in the first 3.5 s of speech after a pause the VAD hears (0.7 s), and
 again after the next; long talk costs no matching or denoising. A "hey Arcee" run on
 from a sentence without a pause is not heard; that is the price.
+
+## Amended 2026-11-08: three samples, a stricter threshold, no learning
+
+False wakes kept coming. With every wake now logged with its distance and the request
+it led to, the user's real wakes came at 0.084-0.108 and a stretch of their talk ("I
+don't think I have enough time to sit for a while…") at 0.098, under a threshold of
+0.116: real and false overlap, and no threshold parts them cleanly. At the user's word:
+
+- Learning from wakes is off (`wake_match.LEARNING`): a wake's words did not show it
+  was meant, and learned samples pulled the wake word toward ordinary speech. Learned
+  samples are neither kept nor used; the code stays for when wakes can be trusted.
+- Training asks for three samples again: five gave more chances for one unlike the
+  rest, which loosened the threshold.
+- The threshold sits a quarter of the way from the samples' spread to the ordinary
+  sentence (`CALIBRATION`, was 0.4). For the user's samples that is 0.095, under the
+  false wake at 0.098; some real wakes near the top (0.106, 0.108) will be missed and
+  said again. Their trained file was moved to it at once (0.116 to 0.095, "Arcee stop"
+  0.179 to 0.141).

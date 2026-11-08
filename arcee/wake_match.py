@@ -2,8 +2,8 @@
 
 The keyword spotter (voice_local) knows English, and "Arcee" is not English: with some
 voices and mics it never hears it (decision 0015, amended). Training fixes that, the way
-phone assistants do: the user says "hey Arcee" five times and one ordinary sentence.
-What is kept is the sound of the five (log-mel frames, 24 numbers per 20 ms), not the
+phone assistants do: the user says "hey Arcee" three times and one ordinary sentence.
+What is kept is the sound of the three (log-mel frames, 24 numbers per 20 ms), not the
 audio: it cannot be played back. Speech then wakes Arcee when it holds a stretch close
 enough to one of them, by dynamic time warping, so it allows for saying it faster or
 slower. The ordinary sentence sets how close is close enough.
@@ -31,10 +31,20 @@ WIN: Final = 400  # 25 ms
 HOP: Final = 320  # 20 ms: a frame of the listener's (80 ms) is four of these
 BINS: Final = 24
 WINDOW: Final = 80  # frames matched against, at least: the last 1.6 s of speech
-SAMPLES: Final = 5  # "hey Arcee"s asked for when training (5: more of how one says it)
+# "Hey Arcee"s asked for when training. Five (2026-11-04) gave more chances for one
+# sample unlike the rest, which loosened the threshold; back to three (2026-11-08).
+SAMPLES: Final = 3
 STOP_SAMPLES: Final = 2  # and "Arcee stop"s
 # Samples learned from wakes the user went on to use: at most this many, newest kept.
 MAX_LEARNED: Final = 3
+# Learning from wakes is off (2026-11-08): with false wakes still coming, a wake's
+# words did not show it was meant, and samples learned from them pulled the wake word
+# toward ordinary speech. Learned samples are neither kept nor used while it is off.
+LEARNING: Final = False
+# Where between the samples' own spread and the ordinary sentence the threshold sits.
+# 0.4 let a stretch of the user's talk wake Arcee at 0.098 among real wakes at
+# 0.084-0.108 (2026-11-08); 0.25 would have kept it out.
+CALIBRATION: Final = 0.25
 # A trained wake word is never looser than this, whatever the samples suggest.
 LOOSEST: Final = 0.3
 SHORTEST_S: Final = 0.3
@@ -346,8 +356,8 @@ def train(
         )
         if near <= spread or stop_near <= stop_spread:
             raise VoiceError("“Hey Arcee” and “Arcee stop” sounded too alike: say each clearly")
-        stop_threshold = min(LOOSEST, stop_spread + 0.4 * (stop_near - stop_spread))
-    threshold = min(LOOSEST, spread + 0.4 * (near - spread))
+        stop_threshold = min(LOOSEST, stop_spread + CALIBRATION * (stop_near - stop_spread))
+    threshold = min(LOOSEST, spread + CALIBRATION * (near - spread))
     trained = Trained(templates, round(threshold, 4), stop_templates, round(stop_threshold, 4))
     return Training(trained, spread, near, stop_spread, stop_near)
 
@@ -394,7 +404,7 @@ def load(check: bool = True) -> Trained | None:
             frames(data.get("stops", [])),  # trained before "Arcee stop" was: none
             float(data.get("stop_threshold", 0.0)),
         )
-        learned = frames(data.get("learned", []))
+        learned = frames(data.get("learned", [])) if LEARNING else []
         if check:  # learned before the rule was this strict: only the sure ones
             learned = [heard for heard in learned if sure(trained, heard)]
         return Trained(
@@ -422,7 +432,7 @@ def learned_from(trained: Trained, heard: Frames) -> Trained:
     request) kept as a sample too: the newest MAX_LEARNED, the trained ones never
     replaced. Kept as their sound, as the trained ones are. Only a `sure` match of the
     trained samples is kept: never one that only a learned sample came near."""
-    if len(heard) < SHORTEST_S * RATE // HOP or not sure(trained, heard):
+    if not LEARNING or len(heard) < SHORTEST_S * RATE // HOP or not sure(trained, heard):
         return trained
     learned = [*trained.learned, heard][-MAX_LEARNED:]
     return Trained(

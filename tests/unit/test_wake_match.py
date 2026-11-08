@@ -17,6 +17,12 @@ def data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def learning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Learning from wakes, off for now (2026-11-08) but kept: its tests turn it on."""
+    monkeypatch.setattr(wake_match, "LEARNING", True)
+
+
 def sweep(start_hz: float, end_hz: float, seconds: float, seed: int = 0) -> list[float]:
     """A tone gliding from one pitch to another, with a little noise: a stand-in word."""
     noise = random.Random(seed)
@@ -192,10 +198,10 @@ def test_the_match_says_where_the_word_is() -> None:
     assert abs((len(said) - end) - len(after)) <= 3
 
 
-def test_wakes_that_were_meant_are_learned_newest_kept() -> None:
+def test_wakes_that_were_meant_are_learned_newest_kept(learning: None) -> None:
     samples = [sweep(300, 1200, s, seed=i) for i, s in enumerate((0.8, 0.9, 0.85, 0.82, 0.88))]
     trained = train(samples, sweep(2500, 600, 1.5, seed=7)).trained
-    assert len(trained.templates) == wake_match.SAMPLES == 5
+    assert len(trained.templates) == 5
 
     for n in range(wake_match.MAX_LEARNED + 2):
         heard = log_mel(silence(0.3) + sweep(300, 1200, 0.8 + n / 50, seed=40 + n))
@@ -212,7 +218,7 @@ def test_wakes_that_were_meant_are_learned_newest_kept() -> None:
     assert wake_match.learned_from(loaded, log_mel(sweep(300, 1200, 0.1))[:3]) is loaded
 
 
-def test_only_a_sure_wake_is_learned() -> None:
+def test_only_a_sure_wake_is_learned(learning: None) -> None:
     """Words after a wake do not prove it was meant: a stretch further from the trained
     samples than they are from each other (the user dictating, 2026-11-06) is not kept,
     and one kept before the rule was this strict is dropped when the wake word loads."""
@@ -231,3 +237,23 @@ def test_only_a_sure_wake_is_learned() -> None:
     loaded = wake_match.load()
     assert loaded is not None
     assert len(loaded.learned) == 1  # the unsure one, learned before, is gone
+
+
+def test_with_learning_off_nothing_is_learned_or_used() -> None:
+    samples = [sweep(300, 1200, s, seed=i) for i, s in enumerate((0.8, 0.9, 0.85))]
+    trained = train(samples, sweep(2500, 600, 1.5, seed=7)).trained
+    assert len(trained.templates) == wake_match.SAMPLES == 3
+    heard = trained.span(log_mel(silence(0.3) + sweep(300, 1200, 0.84, seed=50)))
+    assert wake_match.learned_from(trained, heard) is trained  # not learned
+    # Samples learned before it was turned off are not used either.
+    wake_match.save(Trained(trained.templates, trained.threshold, learned=[heard]))
+    loaded = wake_match.load()
+    assert loaded is not None
+    assert loaded.learned == []
+
+
+def test_the_threshold_sits_a_quarter_of_the_way_to_ordinary_speech() -> None:
+    samples = [sweep(300, 1200, s, seed=i) for i, s in enumerate((0.8, 0.9, 0.85))]
+    training = train(samples, sweep(2500, 600, 1.5, seed=7))
+    expected = training.spread + 0.25 * (training.other - training.spread)
+    assert training.trained.threshold == pytest.approx(min(wake_match.LOOSEST, expected), abs=1e-4)
