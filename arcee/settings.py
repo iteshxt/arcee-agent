@@ -50,7 +50,7 @@ class Settings:
     # Say the answer to a spoken request aloud, and its questions (decision 0019), with
     # a voice made on this computer. Off until the user turns it on (it downloads it).
     speak_replies: bool = False
-    voice: int = 0  # which of Supertonic's voices, 0-9
+    voice: str = "Luna"  # which of Arcee's voices (voice_reply.VOICES), by name
     # Learn from finished tasks (their summaries and facts) and bring back what matters
     # (decision 0014). Off: nothing new is remembered and nothing is recalled.
     memory: bool = True
@@ -92,7 +92,7 @@ def load(path: Path | None = None) -> Settings:
         listen=raw.get("listen") is True,
         learn_wakes=raw.get("learn_wakes") is True,
         speak_replies=raw.get("speak_replies") is True,
-        voice=voice if isinstance(voice, int) and 0 <= voice <= 9 else 0,
+        voice=voice if isinstance(voice, str) and voice else "Luna",
         personal_to_cloud=sharing if sharing in SHARINGS else "ask",
     )
 

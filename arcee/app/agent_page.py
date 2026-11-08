@@ -487,6 +487,7 @@ class AgentPage(Gtk.Box):
                 for line in did[-4:]:
                     self._add("✓ " + line.split(": ", 1)[-1], "arcee-step")
                 self._add(task.reply or task.status, "body")
+                self._add_reply_line(task.reply or "", "")
             self._add("Earlier conversation: go on where it left off.", "arcee-meta")
 
         _off_main(lambda store: store.conversation(chat_id), show)
@@ -643,7 +644,7 @@ class AgentPage(Gtk.Box):
                     "Stopped." if done.get("status") == "stopped" else done.get("status", "")
                 )
                 self._add(reply, "body")
-                self._add(_meta(done), "arcee-meta")
+                self._add_reply_line(done.get("reply") or "", _meta(done))
             case _:
                 pass
 
@@ -667,6 +668,61 @@ class AgentPage(Gtk.Box):
         if style == "arcee-you":
             label.set_margin_start(96)  # a bubble on the right, never the full width
         self._append(label)
+
+    def _add_reply_line(self, reply: str, meta: str) -> None:
+        """Under a reply: its meta line, and Read aloud (decision 0019)."""
+        line = Gtk.Box(spacing=6)
+        if meta:
+            label = Gtk.Label(label=meta, xalign=0, wrap=True, hexpand=True)
+            label.add_css_class("arcee-meta")
+            line.append(label)
+        else:
+            line.append(Gtk.Box(hexpand=True))
+        if reply.strip():
+            line.append(self._read_aloud_button(reply))
+        if meta or reply.strip():
+            self._append(line)
+
+    def _read_aloud_button(self, reply: str) -> Gtk.Button:
+        button = Gtk.Button(
+            icon_name="audio-volume-high-symbolic",
+            tooltip_text="Read aloud",
+            valign=Gtk.Align.CENTER,
+            css_classes=["flat", "circular"],
+        )
+        saying: dict[str, int] = {}  # the timer that turns it back, while it says it
+
+        def back() -> bool:
+            saying.pop("timer", None)
+            button.set_icon_name("audio-volume-high-symbolic")
+            button.set_tooltip_text("Read aloud")
+            return False
+
+        def said(proxy: Any, result: Any) -> None:
+            try:
+                (why,) = proxy.call_finish(result).unpack()
+            except GLib.Error as exc:
+                why = re.sub(r"^GDBus\.Error:[\w.\-]+:\s*", "", exc.message)
+            if why:
+                back()
+                self._add(why, "arcee-note")
+
+        def clicked(_b: Gtk.Button) -> None:
+            if "timer" in saying:  # saying it: stop
+                GLib.source_remove(saying["timer"])
+                back()
+                self._call("Hush", quiet=True)
+                return
+            button.set_icon_name("media-playback-stop-symbolic")
+            button.set_tooltip_text("Stop reading")
+            seconds = 2 + len(reply.split()) / 2.6  # about 155 words a minute
+            saying["timer"] = GLib.timeout_add_seconds(int(seconds), back)
+            self._agent.call(
+                "Say", GLib.Variant("(s)", (reply,)), Gio.DBusCallFlags.NONE, -1, None, said
+            )
+
+        button.connect("clicked", clicked)
+        return button
 
     def _append(self, widget: Gtk.Widget) -> None:
         self._show_hero(False)

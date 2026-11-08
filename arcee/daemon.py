@@ -36,9 +36,10 @@ from arcee.models.errors import ModelUnavailableError
 from arcee.runner import TaskRunner
 from arcee.settings import load as load_settings
 from arcee.settings import save_listen
+from arcee.tools.voice import LONGEST_ASKED
 from arcee.voice import Recorder, Transcriber, VoiceError
 from arcee.voice_local import WakeListener, installed
-from arcee.voice_reply import SPEECH, Speaker, speakable
+from arcee.voice_reply import SPEECH, Speaker, speakable, voice_id
 
 BUS_NAME: Final = "me.iteshxt.Arcee.Agent"
 OBJECT_PATH: Final = "/me/iteshxt/Arcee/Agent"
@@ -314,6 +315,8 @@ class AgentService(ServiceInterface):
         # Says the answers to spoken requests (decision 0019), when the user turned it on.
         self._speaker = speaker or Speaker()
         self._speaking: asyncio.Task[None] | None = None  # `_say`, while it talks
+        self._said_in_task = False  # the request had something said (`voice.say`)
+        runner.say_aloud = self.say_aloud  # `voice.say`, for the requests run here
         self._recorder: Recorder | None = None
         self._listening: asyncio.Task[None] | None = None
         # The wake-word listener, when the user turned it on; paused for the mic button.
@@ -444,11 +447,35 @@ class AgentService(ServiceInterface):
         self.hush()
 
     @method()
-    def PreviewVoice(self, voice: DBusUInt32) -> None:
-        """Say a sentence in one of the voices (Settings → Voice, "Hear it")."""
+    def PreviewVoice(self, voice: DBusStr) -> None:
+        """Say a sentence in one of the voices, by name (Settings → Voice)."""
+        self.preview_voice(voice)
+
+    def preview_voice(self, voice: str) -> None:
         if installed(SPEECH):
-            self.hush()
-            self._speaking = asyncio.ensure_future(self._speaker.say(PREVIEW_ALOUD, int(voice)))
+            self._say(PREVIEW_ALOUD, voice=voice)
+
+    @method()
+    def Say(self, text: DBusStr) -> DBusStr:
+        """Say `text` aloud (the Agent page's Read aloud); empty, or why it cannot."""
+        return self.say_text(text)
+
+    def say_text(self, text: str) -> str:
+        return self.say_aloud(speakable(text, longest=LONGEST_ASKED)) or ""
+
+    @method()
+    def Hush(self) -> None:
+        """Stop saying anything."""
+        self.hush()
+
+    def say_aloud(self, text: str) -> str | None:
+        """Start saying `text` (already speakable); None, or why it cannot."""
+        if not installed(SPEECH):
+            return "Arcee's voice is not downloaded: turn on Answer aloud in Settings → Voice"
+        if self.busy:
+            self._said_in_task = True  # the reply is not said over it
+        self._say(text)
+        return None
 
     @method()
     def StopListening(self) -> None:
@@ -725,6 +752,7 @@ class AgentService(ServiceInterface):
 
     async def _run(self, request: str, *, spoken: bool = False) -> None:
         self._spoken = spoken
+        self._said_in_task = False
         self._stats = TaskStats()
         if spoken and self._speaks():
             self._speaker.warm()  # loaded while it thinks: the answer is heard sooner
@@ -759,7 +787,14 @@ class AgentService(ServiceInterface):
         payload |= self._stats.summary(getattr(self._runner, "core", ""))
         self.Finished(json.dumps(payload))
         reply = str(payload.get("reply") or "")
-        if spoken and reply and payload["status"] in {"done", "failed"} and self._speaks():
+        said = self._said_in_task  # "read it out loud": that is being said, not the reply
+        if (
+            spoken
+            and reply
+            and not said
+            and payload["status"] in {"done", "failed"}
+            and (self._speaks())
+        ):
             self._say(speakable(reply) if payload["status"] == "done" else FAILED_ALOUD)
 
     # --- saying it aloud (decision 0019) -------------------------------------------------
@@ -768,20 +803,20 @@ class AgentService(ServiceInterface):
         """Whether answers to spoken requests are said: on, and the voice downloaded."""
         return load_settings().speak_replies and installed(SPEECH)
 
-    def _say(self, text: str, then: Callable[[], None] | None = None) -> None:
-        """Say `text`, the wake word not listening meanwhile (it would hear Arcee's own
-        voice), then `then` unless it was hushed."""
+    def _say(self, text: str, then: Callable[[], None] | None = None, *, voice: str = "") -> None:
+        """Say `text` (in `voice`, or the user's), the wake word not listening meanwhile
+        (it would hear Arcee's own voice), then `then` unless it was hushed."""
         self.hush()
-        self._speaking = asyncio.ensure_future(self._saying(text, then))
+        self._speaking = asyncio.ensure_future(self._saying(text, then, voice))
 
-    async def _saying(self, text: str, then: Callable[[], None] | None) -> None:
+    async def _saying(self, text: str, then: Callable[[], None] | None, voice: str) -> None:
         wake = self.wake
         quieted = wake is not None and not wake.paused
         if quieted and wake is not None:
             wake.paused = True
         finished = False
         try:
-            await self._speaker.say(text, load_settings().voice)
+            await self._speaker.say(text, voice_id(voice or load_settings().voice))
             finished = True
         except asyncio.CancelledError:
             pass

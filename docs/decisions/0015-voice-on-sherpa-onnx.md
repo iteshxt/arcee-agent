@@ -61,8 +61,8 @@ and needs no download, and the wake word already keeps everything before it on t
 machine.
 
 Spoken replies were open here: sherpa-onnx 2.0.1 has no frontend for Piper voices, and
-no older release supports Python 3.14. Decision 0019 adds them with Supertonic, which
-needs none.
+no older release supports Python 3.14. Decision 0019 adds them with Kitten TTS, given
+its phonemes by Ubuntu's libespeak-ng.
 
 ## Consequences
 
