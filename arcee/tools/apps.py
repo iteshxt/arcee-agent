@@ -23,6 +23,8 @@ MAX_LISTED: Final = 25
 # Ids a browser makes for its web apps: chrome-<32 letters>-Default, msedge-<…>-Default.
 _GENERATED_ID: Final = re.compile(r"(^|-)[a-p]{32}(-|$)")
 LAUNCH_CHECK_S: Final = 1.0
+WINDOW_WAIT_S: Final = 10.0  # app.open returns when the window shows, or after this long
+WINDOW_POLL_S: Final = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,10 +176,12 @@ class AppOpen(Tool[OpenAppArgs]):
         dirs: list[Path] | None = None,
         command: tuple[str, ...] = ("gio", "launch"),
         windows: Windows | None = None,
+        window_wait_s: float = WINDOW_WAIT_S,
     ) -> None:
         self._dirs = dirs
         self._command = command
         self._windows = windows
+        self._window_wait_s = window_wait_s
 
     def sentence(self, args: OpenAppArgs) -> str:
         return f"Open {args.name}?"
@@ -197,6 +201,7 @@ class AppOpen(Tool[OpenAppArgs]):
                 f"Switched to the open {app.name} window",
                 data={"opened": app.name, "id": app.id, "already_open": True},
             )
+        before = await self._window_list() if self._window_wait_s > 0 else None
         proc = await asyncio.create_subprocess_exec(
             *self._command,
             str(app.path),
@@ -214,24 +219,73 @@ class AppOpen(Tool[OpenAppArgs]):
             return ToolResult.fail(
                 err.decode(errors="replace").strip() or f"{app.name} did not start"
             )
-        data = {"opened": app.name, "id": app.id}
-        return ToolResult.ok(f"Opened {app.name}", data=data)
+        data: dict[str, Any] = {"opened": app.name, "id": app.id}
+        # Files for an app that is already open usually land in its existing window
+        # (a new tab), so there is no new window to wait for.
+        if before is None or (args.args and any(_is(app, w) for w in before)):
+            return ToolResult.ok(f"Opened {app.name}", data=data)
+        window = await self._new_window(app, {w.get("id") for w in before})
+        if window is None:
+            data["window_shown"] = False
+            return ToolResult.ok(
+                f"Started {app.name}; no window yet after {self._window_wait_s:g} s "
+                "(it may still be loading; control.wait_for can wait longer)",
+                data=data,
+            )
+        data |= {"window_shown": True, "window": window.get("id"), "title": window.get("title")}
+        return ToolResult.ok(
+            f"Opened {app.name}: “{window.get('title', '')}” is showing", data=data
+        )
 
-    async def _focus_open(self, app: App) -> bool:
+    def _bridge(self) -> Windows:
         if self._windows is None:
             from arcee.platform.shell import ShellBridge
 
             self._windows = ShellBridge()
-        windows = self._windows
-        wanted = app.id.removesuffix(".desktop").lower()
+        return self._windows
+
+    async def _window_list(self) -> list[dict[str, Any]] | None:
+        """The open windows, or None when they cannot be seen (no extension, no session)."""
+        windows = self._bridge()
+
+        def read() -> list[dict[str, Any]] | None:
+            try:
+                return windows.windows()
+            except Exception:
+                return None
+
+        return await asyncio.to_thread(read)
+
+    async def _new_window(self, app: App, known: set[Any]) -> dict[str, Any] | None:
+        """Wait for a window that was not open before the launch: the app's own first,
+        any new one if it is the only thing that appeared (Flatpak and Chrome apps
+        report ids that differ from their .desktop file)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._window_wait_s
+        while True:
+            now = await self._window_list() or []
+            fresh = [w for w in now if w.get("id") not in known]
+            if fresh:
+                return next((w for w in fresh if _is(app, w)), fresh[0])
+            if loop.time() >= deadline:
+                return None
+            await asyncio.sleep(WINDOW_POLL_S)
+
+    async def _focus_open(self, app: App) -> bool:
+        windows = self._bridge()
 
         def focus() -> bool:
             try:
                 for window in windows.windows():
-                    if str(window.get("app_id", "")).lower() == wanted:
+                    if _is(app, window):
                         return windows.focus_window(int(window["id"]))
             except Exception:  # no extension or no session bus: just launch
                 return False
             return False
 
         return await asyncio.to_thread(focus)
+
+
+def _is(app: App, window: dict[str, Any]) -> bool:
+    """Whether `window` belongs to `app` (GNOME's app id is the .desktop file's name)."""
+    return str(window.get("app_id", "")).lower() == app.id.removesuffix(".desktop").lower()

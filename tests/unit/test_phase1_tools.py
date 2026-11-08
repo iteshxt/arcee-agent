@@ -165,13 +165,55 @@ class TestApps:
     async def test_open_launches_the_best_match(
         self, app_dirs: list[Path], ctx: ToolContext
     ) -> None:
-        tool = AppOpen(dirs=app_dirs, command=("true",), windows=Windows([]))
+        tool = AppOpen(dirs=app_dirs, command=("true",), windows=Windows([]), window_wait_s=0.3)
 
         opened = await tool.run(OpenAppArgs(name="firefox"), ctx)
         unknown = await tool.run(OpenAppArgs(name="photoshop"), ctx)
 
-        assert opened.data == {"opened": "Firefox", "id": "firefox_firefox.desktop"}
+        assert opened.data == {
+            "opened": "Firefox",
+            "id": "firefox_firefox.desktop",
+            "window_shown": False,
+        }
+        assert opened.summary.startswith("Started Firefox; no window yet after 0.3 s")
         assert unknown.error == "no installed app matches 'photoshop'; try app.list"
+
+    async def test_open_returns_when_the_window_shows(
+        self, app_dirs: list[Path], ctx: ToolContext
+    ) -> None:
+        other = {"id": 3, "app_id": "org.gnome.Ptyxis", "title": "Terminal"}
+        windows = Windows(
+            [other],
+            appear_after=2,
+            appearing=[{"id": 9, "app_id": "firefox_firefox", "title": "Mozilla Firefox"}],
+        )
+        tool = AppOpen(dirs=app_dirs, command=("true",), windows=windows, window_wait_s=5)
+
+        opened = await tool.run(OpenAppArgs(name="firefox"), ctx)
+
+        assert opened.summary == "Opened Firefox: “Mozilla Firefox” is showing"
+        assert opened.data is not None
+        assert opened.data["window"] == 9
+        assert windows.reads == 4  # focus check, before launch, then twice until it shows
+
+    async def test_files_for_an_open_app_do_not_wait_for_a_window(
+        self, app_dirs: list[Path], ctx: ToolContext
+    ) -> None:
+        windows = Windows([{"id": 7, "app_id": "firefox_firefox", "title": "Firefox"}])
+        tool = AppOpen(dirs=app_dirs, command=("true",), windows=windows, window_wait_s=5)
+
+        opened = await tool.run(OpenAppArgs(name="firefox", args=["a.html"]), ctx)
+
+        assert opened.summary == "Opened Firefox"
+
+    async def test_no_window_list_means_no_wait(
+        self, app_dirs: list[Path], ctx: ToolContext
+    ) -> None:
+        tool = AppOpen(dirs=app_dirs, command=("true",), windows=Broken(), window_wait_s=5)
+
+        opened = await tool.run(OpenAppArgs(name="firefox"), ctx)
+
+        assert opened.summary == "Opened Firefox"
 
     async def test_an_open_app_is_brought_forward_not_started_again(
         self, app_dirs: list[Path], ctx: ToolContext
@@ -188,16 +230,36 @@ class TestApps:
 
 
 class Windows:
-    def __init__(self, open_windows: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        open_windows: list[dict[str, Any]],
+        *,
+        appear_after: int = 0,
+        appearing: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.open_windows = open_windows
         self.focused: list[int] = []
+        self.reads = 0
+        self._appear_after = appear_after
+        self._appearing = appearing or []
 
     def windows(self) -> list[dict[str, Any]]:
+        self.reads += 1
+        if self._appearing and self.reads > self._appear_after + 1:
+            return self.open_windows + self._appearing
         return self.open_windows
 
     def focus_window(self, window_id: int) -> bool:
         self.focused.append(window_id)
         return True
+
+
+class Broken:
+    def windows(self) -> list[dict[str, Any]]:
+        raise RuntimeError("no session bus")
+
+    def focus_window(self, window_id: int) -> bool:
+        raise RuntimeError("no session bus")
 
 
 class TestScript:
