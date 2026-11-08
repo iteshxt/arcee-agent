@@ -316,7 +316,9 @@ class SettingsAppearance(_Settings, Tool[AppearanceArgs]):
 
 
 def _resolve(path: str, home: Path) -> Path:
-    image = Path(path).expanduser()
+    if path == "~" or path.startswith("~/"):
+        return home / path[2:]
+    image = Path(path)
     return image if image.is_absolute() else home / image
 
 
