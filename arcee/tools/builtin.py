@@ -11,6 +11,7 @@ from arcee.tools.control import CONTROL_TOOLS, UTILITY_CONTROL_TOOLS
 from arcee.tools.desktop import desktop_tools
 from arcee.tools.desktop_settings import settings_tools
 from arcee.tools.documents import document_tools
+from arcee.tools.extra import extra_tools
 from arcee.tools.files import (
     FsCopy,
     FsList,
@@ -71,6 +72,7 @@ def builtin_registry(
             *document_tools(),
             *clock_tools(),
             *market_tools(),
+            *extra_tools(memory),  # pyright: ignore[reportArgumentType]
             *calendar_tools(),
             *mail_tools(),
             WebFetch(),

@@ -21,10 +21,10 @@ CONTROL: Final = ("control.done", "control.ask_user", "control.replan")
 NOTE: Final = ("control.note",)
 # Looking up and forgetting what Arcee remembers (recall already brings what matters).
 MEMORY: Final = ("memory.*", "control.note")
-WAIT: Final = ("control.wait",)
+WAIT: Final = ("control.wait", "control.wait_for")
 SYSTEM: Final = ("system.*", "network.*")
 FILES: Final = ("fs.*",)
-APPS: Final = ("app.*",)
+APPS: Final = ("app.*", "terminal.*")
 SHELL: Final = ("shell.*",)
 LOCAL: Final = FILES + APPS + SYSTEM + SHELL
 ALWAYS: Final = LOCAL + CONTROL
@@ -72,7 +72,10 @@ _GROUPS: Final = (
     ),
     (
         APPS,
-        _words(r"\b(apps?|applications?|launch|start|installed|programs?|close|quit)\b"),
+        _words(
+            r"\b(apps?|applications?|launch|start|installed|install|programs?|close|quit|"
+            r"terminal|dev server|run .* where i can (see|watch))\b"
+        ),
     ),
     (
         DESKTOP,
@@ -180,6 +183,10 @@ _DOCS_REQUEST: Final = _words(
     r"photos? to|compress (the |this |these )?(photos?|images?)|print(er|ing)?|"
     r"receipts?|scan(ned)?)\b"
 )
+# Undoing what an earlier request did.
+_UNDO: Final = _words(
+    r"\b(undo|put (them|it|the files?) back|revert|reverse that|restore (it|them))\b"
+)
 _REMEMBER: Final = _words(r"\b(remember|note (that|down)|keep in mind|don't forget)\b")
 # Asking about memory, not adding to it ("remember that ..." is a note).
 _MEMORY: Final = _words(
@@ -222,7 +229,8 @@ _IN_PAGE: Final = _words(
 # In a request about the web, only words that clearly involve this computer add local
 # tools ("save it to a file"); "Ubuntu" in a web search is not about this machine.
 _CLEARLY_LOCAL: Final = _words(
-    r"\b(save|write|files?|folders?|documents|downloads|desktop|my computer|this computer)\b|~/"
+    r"\b(save|write|files?|folders?|documents|downloads|desktop|my computer|this computer|"
+    r"terminal|dev server)\b|~/"
     # Window verbs ("close chrome", "minimise it"); closing a tab stays in the browser.
     # "Make the Chrome window maximized": its window, not a page in it.
     r"|\b(minimi[sz](e|ed|ing)|maximi[sz](e|ed|ing)|full ?screen|quit|windows?)\b"
@@ -301,6 +309,8 @@ def _filters(messages: Sequence[Message]) -> tuple[str, ...]:
         else:
             local = [FILES, APPS, SYSTEM, SHELL]  # nothing recognised: everything local
     filters: tuple[str, ...] = tuple(f for group in local for f in group) + CONTROL
+    if _UNDO.search(request) or any(c.startswith("task_") for c in _called(messages)):
+        filters += ("task.*",)
     if _MEMORY.search(request) or any(c.startswith("memory_") for c in _called(messages)):
         filters += MEMORY
     elif _REMEMBER.search(request) or "control_note" in _called(messages):
