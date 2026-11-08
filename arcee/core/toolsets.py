@@ -138,6 +138,7 @@ _CALENDAR_REQUEST: Final = _words(
 )
 _MAIL_REQUEST: Final = _words(
     r"\b(e-?mails?|mails?|gmail|inbox|unread|drafts?|reply|forward|newsletters?|"
+    r"unsubscribe|to my phone|onto my phone|on my phone|to myself|"
     r"attachments?|sent me|wrote to me|message from)\b"
 )
 # Timers and reminders (decision 0018): "set a timer", "remind me at 5", "wake me at 7".
