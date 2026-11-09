@@ -358,3 +358,18 @@ def test_an_exact_name_beats_an_id_ending(tmp_path: Path) -> None:
     assert settings.name == "Settings"
     assert code is not None
     assert code.name == "Visual Studio Code"
+
+
+async def test_a_pattern_searched_by_content_is_a_name_search(tmp_path: Path) -> None:
+    from arcee.tools.files import FsSearch, SearchArgs
+
+    (tmp_path / "Documents").mkdir()
+    for name in ("a.txt", "b.txt", "c.md"):
+        (tmp_path / "Documents" / name).write_text("x")
+    ctx = ToolContext("t", tmp_path)
+
+    found = await FsSearch().run(SearchArgs(query="*.txt", root="~/Documents", by="content"), ctx)
+
+    assert found.data is not None
+    assert (found.data["count"], found.data["by"]) == (2, "name")
+    assert "file-name pattern" in found.data["note"]
