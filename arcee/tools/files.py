@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import fnmatch
 import os
+import re
 import shutil
 from collections import Counter
 from dataclasses import dataclass
@@ -351,13 +352,18 @@ class FsSearch(Tool[SearchArgs]):
             return ToolResult.ok(f"{display(known, ctx)} exists", data=data)
         if not root.is_dir():
             return ToolResult.fail(f"{display(root, ctx)} is not a folder")
-        found = await asyncio.to_thread(_search, root, args.query, args.by)
+        # A pattern is a file name, never text inside: "*.txt" by content found
+        # nothing and the model said there were no text files (eval two-part).
+        by = "name" if args.by == "content" and _PATTERN.fullmatch(args.query) else args.by
+        found = await asyncio.to_thread(_search, root, args.query, by)
         data: dict[str, Any] = {
             "query": args.query,
             "root": display(root, ctx),
-            "by": args.by,
+            "by": by,
             "count": len(found.matches),
         }
+        if by != args.by:
+            data["note"] = f"{args.query!r} is a file-name pattern: searched names, not text"
         if len(found.matches) > 1:
             data["by_folder"] = _by_folder(found.matches, ctx)
         data["matches"] = [display(p, ctx) for p in found.matches]
@@ -365,6 +371,10 @@ class FsSearch(Tool[SearchArgs]):
             data["truncated"] = True
         summary = f"Found {len(found.matches)} for {args.query!r} in {display(root, ctx)}"
         return ToolResult.ok(summary, data=data)
+
+
+# "*.txt", "*.tar.gz", "report-*.pdf": a glob for names.
+_PATTERN: Final = re.compile(r"[\w.\-]*[*?][\w.\-*?]*")
 
 
 def _existing_file(args: SearchArgs, root: Path, ctx: ToolContext) -> Path | None:

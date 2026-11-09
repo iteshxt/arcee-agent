@@ -85,3 +85,48 @@ def test_a_reply_that_gives_up_without_looking_is_sent_back_to_the_tools() -> No
     # Once a tool has run, saying it could not find something is an honest answer.
     looked = [*asked, Message("tool", '{"status": "error"}')]
     assert review_reply("I can't check the weather right now.", looked, names) is None
+
+
+TOOLS = ["shell_script", "shell_run", "voice_say", "fs_list"]
+
+
+@pytest.mark.parametrize(
+    ("request_text", "skipped"),
+    [
+        ("What is 2 to the power of 40, exactly?", "shell_script"),
+        ("Calculate 17 * 23", "shell_script"),
+        ("Read this out loud: good morning everyone", "voice_say"),
+    ],
+)
+def test_answers_that_skip_their_tool_are_sent_back(request_text: str, skipped: str) -> None:
+    review = review_reply("The answer.", [Message("user", request_text)], TOOLS)
+
+    assert review is not None
+    assert (review.kind, review.detail) == ("skipped", f"answered without {skipped}")
+
+
+def test_once_the_tool_ran_the_answer_stands() -> None:
+    messages = [
+        Message("user", "What is 2 to the power of 40, exactly?"),
+        Message("tool", '{"stdout": "1099511627776"}', tool_name="shell_script"),
+    ]
+
+    assert review_reply("It is 1,099,511,627,776.", messages, TOOLS) is None
+
+
+def test_a_step_handoff_is_not_held_to_it() -> None:
+    messages = [Message("user", "Find my last email from Rahul and read it out loud")]
+
+    assert review_reply("Found it: subject Budget.", messages, TOOLS, narration=False) is None
+
+
+def test_a_sum_the_script_never_printed_is_sent_back() -> None:
+    messages = [
+        Message("user", "What is 2 to the power of 40, exactly?"),
+        Message("tool", '{"stdout": "1099511627776\\n"}', tool_name="shell_script"),
+    ]
+
+    review = review_reply("2^40 = 1,099,504,096", messages, TOOLS)
+
+    assert review is not None
+    assert review.detail == "reply stated 1,099,504,096, which no result printed"

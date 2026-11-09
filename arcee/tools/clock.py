@@ -232,7 +232,8 @@ class Stopwatch(Tool[StopwatchArgs]):
     description = "A stopwatch Arcee keeps: start, lap, stop, how long, reset."
     usage = Usage(
         when='"Start a stopwatch", "how long since I started?", "lap", "stop the stopwatch".',
-        avoid="Counting down (reminder.add with in_minutes).",
+        avoid="Counting down (reminder.add with in_minutes); checking on something again "
+        "later (control.set_timer).",
         example='time.stopwatch(action="start")',
     )
     args_model = StopwatchArgs

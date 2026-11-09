@@ -6,7 +6,10 @@ A plain-text reply ends a step, so it is checked before it is accepted:
   aloud, and in native mode that would end the task;
 - grounding: concrete facts in the answer (IP addresses, paths, file names) must
   appear somewhere in what the task has seen, the request or a tool result.
-  A small model can state a wrong address with the right one in front of it.
+  A small model can state a wrong address with the right one in front of it;
+- skipped tools: a request to work something out exactly, or to say something
+  aloud, is not answered in text before its tool ran (2^40 from memory was off by
+  7 million; "read this out loud" was written, not said).
 
 Both the live loop and the eval runner use these, so the eval measures the
 harness and not only the raw model.
@@ -102,11 +105,51 @@ def _normalise(text: str) -> str:
     return text.lower()
 
 
+# Requests whose answer must come from a tool, by the tools that give it.
+_NEEDS: Final = (
+    (
+        re.compile(
+            r"\b(calculate|compute|work out|exactly|to the power|power of|square root|"
+            r"factorial|how many (seconds|minutes|hours|days) (are )?in)\b|"
+            r"\d\s*(\^|\*\*|\u00d7)\s*\d",
+            re.IGNORECASE,
+        ),
+        ("shell_script", "shell_run"),
+        "Do not do the arithmetic in your head: small models get long numbers wrong. "
+        "Work it out with shell_script (python) and answer with what it prints.",
+    ),
+    (
+        re.compile(
+            r"\b(out ?loud|aloud|read (it|this|that|them) to me|say (it|this|that) "
+            r"(to me|in your voice))\b",
+            re.IGNORECASE,
+        ),
+        ("voice_say",),
+        "The user wants to hear it: call voice_say with the words, then reply briefly.",
+    ),
+)
+
+
+_NUMBER: Final = re.compile(r"\d[\d,_ ]*\d")
+
+
+def _unseen_numbers(reply: str, messages: Sequence[Message]) -> list[str]:
+    """Long numbers (5+ digits) in a calculation's answer that no tool result printed:
+    the model kept its own sum after the script gave the right one."""
+    printed = re.sub(r"[,_ ]", "", "\n".join(m.text for m in messages if m.role == "tool"))
+    out: list[str] = []
+    for raw in _NUMBER.findall(reply):
+        digits = re.sub(r"[,_ ]", "", raw)
+        if len(digits) >= 5 and digits not in printed:
+            out.append(raw)
+    return out
+
+
 @dataclass(frozen=True, slots=True)
 class Review:
     """Why a would-be answer was not accepted, and what to tell the model."""
 
-    kind: Literal["narration", "grounding"]
+    kind: Literal["narration", "grounding", "skipped"]
     detail: str
     nudge: str
 
@@ -132,6 +175,20 @@ def review_reply(
     if not grounding:
         return None
     tools_ran = any(m.role == "tool" for m in messages)
+    request = next((m.text for m in messages if m.role == "user"), "")
+    ran = {m.tool_name for m in messages if m.role == "tool"}
+    for pattern, tools, nudge in _NEEDS if narration else ():  # the final answer only
+        offered = [t for t in tools if t in wire_names]
+        if offered and not ran & set(tools) and pattern.search(request):
+            return Review("skipped", f"answered without {offered[0]}", nudge)
+    calculated = ran & {"shell_script", "shell_run"} and _NEEDS[0][0].search(request)
+    if calculated and (wrong := _unseen_numbers(reply, messages)):
+        return Review(
+            "grounding",
+            f"reply stated {', '.join(wrong)}, which no result printed",
+            f"Your answer says {', '.join(wrong)}, but the tool printed something else. "
+            "Answer with exactly what the tool printed.",
+        )
     lookups = {"web_search", "web_weather", "media_now_playing", "window_list"}
     if not tools_ran and _GAVE_UP.search(reply) and lookups & {*wire_names}:
         return Review("grounding", "reply gave up without a lookup", GAVE_UP_NUDGE)

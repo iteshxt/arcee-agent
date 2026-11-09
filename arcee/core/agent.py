@@ -685,7 +685,7 @@ class Agent:
         )
         if review is None:
             return None
-        if review.kind == "grounding":
+        if review.kind in ("grounding", "skipped"):
             state.grounding_nudges += 1
         self._emit(Guarded(state.steps, f"{review.detail}; nudged"))
         return review.nudge

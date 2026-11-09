@@ -1,10 +1,13 @@
-# Whole-task evals (roadmap 1.18b). Run: uv run arcee-cli eval-tasks
+# Whole-task evals (roadmap 1.18b, 6). Run: uv run arcee-cli eval-tasks [--core local]
 #
-# Each task runs the full agent in a throwaway home made from `files` (text, a
-# byte count for a sized file, or a trailing / for a folder). Confirmations are
-# approved unless approve = false; questions get `answers` in order.
-# Checks look at the end state: files that exist, are gone or contain text, the
-# reply, and whether Arcee asked the user.
+# Each task runs the full agent, with every built-in tool, in a throwaway home made
+# from `files` (text, a byte count for a sized file, or a trailing / for a folder)
+# and a throwaway History. Tools that reach the network, the desktop or accounts
+# are stubs: they answer with the task's `stub` (summary and data), or "Done".
+# Confirmations are approved unless approve = false; questions get `answers`.
+# Checks: files that exist, are gone or contain text; the reply; whether Arcee
+# asked; tools `used` (all), `used_any` (one of), `not_used`, and `args` (words a
+# call's arguments must contain).
 
 [[task]]
 id = "count-pdfs"
@@ -98,3 +101,206 @@ id = "rm-becomes-trash"
 request = "Use rm to delete ~/junk.tmp"
 files = { "junk.tmp" = "x", "keep.tmp" = "x" }
 check = { absent = ["junk.tmp"], exists = ["keep.tmp"] }
+
+
+# --- the desktop's settings ----------------------------------------------------------
+
+[[task]]
+id = "volume-to-30"
+category = "settings"
+request = "Turn the volume down to 30%"
+check = { used = ["settings.volume"], args = { "settings.volume" = { percent = "30" } }, not_used = ["shell.run"] }
+
+[[task]]
+id = "dark-mode"
+category = "settings"
+request = "Switch to dark mode"
+check = { used = ["settings.appearance"], args = { "settings.appearance" = { dark_mode = "true" } } }
+
+[[task]]
+id = "dnd-an-hour"
+category = "settings"
+request = "Turn on do not disturb for an hour"
+check = { used = ["settings.dnd"], args = { "settings.dnd" = { minutes = "60" } } }
+
+[[task]]
+id = "lock-screen"
+category = "settings"
+request = "Lock my screen"
+check = { used = ["session.power"], args = { "session.power" = { action = "lock" } } }
+
+# --- time ----------------------------------------------------------------------------
+
+[[task]]
+id = "timer-10-min"
+category = "time"
+request = "Set a timer for 10 minutes"
+check = { used = ["reminder.add"], args = { "reminder.add" = { in_minutes = "10" } } }
+
+[[task]]
+id = "remind-tomorrow"
+category = "time"
+request = "Remind me tomorrow at 9 am to call the bank"
+check = { used = ["reminder.add"], args = { "reminder.add" = { text = "bank" } } }
+
+[[task]]
+id = "morning-routine"
+category = "time"
+request = "Every morning at 8, tell me the weather in Delhi"
+check = { used = ["routine.add"], args = { "routine.add" = { request = "weather" } }, not_used = ["reminder.add"] }
+
+[[task]]
+id = "time-in-tokyo"
+category = "time"
+request = "What time is it in Tokyo right now?"
+stub = { "time.in" = { summary = "02:25 Mon 09 Nov in Tokyo (the next day)", data = { place = "Tokyo", time = "02:25", date = "Mon 09 Nov" } } }
+check = { used = ["time.in"], reply_has = ["2:25"] }
+
+# --- the web -------------------------------------------------------------------------
+
+[[task]]
+id = "dollars-to-rupees"
+category = "web"
+request = "How many rupees is 100 dollars?"
+stub = { "convert.currency" = { summary = "100 USD = 8,812.40 INR", data = { amount = 100, source = "USD", target = "INR", result = 8812.40, rate = 88.124 } } }
+check = { used = ["convert.currency"], reply_has = ["8812"] }
+
+[[task]]
+id = "rain-tomorrow"
+category = "web"
+request = "Will it rain in Delhi tomorrow?"
+stub = { "web.weather" = { summary = "Delhi: haze, 24°C", data = { place = "Delhi, India", days = [ { day = "today", high = 27, low = 15, rain_chance = 5 }, { day = "tomorrow", high = 25, low = 16, rain_chance = 70, sky = "showers" } ] } } }
+check = { used = ["web.weather"], reply_has = ["70"] }
+
+[[task]]
+id = "sensex"
+category = "web"
+request = "What's the Sensex at right now?"
+stub = { "market.quote" = { summary = "SENSEX 81,234.50 (+0.4% today)", data = { name = "S&P BSE SENSEX", price = 81234.50, change_percent = 0.4 } } }
+check = { used = ["market.quote"], reply_has = ["81234"] }
+
+[[task]]
+id = "drive-to-chandigarh"
+category = "web"
+request = "How long does it take to drive from Ludhiana to Chandigarh?"
+stub = { "maps.route" = { summary = "Ludhiana to Chandigarh: 104 km, about 2 h 5 min by road", data = { km = 104, takes = "2 h 5 min" } } }
+check = { used = ["maps.route"], reply_has = ["104"] }
+
+[[task]]
+id = "news-isro"
+category = "web"
+request = "What's the latest news about ISRO?"
+stub = { "web.news" = { summary = "3 stories about ISRO", data = { stories = [ { title = "ISRO schedules Gaganyaan uncrewed test for December", source = "The Hindu" } ] } }, "web.search" = { summary = "3 results", data = { results = [ { title = "ISRO schedules Gaganyaan uncrewed test for December", url = "https://example.org/isro" } ] } } }
+check = { used_any = ["web.news", "web.search"], reply_has = ["gaganyaan"] }
+
+[[task]]
+id = "trains-morning"
+category = "travel"
+request = "Find trains from Ludhiana to Delhi tomorrow morning."
+stub = { "travel.search" = { summary = "3 trains from Ludhiana Jn (LDH) to New Delhi (NDLS)", data = { trains = [ { train = "22462 Shri Shakti Exp", departs = "05:30", arrives = "09:50" }, { train = "12014 Amritsar Shtabdi", departs = "07:02", arrives = "11:02" }, { train = "12716 Sachkhand Exp", departs = "07:45", arrives = "12:45" } ] } } }
+check = { used = ["travel.search"], not_used = ["web.search"], reply_has = ["12014"] }
+
+# --- music and messages --------------------------------------------------------------
+
+[[task]]
+id = "play-artist"
+category = "media"
+request = "Play Arijit Singh on Spotify"
+stub = { "media.play" = { summary = "Playing Kesariya by Arijit Singh in the Spotify app", data = { app = "Spotify", title = "Kesariya", artist = "Arijit Singh" } } }
+check = { used = ["media.play"], not_used = ["app.open", "browser.navigate"] }
+
+[[task]]
+id = "pause-music"
+category = "media"
+request = "Pause the music"
+check = { used = ["media.control"], args = { "media.control" = { action = "pause" } }, not_used = ["media.play"] }
+
+[[task]]
+id = "whatsapp-mom"
+category = "messages"
+request = "Send Mom 'I'll be home by 8' on WhatsApp"
+check = { used = ["whatsapp.send"], args = { "whatsapp.send" = { to = "mom", text = "home by 8" } }, not_used = ["mail.send"] }
+
+[[task]]
+id = "unread-from-rahul"
+category = "messages"
+request = "Do I have any unread emails from Rahul?"
+stub = { "mail.search" = { summary = "1 message", data = { messages = [ { id = "m1", from = "Rahul Mehta", subject = "Budget review moved to Friday", unread = true } ] } }, "mail.list" = { summary = "2 unread", data = { messages = [ { id = "m1", from = "Rahul Mehta", subject = "Budget review moved to Friday", unread = true }, { id = "m2", from = "Swiggy", subject = "Your order", unread = true } ] } } }
+check = { used_any = ["mail.search", "mail.list"], reply_has = ["budget"], not_used = ["browser.navigate"] }
+
+[[task]]
+id = "calendar-tomorrow"
+category = "messages"
+request = "What's on my calendar tomorrow?"
+stub = { "calendar.list" = { summary = "2 events tomorrow", data = { events = [ { title = "Dentist", start = "11:00" }, { title = "Team sync", start = "16:30" } ] } } }
+check = { used = ["calendar.list"], reply_has = ["dentist"] }
+
+# --- the desktop -------------------------------------------------------------------
+
+[[task]]
+id = "copy-to-clipboard"
+category = "desktop"
+request = "Copy the text 'meeting at 5' to my clipboard"
+check = { used = ["clipboard.set"], args = { "clipboard.set" = { text = "meeting at 5" } } }
+
+[[task]]
+id = "screenshot"
+category = "desktop"
+request = "Take a screenshot"
+stub = { "screen.save" = { summary = "Saved ~/Pictures/Screenshots/Screenshot From 2026-11-09 10-00-00.png" } }
+check = { used = ["screen.save"], not_used = ["screen.look", "screen.read"] }
+
+[[task]]
+id = "chrome-left-half"
+category = "desktop"
+request = "Put Chrome on the left half of the screen"
+stub = { "window.list" = { summary = "2 windows", data = { windows = [ { id = 11, app_id = "google-chrome", title = "Inbox - Gmail" }, { id = 12, app_id = "org.gnome.Ptyxis", title = "Terminal" } ] } } }
+check = { used = ["window.tile"], args = { "window.tile" = { where = "left" } } }
+
+[[task]]
+id = "install-vlc"
+category = "desktop"
+request = "Install VLC"
+check = { used = ["app.install"], args = { "app.install" = { name = "vlc" } }, not_used = ["shell.run"] }
+
+[[task]]
+id = "read-aloud"
+category = "desktop"
+request = "Read this out loud: good morning everyone"
+check = { used = ["voice.say"], args = { "voice.say" = { text = "good morning" } } }
+
+[[task]]
+id = "bookmark-site"
+category = "desktop"
+request = "Bookmark https://iteshxt.me in Chrome"
+check = { used = ["browser.bookmark"], args = { "browser.bookmark" = { url = "iteshxt.me" } } }
+
+# --- documents, jobs, later ---------------------------------------------------------
+
+[[task]]
+id = "make-a-pdf"
+category = "files"
+request = "Make a PDF at ~/Documents/plan.pdf that says 'Q4 plan: ship Arcee'"
+files = { "Documents/" = "" }
+check = { used = ["doc.create"], exists = ["Documents/plan.pdf"] }
+
+[[task]]
+id = "tests-in-background"
+category = "harness"
+request = "Run 'make test' in ~/code/app in the background and tell me when it's done"
+files = { "code/app/Makefile" = "test:\n\techo ok\n" }
+stub = { "shell.start" = { summary = "Started job1-1 in the background: `make test`", data = { job = "job1-1", cmd = "make test" } } }
+check = { used = ["shell.start"], args = { "shell.start" = { cmd = "make test" } } }
+
+[[task]]
+id = "check-back-later"
+category = "harness"
+request = "Check again in 5 minutes whether ~/Downloads/report.pdf has arrived"
+files = { "Downloads/" = "" }
+check = { used = ["control.set_timer"], args = { "control.set_timer" = { minutes = "5" } }, not_used = ["reminder.add"] }
+
+[[task]]
+id = "what-did-i-ask-yesterday"
+category = "memory"
+request = "What did I ask you yesterday?"
+check = { used = ["memory.history"], not_used = ["web.search"] }
