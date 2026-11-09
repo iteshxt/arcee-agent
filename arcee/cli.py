@@ -35,7 +35,7 @@ from arcee.core.presence import NoPresence, Presence
 from arcee.core.protocol import ConfirmRequest
 from arcee.eval.cases import load as load_cases
 from arcee.eval.runner import CaseResult, run_cases, summary
-from arcee.eval.tasks import TaskResult, load_tasks, run_task, task_summary
+from arcee.eval.tasks import TaskResult, load_tasks, report_markdown, run_task, task_summary
 from arcee.install import SHELL_EXTENSION
 from arcee.models.base import ModelAdapter
 from arcee.models.errors import ModelUnavailableError
@@ -369,7 +369,14 @@ async def evaluate(
 
 
 async def evaluate_tasks(
-    tasks_path: Path, *, host: str, only: str, plan: str, examples: bool, core: str = "local"
+    tasks_path: Path,
+    *,
+    host: str,
+    only: str,
+    plan: str,
+    examples: bool,
+    core: str = "local",
+    report: Path | None = None,
 ) -> int:
     """Run whole tasks end to end in throwaway homes and check their outcomes."""
     tasks = [task for task in load_tasks(tasks_path) if only in task.id]
@@ -380,6 +387,7 @@ async def evaluate_tasks(
     terminal = Terminal(verbose=False)
     library = ExampleLibrary.load() if examples else None
     results: list[TaskResult] = []
+    usable: list[Any] = []
     try:
         usable = await _usable(ladder, terminal)
         if not usable:
@@ -406,7 +414,28 @@ async def evaluate_tasks(
     finally:
         await asyncio.gather(*(m.aclose() for m in [*ladder, planner_model]))
     print("\n" + task_summary(results))
+    if report is not None and results:
+        from datetime import datetime
+
+        models = ", ".join(m.profile.model for m in usable)
+        text = report_markdown(
+            results,
+            title=f"Whole-task eval, {core} core, {datetime.now():%Y-%m-%d %H:%M}",
+            notes=[
+                f"{len(results)} tasks from `{tasks_path}`"
+                + (f" matching {only!r}" if only else ""),
+                f"models: {models}; planner: {planner_model.profile.model}; plan={plan}",
+                "tools: every built-in tool; network, desktop and account tools stubbed",
+            ],
+        )
+        await asyncio.to_thread(_write, report, text)
+        print(f"report: {report}")
     return 0
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
 
 
 def _print_report(report: install.Report) -> int:
@@ -926,6 +955,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tasks_cmd.add_argument("--examples", action="store_true", help=EXAMPLES_HELP)
     tasks_cmd.add_argument("--core", default=DEFAULT_CORE, help=CORE_HELP)
     tasks_cmd.add_argument("--host", default=host)
+    tasks_cmd.add_argument("--report", type=Path, default=None, help="write a Markdown report")
 
     eval_cmd = sub.add_parser("eval", help="score the Core on single-decision cases")
     eval_cmd.add_argument("--cases", type=Path, default=Path("tests/eval/cases.toml"))
@@ -980,6 +1010,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     plan=args.plan,
                     examples=args.examples,
                     core=args.core,
+                    report=args.report,
                 )
             )
         if args.command == "eval":

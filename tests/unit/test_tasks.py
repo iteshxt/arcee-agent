@@ -81,3 +81,91 @@ async def test_declined_confirmations_leave_files() -> None:
     result = await run_task(task, [model], planner_model=None)
 
     assert result.passed, result.problems
+
+
+def test_stubs_look_real_and_run_nothing(tmp_path: Path) -> None:
+    from arcee.core.policy import Policy, Tier
+    from arcee.eval.tasks import task_registry
+
+    registry = task_registry(tmp_path, stubs={"travel.search": {"summary": "2 trains"}})
+    whatsapp = registry.get("whatsapp.send")
+    travel = registry.get("travel.search")
+    files = registry.get("fs.list")
+
+    assert whatsapp is not None
+    assert travel is not None
+    assert files is not None
+    assert len(list(registry)) > 100  # every built-in tool is offered
+    args = whatsapp.args_model(to="Mom", text="hi")
+    assert whatsapp.tier_for(args, Policy()) is Tier.CONFIRM  # its own tier
+    assert type(files).__module__ == "arcee.tools.files"  # real
+
+
+async def test_stubbed_tools_answer_from_the_task(tmp_path: Path) -> None:
+    from arcee.eval.tasks import task_registry
+    from arcee.tools.base import ToolContext
+
+    registry = task_registry(
+        tmp_path,
+        stubs={"travel.search": {"summary": "2 trains", "data": {"trains": ["12014"]}}},
+    )
+    ctx = ToolContext("t", tmp_path)
+    travel, volume = registry.get("travel.search"), registry.get("settings.volume")
+    assert travel is not None
+    assert volume is not None
+
+    canned = await travel.run(travel.args_model(origin="LDH", destination="NDLS"), ctx)
+    done = await volume.run(volume.args_model(action="set", percent=30), ctx)
+
+    assert (canned.summary, canned.data) == ("2 trains", {"trains": ["12014"]})
+    assert done.summary == "Done: settings.volume"
+    assert done.data is not None
+    assert done.data["percent"] == 30
+
+
+def test_calls_are_checked() -> None:
+    from arcee.eval.tasks import Call, check_calls
+
+    task = Task(
+        "t",
+        "r",
+        {},
+        Checks(
+            used=("travel.search",),
+            used_any=("mail.search", "mail.list"),
+            not_used=("web.search",),
+            args={"travel.search": {"destination": "delhi"}},
+        ),
+    )
+    calls = [
+        Call("web.search", {"query": "trains"}, "ok"),
+        Call("travel.search", {"origin": "Ludhiana", "destination": "Shimla"}, "ok"),
+    ]
+
+    assert check_calls(task, calls) == [
+        "called none of mail.search, mail.list",
+        "called web.search",
+        "travel.search destination=['Shimla'], wanted 'delhi'",
+    ]
+
+
+async def test_a_task_through_a_stubbed_tool() -> None:
+    task = Task(
+        "trains",
+        "Find trains from Ludhiana to Delhi tomorrow",
+        {},
+        Checks(reply_has=("12014",), used=("travel.search",), not_used=("web.search",)),
+        stubs={"travel.search": {"summary": "1 train", "data": {"trains": ["12014 Shatabdi"]}}},
+    )
+    model = FakeAdapter(
+        [
+            call("travel_search", origin="Ludhiana", destination="Delhi"),
+            Completion("The 12014 Shatabdi leaves at 07:02."),
+        ],
+        PROFILE,
+    )
+
+    result = await run_task(task, [model], planner_model=None)
+
+    assert result.passed, result.problems
+    assert [c.tool for c in result.calls] == ["travel.search"]
